@@ -10,12 +10,12 @@ import (
 const (
 	writeWait  = 10 * time.Second
 	pongWait   = 60 * time.Second
-	pingPeriod = (pongWait * 9) / 10 // must be less than pongWait
-	maxMessage = 4096                // clients never send meaningful payloads to us
+	pingPeriod = (pongWait * 9) / 10 // precisa ser menor que pongWait
+	maxMessage = 4096                // clientes nunca nos enviam payloads com significado
 )
 
-// Client is one connected WebSocket browser tab, identified by the
-// Keycloak subject that redeemed the ticket used to open it.
+// Client é uma aba de navegador conectada via WebSocket, identificada pelo
+// subject do Keycloak que resgatou o ticket usado para abri-la.
 type Client struct {
 	hub    *Hub
 	conn   *websocket.Conn
@@ -24,7 +24,7 @@ type Client struct {
 	logger *slog.Logger
 }
 
-// NewClient wraps an already-upgraded connection.
+// NewClient envolve uma conexão já promovida (upgraded) para WebSocket.
 func NewClient(hub *Hub, conn *websocket.Conn, userID string, logger *slog.Logger) *Client {
 	return &Client{
 		hub:    hub,
@@ -35,8 +35,9 @@ func NewClient(hub *Hub, conn *websocket.Conn, userID string, logger *slog.Logge
 	}
 }
 
-// Start registers the client and launches its read/write pumps. Returns
-// once both pumps have exited (i.e. the connection is fully closed).
+// Start registra o cliente no hub e inicia suas bombas de leitura/escrita
+// (read/write pumps). Retorna quando ambas as bombas terminarem (ou seja,
+// a conexão está totalmente fechada).
 func (c *Client) Start() {
 	c.hub.Register(c)
 
@@ -49,9 +50,10 @@ func (c *Client) Start() {
 	<-done
 }
 
-// readPump only exists to detect the connection closing and to keep the
-// pong handler wired up for heartbeat (§39) — the platform never expects
-// meaningful application messages from the browser on this connection.
+// readPump só existe para detectar o fechamento da conexão e para manter
+// o handler de pong plugado, viabilizando o heartbeat (§39) — a plataforma
+// nunca espera mensagens de aplicação com significado vindas do navegador
+// nesta conexão (o WebSocket aqui é só de saída, servidor -> cliente).
 func (c *Client) readPump() {
 	defer c.hub.Unregister(c)
 
@@ -68,8 +70,9 @@ func (c *Client) readPump() {
 	}
 }
 
-// writePump delivers broadcast messages and periodic pings, closing the
-// connection if a write fails or the hub closes c.send.
+// writePump entrega as mensagens de broadcast e os pings periódicos,
+// fechando a conexão se uma escrita falhar ou se o hub fechar c.send
+// (sinal de que o cliente foi removido do Hub).
 func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {

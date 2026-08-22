@@ -1,7 +1,8 @@
-// Package ws implements the platform's WebSocket notification transport:
-// a connection Hub with no business logic (§37), short-lived single-use
-// tickets for authentication instead of a token in the URL (§38), and the
-// server-side half of reconnection support (heartbeat pings).
+// Package ws implementa o transporte de notificações via WebSocket da
+// plataforma: um Hub de conexões sem nenhuma regra de negócio (§37),
+// tickets de uso único e curta duração para autenticação em vez de um
+// token na URL (§38), e a metade do lado servidor do suporte a reconexão
+// (heartbeat/ping).
 package ws
 
 import (
@@ -12,10 +13,11 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
-// Hub tracks every connected client and fans out broadcast messages to
-// all of them. It never inspects message content — that's the notification
-// consumer's job (internal/app wires a RabbitMQ consumer that calls
-// Broadcast with each event's raw JSON envelope).
+// Hub rastreia todo cliente conectado e distribui (fan-out) as mensagens
+// de broadcast para todos eles. Nunca inspeciona o conteúdo da mensagem —
+// isso é responsabilidade do consumer de notificação (internal/app conecta
+// um consumer do RabbitMQ que chama Broadcast com o envelope JSON bruto de
+// cada evento).
 type Hub struct {
 	logger *slog.Logger
 
@@ -28,7 +30,8 @@ type Hub struct {
 	done       chan struct{}
 }
 
-// NewHub builds an idle Hub. Call Run to start its event loop.
+// NewHub constrói um Hub ocioso. Chame Run para iniciar seu loop de
+// eventos.
 func NewHub(logger *slog.Logger) *Hub {
 	return &Hub{
 		logger:     logger,
@@ -40,8 +43,8 @@ func NewHub(logger *slog.Logger) *Hub {
 	}
 }
 
-// Run processes registrations and broadcasts until ctx is cancelled, then
-// closes every connected client's send channel and returns.
+// Run processa registros e broadcasts até ctx ser cancelado, e então fecha
+// o canal de envio de todo cliente conectado e retorna.
 func (h *Hub) Run(ctx context.Context) error {
 	defer close(h.done)
 	for {
@@ -80,8 +83,10 @@ func (h *Hub) Run(ctx context.Context) error {
 				select {
 				case c.send <- msg:
 				default:
-					// Slow/stuck client: drop it rather than let one
-					// laggard block delivery to everyone else.
+					// Cliente lento/travado: descarta em vez de deixar um
+					// retardatário bloquear a entrega para todos os
+					// outros — o canal c.send tem buffer limitado, e um
+					// send que bloquearia trava o loop inteiro do Hub.
 					h.logger.Warn("dropping slow websocket client", slog.String("user_id", c.userID))
 					metrics.WebSocketErrorsTotal.Inc()
 					go h.Unregister(c)
@@ -92,8 +97,8 @@ func (h *Hub) Run(ctx context.Context) error {
 	}
 }
 
-// Register adds a client to the hub. Safe to call concurrently. A no-op if
-// the hub has already shut down.
+// Register adiciona um cliente ao hub. Seguro de chamar concorrentemente.
+// Vira no-op se o hub já foi encerrado.
 func (h *Hub) Register(c *Client) {
 	select {
 	case h.register <- c:
@@ -101,8 +106,9 @@ func (h *Hub) Register(c *Client) {
 	}
 }
 
-// Unregister removes a client from the hub. Safe to call concurrently,
-// more than once for the same client, and after the hub has shut down.
+// Unregister remove um cliente do hub. Seguro de chamar concorrentemente,
+// mais de uma vez para o mesmo cliente, e depois que o hub já foi
+// encerrado.
 func (h *Hub) Unregister(c *Client) {
 	select {
 	case h.unregister <- c:
@@ -110,17 +116,18 @@ func (h *Hub) Unregister(c *Client) {
 	}
 }
 
-// Broadcast delivers msg (a raw JSON event envelope) to every connected
-// client. The schema's fields (job/integration ownership) don't currently
-// scope notifications to a single user, so every authenticated client sees
-// every platform notification — see ClientCount for the extension point if
-// a future module needs per-user targeting.
+// Broadcast entrega msg (um envelope de evento em JSON bruto) para todo
+// cliente conectado. O schema de evento (posse do job/integração) hoje não
+// restringe notificações a um único usuário, então todo cliente
+// autenticado vê toda notificação da plataforma — ver ClientCount como
+// ponto de extensão caso um módulo futuro precise de segmentação por
+// usuário.
 func (h *Hub) Broadcast(msg []byte) {
 	h.broadcast <- msg
 }
 
-// ClientCount reports how many clients are currently connected, exposed
-// for the dashboard's system-status view.
+// ClientCount reporta quantos clientes estão conectados no momento,
+// exposto para a visão de status do sistema no dashboard.
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

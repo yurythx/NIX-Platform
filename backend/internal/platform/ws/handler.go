@@ -13,17 +13,17 @@ import (
 	"github.com/yurythx/nix-platform/pkg/httputil"
 )
 
-// TicketTTL bounds how long an issued ticket remains redeemable.
+// TicketTTL limita por quanto tempo um ticket emitido continua resgatável.
 const TicketTTL = 30 * time.Second
 
-// TicketResponse is the body returned by POST /api/v1/ws/ticket.
+// TicketResponse é o corpo retornado por POST /api/v1/ws/ticket.
 type TicketResponse struct {
 	Ticket    string `json:"ticket"`
 	ExpiresAt string `json:"expires_at"`
 }
 
-// TicketHandler issues a ticket for the authenticated caller. Must run
-// behind auth.RequireAuthentication.
+// TicketHandler emite um ticket para o chamador autenticado. Precisa rodar
+// atrás de auth.RequireAuthentication.
 func TicketHandler(store *TicketStore, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
@@ -45,15 +45,19 @@ func TicketHandler(store *TicketStore, logger *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// UpgradeHandler validates the ticket query parameter, upgrades the
-// connection, and hands it to the Hub. Unlike every other endpoint, this
-// one cannot go through auth.RequireAuthentication (browsers can't attach
-// an Authorization header to a WebSocket handshake) — the ticket IS the
-// authentication (§38).
+// UpgradeHandler valida o parâmetro de query ticket, promove a conexão
+// para WebSocket e a entrega ao Hub. Diferente de todo outro endpoint,
+// este não pode passar por auth.RequireAuthentication (navegadores não
+// conseguem anexar um header Authorization ao handshake de WebSocket) — o
+// ticket É a autenticação (§38).
 func UpgradeHandler(hub *Hub, store *TicketStore, allowedOrigin string, logger *slog.Logger) http.HandlerFunc {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
+		// Só aceita o handshake se o Origin bater com o frontend
+		// configurado (ou vier vazio, caso de clientes não-browser) —
+		// impede que uma página de outro domínio abra WebSockets contra
+		// esta API usando um ticket vazado.
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
 			return origin == "" || origin == allowedOrigin
