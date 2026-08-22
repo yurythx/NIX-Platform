@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/yurythx/nix-platform/internal/platform/auth"
 	"github.com/yurythx/nix-platform/internal/platform/config"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/logging"
@@ -21,9 +22,10 @@ import (
 // dependencies (repositories, use cases) are added to this struct as each
 // module is wired in; nothing here should hold business logic.
 type Dependencies struct {
-	Config *config.Config
-	Logger *slog.Logger
-	DB     *pgxpool.Pool
+	Config   *config.Config
+	Logger   *slog.Logger
+	DB       *pgxpool.Pool
+	Verifier *auth.Verifier
 }
 
 // NewDependencies builds and validates every platform dependency. It
@@ -48,10 +50,17 @@ func NewDependencies(ctx context.Context) (*Dependencies, error) {
 		return nil, fmt.Errorf("app: connect database: %w", err)
 	}
 
+	verifier, err := auth.NewVerifier(ctx, cfg.Keycloak)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app: initialize OIDC verifier: %w", err)
+	}
+
 	return &Dependencies{
-		Config: cfg,
-		Logger: logger,
-		DB:     pool,
+		Config:   cfg,
+		Logger:   logger,
+		DB:       pool,
+		Verifier: verifier,
 	}, nil
 }
 
