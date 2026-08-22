@@ -28,14 +28,14 @@ export function IntegrationCard({
     try {
       const { data } = await apiClient.post<TestJobResponse>(testPath);
       showToast({
-        title: "Test queued",
-        description: `Job ${data.job_id.slice(0, 8)} — you'll be notified when it finishes.`,
+        title: "Teste enfileirado",
+        description: `Job ${data.job_id.slice(0, 8)} — você será notificado quando terminar.`,
         tone: "info",
       });
     } catch (err) {
       showToast({
-        title: "Could not start test",
-        description: err instanceof ApiError ? err.message : "Unexpected error",
+        title: "Não foi possível iniciar o teste",
+        description: err instanceof ApiError ? err.message : "Erro inesperado",
         tone: "danger",
       });
     } finally {
@@ -51,13 +51,13 @@ export function IntegrationCard({
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted">
-          <dt>Last check</dt>
+          <dt>Última verificação</dt>
           <dd>
             {integration.last_check_at
               ? new Date(integration.last_check_at).toLocaleString()
-              : "Never"}
+              : "Nunca"}
           </dd>
-          <dt>Last success</dt>
+          <dt>Último sucesso</dt>
           <dd>
             {integration.last_success_at
               ? new Date(integration.last_success_at).toLocaleString()
@@ -68,7 +68,7 @@ export function IntegrationCard({
         <div className="flex items-center gap-2">
           {testPath && (
             <Button size="sm" variant="secondary" loading={testing} onClick={runTest}>
-              Test connection
+              Testar conexão
             </Button>
           )}
           {extra}

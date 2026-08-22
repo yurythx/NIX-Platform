@@ -6,7 +6,7 @@ export interface ErrorStateProps {
   onRetry?: () => void;
 }
 
-export function ErrorState({ title = "Something went wrong", message, onRetry }: ErrorStateProps) {
+export function ErrorState({ title = "Algo deu errado", message, onRetry }: ErrorStateProps) {
   return (
     <div
       role="alert"
@@ -16,7 +16,7 @@ export function ErrorState({ title = "Something went wrong", message, onRetry }:
       <p className="max-w-sm text-sm text-muted">{message}</p>
       {onRetry && (
         <Button variant="secondary" size="sm" onClick={onRetry} className="mt-2">
-          Try again
+          Tentar novamente
         </Button>
       )}
     </div>

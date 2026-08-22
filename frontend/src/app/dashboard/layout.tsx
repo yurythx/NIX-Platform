@@ -15,7 +15,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     redirect("/login");
   }
 
-  const userLabel = session.user?.email ?? session.user?.name ?? "Signed in";
+  const userLabel = session.user?.email ?? session.user?.name ?? "Autenticado";
 
   return <DashboardShell userLabel={userLabel}>{children}</DashboardShell>;
 }

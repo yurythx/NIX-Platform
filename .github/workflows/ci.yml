@@ -55,7 +55,7 @@ jobs:
           go-version: "1.27"
           cache-dependency-path: backend/go.sum
 
-      - name: go fmt (check only)
+      - name: go fmt (somente verificação)
         run: |
           fmt_out="$(gofmt -l .)"
           if [ -n "$fmt_out" ]; then
@@ -70,20 +70,21 @@ jobs:
       - name: go build
         run: go build ./...
 
-      - name: Install goose (migrations)
+      - name: Instala o goose (migrations)
         run: go install github.com/pressly/goose/v3/cmd/goose@latest
 
-      - name: Run migrations against the CI database
+      - name: Roda as migrations no banco do CI
         run: goose -dir migrations postgres "postgres://nix:nix@localhost:5432/nix?sslmode=disable" up
 
-      - name: go test (unit + live-service integration tests)
+      - name: go test (testes unitários + de integração com serviços reais)
         env:
           TEST_DATABASE_URL: postgres://nix:nix@localhost:5432/nix?sslmode=disable
           TEST_RABBITMQ_URL: amqp://nix:nix_password@localhost:5672/nix
-        # -p 1: several packages share the same live Postgres/RabbitMQ
-        # service containers above rather than mocking them — serialize
-        # package test binaries so one package's rows/messages can't leak
-        # into another's assertions (see Makefile's backend-test).
+        # -p 1: vários pacotes compartilham os mesmos containers de serviço
+        # Postgres/RabbitMQ ao vivo acima em vez de mocká-los — serializa
+        # os binários de teste de cada pacote para que linhas/mensagens de
+        # um pacote não vazem para as asserções de outro (ver backend-test
+        # no Makefile).
         run: go test ./... -timeout 180s -p 1
 
       - name: govulncheck
@@ -98,8 +99,9 @@ jobs:
       run:
         working-directory: frontend
 
-    # Build-time-only placeholders — never real secrets — satisfy the
-    # fail-fast checks in lib/auth without requiring a live Keycloak in CI.
+    # Placeholders válidos apenas em build-time — nunca segredos reais —
+    # satisfazem as checagens fail-fast de lib/auth sem exigir um Keycloak
+    # de verdade no CI.
     env:
       KEYCLOAK_ISSUER_URL: https://ci-placeholder.invalid/realms/ci
       KEYCLOAK_FRONTEND_CLIENT_ID: ci-placeholder
@@ -132,23 +134,23 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: npm audit (high+ severity)
+      - name: npm audit (severidade high ou maior)
         run: npm audit --audit-level=high
-        continue-on-error: true # advisory only — don't block CI on upstream advisories
+        continue-on-error: true # apenas informativo — não bloqueia o CI por causa de advisories upstream
 
   docker:
-    name: Docker Compose / image builds
+    name: Docker Compose / build das imagens
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
 
-      - name: docker compose config (structural validation)
+      - name: docker compose config (validação estrutural)
         run: |
           cp .env.example .env
           docker compose config --quiet
 
-      - name: Build backend-api image
+      - name: Build da imagem backend-api
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -157,7 +159,7 @@ jobs:
           load: true # deixa a imagem disponível localmente para o Trivy escanear abaixo
           tags: nix-platform/backend-api:ci
 
-      - name: Build backend-worker image
+      - name: Build da imagem backend-worker
         uses: docker/build-push-action@v6
         with:
           context: ./backend
@@ -166,7 +168,7 @@ jobs:
           load: true
           tags: nix-platform/backend-worker:ci
 
-      - name: Build frontend image
+      - name: Build da imagem frontend
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -183,21 +185,21 @@ jobs:
       # embutidas na imagem final — cobre uma superfície diferente do
       # govulncheck/npm audit acima (que só olham o código-fonte/deps
       # declaradas, não a imagem OCI resultante com todas as camadas).
-      - name: Scan backend-api image (Trivy)
+      - name: Escaneia a imagem backend-api (Trivy)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: nix-platform/backend-api:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
-      - name: Scan backend-worker image (Trivy)
+      - name: Escaneia a imagem backend-worker (Trivy)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: nix-platform/backend-worker:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
-      - name: Scan frontend image (Trivy)
+      - name: Escaneia a imagem frontend (Trivy)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: nix-platform/frontend:ci

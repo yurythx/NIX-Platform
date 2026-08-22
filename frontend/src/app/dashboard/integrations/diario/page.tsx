@@ -26,7 +26,7 @@ export default function DiarioOficialPage() {
         setError(null);
         setIntegration(found ?? null);
       })
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Failed to load"));
+      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Falha ao carregar"));
   };
 
   useEffect(load, []);
@@ -37,14 +37,14 @@ export default function DiarioOficialPage() {
       const { data } = await apiClient.post<TestJobResponse>("v1/integrations/diario-oficial/test");
       setLastJobId(data.job_id);
       showToast({
-        title: "Diário Oficial check queued",
-        description: `Job ${data.job_id.slice(0, 8)} — you'll be notified when it finishes.`,
+        title: "Verificação do Diário Oficial enfileirada",
+        description: `Job ${data.job_id.slice(0, 8)} — você será notificado quando terminar.`,
         tone: "info",
       });
     } catch (err) {
       showToast({
-        title: "Could not start check",
-        description: err instanceof ApiError ? err.message : "Unexpected error",
+        title: "Não foi possível iniciar a verificação",
+        description: err instanceof ApiError ? err.message : "Erro inesperado",
         tone: "danger",
       });
     } finally {
@@ -57,7 +57,8 @@ export default function DiarioOficialPage() {
       <div>
         <h1 className="text-xl font-semibold">Diário Oficial</h1>
         <p className="text-sm text-muted">
-          Runs an asynchronous connectivity check against the configured Diário Oficial endpoint.
+          Executa uma verificação assíncrona de conectividade com o endpoint configurado do Diário
+          Oficial.
         </p>
       </div>
 
@@ -68,18 +69,18 @@ export default function DiarioOficialPage() {
       {integration && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
-            <CardTitle>Connection status</CardTitle>
+            <CardTitle>Status da conexão</CardTitle>
             <StatusIndicator status={integration.status} />
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-muted">
-              <dt>Last check</dt>
+              <dt>Última verificação</dt>
               <dd>
                 {integration.last_check_at
                   ? new Date(integration.last_check_at).toLocaleString()
-                  : "Never"}
+                  : "Nunca"}
               </dd>
-              <dt>Last success</dt>
+              <dt>Último sucesso</dt>
               <dd>
                 {integration.last_success_at
                   ? new Date(integration.last_success_at).toLocaleString()
@@ -92,11 +93,12 @@ export default function DiarioOficialPage() {
 
             <div>
               <Button loading={testing} onClick={runTest}>
-                Run test now
+                Rodar teste agora
               </Button>
               {lastJobId && (
                 <p className="mt-2 text-xs text-muted">
-                  Last triggered job: <code>{lastJobId}</code> — result arrives as a notification.
+                  Último job disparado: <code>{lastJobId}</code> — o resultado chega como
+                  notificação.
                 </p>
               )}
             </div>

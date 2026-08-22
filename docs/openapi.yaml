@@ -2,15 +2,15 @@ openapi: 3.0.3
 info:
   title: NIX Platform API
   description: |
-    REST API for the NIX Platform — a modular monolith centralizing
-    integrations, automation and notifications. All authenticated endpoints
-    expect a Keycloak-issued OIDC access token as a Bearer JWT; the backend
-    validates it locally against a cached JWKS (never a per-request call to
-    Keycloak — see §29 of the architecture spec).
+    API REST do NIX Platform — um monólito modular que centraliza
+    integrações, automação e notificações. Todo endpoint autenticado espera
+    um access token OIDC emitido pelo Keycloak como Bearer JWT; o backend o
+    valida localmente contra um JWKS em cache (nunca com uma chamada por
+    requisição ao Keycloak — ver §29 do documento de arquitetura).
 
-    Every response uses the same envelope:
-    `{"data": <payload|null>, "error": {"code","message"}|null, "meta": {...}|omitted}`.
-    Errors never include a stack trace or other internal detail.
+    Toda resposta usa o mesmo envelope:
+    `{"data": <payload|null>, "error": {"code","message"}|null, "meta": {...}|omitido}`.
+    Erros nunca incluem stack trace ou outro detalhe interno.
   version: "1.0.0"
   license:
     name: MIT
@@ -18,23 +18,23 @@ info:
 
 servers:
   - url: http://localhost:8000
-    description: Local development (docker compose)
+    description: Desenvolvimento local (docker compose)
   - url: /
-    description: Same-origin (production, behind a reverse proxy)
+    description: Mesma origem (produção, atrás de um reverse proxy)
 
 tags:
   - name: system
-    description: Health, readiness and metrics — unauthenticated.
+    description: Health, readiness e métricas — sem autenticação.
   - name: users
-    description: The authenticated caller and the user directory.
+    description: O chamador autenticado e o diretório de usuários.
   - name: integrations
-    description: Status of every configured external integration.
+    description: Status de cada integração externa configurada.
   - name: diario-oficial
-    description: Diário Oficial connectivity check (async job).
+    description: Verificação de conectividade com o Diário Oficial (job assíncrono).
   - name: secops
-    description: SecOps provider connectivity checks (async job), VirusTotal today.
+    description: Verificações de conectividade dos provedores SecOps (job assíncrono); hoje, VirusTotal.
   - name: websocket
-    description: Real-time notification ticket issuance.
+    description: Emissão de ticket para notificações em tempo real.
 
 security:
   - bearerAuth: []
@@ -45,11 +45,11 @@ paths:
       tags: [system]
       summary: Liveness probe
       operationId: getHealth
-      description: Indicates the process is up. Never checks external dependencies.
+      description: Indica que o processo está de pé. Nunca verifica dependências externas.
       security: []
       responses:
         "200":
-          description: Process is alive.
+          description: O processo está vivo.
           content:
             application/json:
               schema:
@@ -63,18 +63,18 @@ paths:
       tags: [system]
       summary: Readiness probe
       operationId: getReady
-      description: Checks PostgreSQL and RabbitMQ connectivity.
+      description: Verifica a conectividade com PostgreSQL e RabbitMQ.
       security: []
       responses:
         "200":
-          description: All dependencies reachable.
+          description: Todas as dependências estão alcançáveis.
           content:
             application/json:
               example:
                 data: { postgres: "ok", rabbitmq: "ok" }
                 error: null
         "503":
-          description: At least one dependency is unavailable.
+          description: Pelo menos uma dependência está indisponível.
           content:
             application/json:
               example:
@@ -84,12 +84,12 @@ paths:
   /metrics:
     get:
       tags: [system]
-      summary: Prometheus metrics
+      summary: Métricas Prometheus
       operationId: getMetrics
       security: []
       responses:
         "200":
-          description: Prometheus text exposition format.
+          description: Formato de exposição em texto do Prometheus.
           content:
             text/plain:
               schema:
@@ -98,14 +98,15 @@ paths:
   /api/v1/me:
     get:
       tags: [users]
-      summary: Get the current authenticated user
+      summary: Obtém o usuário autenticado atual
       operationId: getCurrentUser
       description: >
-        Upserts the caller's user row from the verified token on every call
-        (creating it on first sight) and returns it.
+        Faz upsert da linha de usuário do chamador a partir do token
+        verificado a cada chamada (criando-a no primeiro acesso) e a
+        retorna.
       responses:
         "200":
-          description: The current user.
+          description: O usuário atual.
           content:
             application/json:
               schema:
@@ -121,7 +122,7 @@ paths:
   /api/v1/users:
     get:
       tags: [users]
-      summary: List users
+      summary: Lista usuários
       operationId: listUsers
       security:
         - bearerAuth: [users:read]
@@ -130,7 +131,7 @@ paths:
         - $ref: "#/components/parameters/PageSize"
       responses:
         "200":
-          description: A page of users.
+          description: Uma página de usuários.
           content:
             application/json:
               schema:
@@ -152,7 +153,7 @@ paths:
   /api/v1/users/{id}:
     get:
       tags: [users]
-      summary: Get a user by id
+      summary: Obtém um usuário pelo id
       operationId: getUser
       security:
         - bearerAuth: [users:read]
@@ -165,7 +166,7 @@ paths:
             format: uuid
       responses:
         "200":
-          description: The user.
+          description: O usuário.
           content:
             application/json:
               schema:
@@ -185,11 +186,11 @@ paths:
   /api/v1/integrations:
     get:
       tags: [integrations]
-      summary: List every configured integration
+      summary: Lista todas as integrações configuradas
       operationId: listIntegrations
       responses:
         "200":
-          description: All integrations.
+          description: Todas as integrações.
           content:
             application/json:
               schema:
@@ -207,7 +208,7 @@ paths:
   /api/v1/integrations/{id}/status:
     get:
       tags: [integrations]
-      summary: Get one integration's current status
+      summary: Obtém o status atual de uma integração
       operationId: getIntegrationStatus
       parameters:
         - name: id
@@ -218,7 +219,7 @@ paths:
             format: uuid
       responses:
         "200":
-          description: The integration.
+          description: A integração.
           content:
             application/json:
               schema:
@@ -236,13 +237,14 @@ paths:
   /api/v1/integrations/diario-oficial/test:
     post:
       tags: [diario-oficial]
-      summary: Trigger an asynchronous Diário Oficial connectivity check
+      summary: Dispara uma verificação assíncrona de conectividade com o Diário Oficial
       operationId: testDiarioOficial
       description: >
-        Does not perform the check itself. Creates a job, persists it and
-        an outbox event in one transaction, and returns immediately — the
-        worker processes it, and the frontend is notified over WebSocket
-        when it completes or fails (§34/§72). Rate-limited per caller.
+        Não executa a verificação em si. Cria um job, o persiste junto com
+        um evento de outbox em uma única transação, e retorna
+        imediatamente — o worker o processa, e o frontend é notificado via
+        WebSocket quando ele concluir ou falhar (§34/§72). Sujeito a rate
+        limiting por chamador.
       security:
         - bearerAuth: [integrations:test]
       responses:
@@ -258,9 +260,9 @@ paths:
   /api/v1/integrations/secops/virustotal/test:
     post:
       tags: [secops]
-      summary: Trigger an asynchronous VirusTotal connectivity check
+      summary: Dispara uma verificação assíncrona de conectividade com o VirusTotal
       operationId: testVirusTotal
-      description: Same async flow as the Diário Oficial test, targeting the VirusTotal provider.
+      description: Mesmo fluxo assíncrono do teste do Diário Oficial, direcionado ao provedor VirusTotal.
       security:
         - bearerAuth: [integrations:test]
       responses:
@@ -276,16 +278,17 @@ paths:
   /api/v1/ws/ticket:
     post:
       tags: [websocket]
-      summary: Issue a short-lived WebSocket ticket
+      summary: Emite um ticket de WebSocket de curta duração
       operationId: createWebSocketTicket
       description: >
-        Returns a single-use, 30-second ticket that authorizes exactly one
-        `GET /ws?ticket=...` upgrade (§38) — browsers can't attach an
-        Authorization header to a WebSocket handshake, so this ticket is
-        the connection's credential instead. Rate-limited per caller.
+        Retorna um ticket de uso único, válido por 30 segundos, que
+        autoriza exatamente um upgrade `GET /ws?ticket=...` (§38) —
+        navegadores não conseguem anexar um header Authorization ao
+        handshake de WebSocket, então este ticket é a credencial da conexão
+        em seu lugar. Sujeito a rate limiting por chamador.
       responses:
         "201":
-          description: A freshly issued ticket.
+          description: Um ticket recém-emitido.
           content:
             application/json:
               schema:
@@ -309,14 +312,15 @@ paths:
   /ws:
     get:
       tags: [websocket]
-      summary: WebSocket upgrade (not a plain HTTP endpoint)
+      summary: Upgrade de WebSocket (não é um endpoint HTTP comum)
       operationId: websocketUpgrade
       description: >
-        Not modeled as a REST operation — included for discoverability.
-        Requires `?ticket=<value>` from `POST /api/v1/ws/ticket`. On
-        connect, the client receives every platform event envelope
-        (`{id,type,version,source,occurred_at,correlation_id,payload}`) as
-        a JSON text frame — see `EventEnvelope` below.
+        Não modelado como uma operação REST — incluído aqui apenas para
+        descoberta. Exige `?ticket=<valor>` obtido em
+        `POST /api/v1/ws/ticket`. Ao conectar, o cliente recebe todo
+        envelope de evento da plataforma
+        (`{id,type,version,source,occurred_at,correlation_id,payload}`)
+        como um frame de texto JSON — ver `EventEnvelope` abaixo.
       security: []
       parameters:
         - name: ticket
@@ -326,9 +330,9 @@ paths:
             type: string
       responses:
         "101":
-          description: Switching Protocols — WebSocket established.
+          description: Switching Protocols — WebSocket estabelecido.
         "401":
-          description: Missing, invalid, expired or already-used ticket.
+          description: Ticket ausente, inválido, expirado ou já utilizado.
 
 components:
   securitySchemes:
@@ -337,8 +341,9 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: >
-        A Keycloak-issued OIDC access token. Validated locally (signature,
-        issuer, audience, expiry, algorithm) against a cached JWKS.
+        Um access token OIDC emitido pelo Keycloak. Validado localmente
+        (assinatura, emissor, audiência, expiração, algoritmo) contra um
+        JWKS em cache.
 
   parameters:
     Page:
@@ -359,7 +364,7 @@ components:
 
   responses:
     TestJobAccepted:
-      description: The test was queued.
+      description: O teste foi enfileirado.
       content:
         application/json:
           schema:
@@ -381,7 +386,7 @@ components:
             error: null
 
     Unauthorized:
-      description: Missing, invalid or expired access token.
+      description: Access token ausente, inválido ou expirado.
       content:
         application/json:
           schema:
@@ -391,7 +396,7 @@ components:
             error: { code: "UNAUTHORIZED", message: "invalid or expired access token" }
 
     Forbidden:
-      description: Authenticated, but missing the required role/permission.
+      description: Autenticado, mas sem o role/permissão necessário.
       content:
         application/json:
           example:
@@ -399,7 +404,7 @@ components:
             error: { code: "FORBIDDEN", message: "insufficient permission" }
 
     NotFound:
-      description: The resource does not exist.
+      description: O recurso não existe.
       content:
         application/json:
           example:
@@ -407,7 +412,7 @@ components:
             error: { code: "NOT_FOUND", message: "resource not found" }
 
     TooManyRequests:
-      description: Rate limit exceeded.
+      description: Limite de requisições excedido.
       content:
         application/json:
           example:
@@ -418,9 +423,9 @@ components:
     Envelope:
       type: object
       description: >
-        The base response shape. Successful operations narrow `data` to a
-        concrete type via `allOf` in their own response schema; this base
-        form documents the generic {data, error, meta} contract.
+        O formato base de toda resposta. Operações bem-sucedidas restringem
+        `data` a um tipo concreto via `allOf` no próprio schema da resposta;
+        esta forma base documenta o contrato genérico {data, error, meta}.
       properties:
         data:
           type: object
@@ -513,7 +518,7 @@ components:
 
     EventEnvelope:
       type: object
-      description: The shape of every message delivered over the WebSocket (§17/§43).
+      description: O formato de toda mensagem entregue via WebSocket (§17/§43).
       properties:
         id:
           type: string

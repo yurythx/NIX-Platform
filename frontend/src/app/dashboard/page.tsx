@@ -25,7 +25,7 @@ export default function DashboardOverviewPage() {
         setError(null);
         setIntegrations(data);
       })
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Failed to load"));
+      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Falha ao carregar"));
   };
 
   useEffect(load, []);
@@ -33,31 +33,31 @@ export default function DashboardOverviewPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">Overview</h1>
-        <p className="text-sm text-muted">System status and quick actions.</p>
+        <h1 className="text-xl font-semibold">Visão geral</h1>
+        <p className="text-sm text-muted">Status do sistema e ações rápidas.</p>
       </div>
 
       <div className="flex flex-wrap gap-3">
         <Link href="/dashboard/integrations">
           <Button variant="secondary" size="sm">
-            View integrations
+            Ver integrações
           </Button>
         </Link>
         <Link href="/dashboard/integrations/diario">
           <Button variant="secondary" size="sm">
-            Test Diário Oficial
+            Testar Diário Oficial
           </Button>
         </Link>
         <Link href="/dashboard/users">
           <Button variant="secondary" size="sm">
-            View users
+            Ver usuários
           </Button>
         </Link>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Integration status</CardTitle>
+          <CardTitle>Status das integrações</CardTitle>
         </CardHeader>
         <CardContent>
           {error && <ErrorState message={error} onRetry={load} />}

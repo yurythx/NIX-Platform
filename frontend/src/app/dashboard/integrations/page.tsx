@@ -28,7 +28,7 @@ export default function IntegrationsPage() {
         setIntegrations(data);
       })
       .catch((err: unknown) =>
-        setError(err instanceof ApiError ? err.message : "Failed to load integrations"),
+        setError(err instanceof ApiError ? err.message : "Falha ao carregar integrações"),
       );
   };
 
@@ -37,8 +37,8 @@ export default function IntegrationsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">Integrations</h1>
-        <p className="text-sm text-muted">External systems NIX Platform connects to.</p>
+        <h1 className="text-xl font-semibold">Integrações</h1>
+        <p className="text-sm text-muted">Sistemas externos aos quais o NIX Platform se conecta.</p>
       </div>
 
       {error && <ErrorState message={error} onRetry={load} />}
@@ -60,7 +60,7 @@ export default function IntegrationsPage() {
                 extra={
                   <Link href="/dashboard/integrations/diario">
                     <Button size="sm" variant="ghost">
-                      Details
+                      Detalhes
                     </Button>
                   </Link>
                 }

@@ -4,8 +4,8 @@
 	backend-build backend-test backend-lint backend-format \
 	frontend-build frontend-test frontend-lint frontend-format
 
-# Pull DB_USER/DB_PASSWORD/DB_NAME/... from .env when present so
-# `make migrate-*` targets the same database the app uses.
+# Carrega DB_USER/DB_PASSWORD/DB_NAME/... do .env quando presente, para que
+# os alvos `make migrate-*` apontem para o mesmo banco usado pela aplicação.
 ifneq (,$(wildcard .env))
 include .env
 export
@@ -19,26 +19,26 @@ DB_PASSWORD  ?= change-me
 DB_NAME      ?= nix
 DB_DSN       ?= postgres://$(DB_USER):$(DB_PASSWORD)@localhost:5432/$(DB_NAME)?sslmode=disable
 
-## --- Local orchestration ---
+## --- Orquestração local ---
 
-dev: ## Start every service in development mode (with dev overrides)
+dev: ## Sobe todos os serviços em modo desenvolvimento (com overrides de dev)
 	$(COMPOSE) up --build
 
-up: ## Start every service in production mode
+up: ## Sobe todos os serviços em modo produção
 	$(COMPOSE_PROD) up --build -d
 
-down: ## Stop and remove every service
+down: ## Para e remove todos os serviços
 	$(COMPOSE) down
 
-logs: ## Tail logs from every service
+logs: ## Acompanha os logs de todos os serviços
 	$(COMPOSE) logs -f
 
-clean: ## Stop services and remove volumes (DESTROYS local data)
+clean: ## Para os serviços e remove os volumes (DESTRÓI os dados locais)
 	$(COMPOSE) down -v
 
 ## --- Build ---
 
-build: backend-build frontend-build ## Build backend and frontend binaries/artifacts
+build: backend-build frontend-build ## Compila os binários/artefatos do backend e do frontend
 
 backend-build:
 	cd backend && go build ./...
@@ -46,16 +46,16 @@ backend-build:
 frontend-build:
 	cd frontend && npm run build
 
-## --- Test ---
+## --- Testes ---
 
-test: backend-test frontend-test ## Run backend and frontend test suites
+test: backend-test frontend-test ## Roda as suítes de teste do backend e do frontend
 
 backend-test:
-	# -p 1: several packages' tests exercise a real, shared PostgreSQL/
-	# RabbitMQ (TEST_DATABASE_URL/TEST_RABBITMQ_URL) rather than mocks.
-	# Running package test binaries in parallel (go test's default) lets
-	# one package's live rows/messages leak into another's assertions —
-	# serialize them instead.
+	# -p 1: os testes de vários pacotes exercitam um PostgreSQL/RabbitMQ
+	# real e compartilhado (TEST_DATABASE_URL/TEST_RABBITMQ_URL), não
+	# mocks. Rodar os binários de teste de cada pacote em paralelo
+	# (padrão do go test) permite que linhas/mensagens ao vivo de um
+	# pacote vazem para as asserções de outro — por isso serializamos.
 	cd backend && go test ./... -p 1
 
 frontend-test:
@@ -63,7 +63,7 @@ frontend-test:
 
 ## --- Lint / format ---
 
-lint: backend-lint frontend-lint ## Lint backend and frontend
+lint: backend-lint frontend-lint ## Roda lint no backend e no frontend
 
 backend-lint:
 	cd backend && go vet ./...
@@ -71,7 +71,7 @@ backend-lint:
 frontend-lint:
 	cd frontend && npm run lint
 
-format: backend-format frontend-format ## Format backend and frontend
+format: backend-format frontend-format ## Formata o backend e o frontend
 
 backend-format:
 	cd backend && go fmt ./...
@@ -81,24 +81,24 @@ frontend-format:
 
 ## --- Migrations (Goose) ---
 
-migrate-up: ## Apply all pending migrations
+migrate-up: ## Aplica todas as migrations pendentes
 	cd $(GOOSE_DIR) && goose postgres "$(DB_DSN)" up
 
-migrate-down: ## Roll back the last migration
+migrate-down: ## Reverte a última migration
 	cd $(GOOSE_DIR) && goose postgres "$(DB_DSN)" down
 
-migrate-status: ## Show migration status
+migrate-status: ## Mostra o status das migrations
 	cd $(GOOSE_DIR) && goose postgres "$(DB_DSN)" status
 
 ## --- Shells ---
 
-backend-shell: ## Open a shell in the running backend-api container
+backend-shell: ## Abre um shell no container backend-api em execução
 	$(COMPOSE) exec backend-api sh
 
-frontend-shell: ## Open a shell in the running frontend container
+frontend-shell: ## Abre um shell no container frontend em execução
 	$(COMPOSE) exec frontend sh
 
 ## --- RabbitMQ ---
 
-rabbitmq-status: ## Show RabbitMQ node/queue status
+rabbitmq-status: ## Mostra o status do nó/filas do RabbitMQ
 	$(COMPOSE) exec rabbitmq rabbitmqctl status

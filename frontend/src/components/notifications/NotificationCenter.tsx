@@ -12,15 +12,15 @@ import {
 import type { ConnectionState } from "@/lib/websocket/client";
 
 const eventCopy: Partial<Record<string, { title: string; tone: "success" | "danger" | "info" }>> = {
-  "diario_oficial.job.completed": { title: "Diário Oficial check completed", tone: "success" },
-  "diario_oficial.job.failed": { title: "Diário Oficial check failed", tone: "danger" },
-  "integration.test.completed": { title: "Integration test completed", tone: "success" },
-  "notification.created": { title: "New notification", tone: "info" },
+  "diario_oficial.job.completed": { title: "Verificação do Diário Oficial concluída", tone: "success" },
+  "diario_oficial.job.failed": { title: "Verificação do Diário Oficial falhou", tone: "danger" },
+  "integration.test.completed": { title: "Teste de integração concluído", tone: "success" },
+  "notification.created": { title: "Nova notificação", tone: "info" },
 };
 
-/** Mounted once in the dashboard layout — renders nothing itself beyond
- * the toast stack (via ToastProvider), translating validated WebSocket
- * events into toasts (§43). */
+/** Montado uma única vez no layout do dashboard — não renderiza nada além
+ * da pilha de toasts (via ToastProvider); traduz os eventos de WebSocket
+ * já validados em toasts (§43). */
 export function NotificationCenter({
   onConnectionStateChange,
 }: {
@@ -34,7 +34,7 @@ export function NotificationCenter({
         const result = integrationStatusPayloadSchema.safeParse(event.payload);
         if (result.success) {
           showToast({
-            title: `Integration ${result.data.key} is now ${result.data.status}`,
+            title: `Integração ${result.data.key} agora está ${result.data.status}`,
             tone: result.data.status === "online" ? "success" : "danger",
           });
         }
@@ -42,7 +42,7 @@ export function NotificationCenter({
       }
 
       const copy = eventCopy[event.type];
-      if (!copy) return; // unrecognized event type — ignore rather than guess
+      if (!copy) return; // tipo de evento não reconhecido — ignora em vez de adivinhar
 
       const job = jobEventPayloadSchema.safeParse(event.payload);
       showToast({

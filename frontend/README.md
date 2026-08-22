@@ -1,41 +1,45 @@
 # NIX Platform — Frontend
 
-Next.js (App Router) + TypeScript dashboard for the NIX Platform. See the
-[repository root README](../README.md) for the full project overview,
-Keycloak setup, and how to run the whole stack via Docker Compose.
+Dashboard em Next.js (App Router) + TypeScript para o NIX Platform. Veja o
+[README raiz do repositório](../README.md) para a visão geral completa do
+projeto, a configuração do Keycloak e como rodar toda a stack via Docker
+Compose.
 
-## Local development
+## Desenvolvimento local
 
 ```bash
-cp .env.example .env.local   # fill in Keycloak/backend values
+cp .env.example .env.local   # preencha os valores de Keycloak/backend
 npm install
 npm run dev
 ```
 
 ## Scripts
 
-| Command | Purpose |
+| Comando | Finalidade |
 |---|---|
-| `npm run dev` | Start the dev server |
-| `npm run build` | Production build (`.next/standalone`) |
+| `npm run dev` | Inicia o servidor de desenvolvimento |
+| `npm run build` | Build de produção (`.next/standalone`) |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Run the Vitest suite once |
-| `npm run test:watch` | Vitest in watch mode |
-| `npm run format` | Prettier, write mode |
+| `npm test` | Roda a suíte Vitest uma vez |
+| `npm run test:watch` | Vitest em modo watch |
+| `npm run format` | Prettier, modo write |
 
-## Layout
+## Organização
 
-- `src/app` — routes (App Router): landing page, `/login`, `/dashboard/**`,
-  the NextAuth route handler, and the `/api/backend/*` BFF proxy.
-- `src/lib/auth` — NextAuth configuration (Keycloak, Authorization Code +
-  PKCE, JWT session).
-- `src/lib/api` — typed client for Client Components; always calls the
-  same-origin BFF proxy so the access token never reaches browser JS.
-- `src/lib/websocket` — reconnecting WebSocket client with backoff and
-  heartbeat handling.
-- `src/lib/validation` — Zod schemas validating every WebSocket payload
-  before it's used.
-- `src/components/ui` — the shared, business-logic-free component kit.
-- `src/proxy.ts` — Next.js 16's `proxy.ts` (formerly `middleware.ts`)
-  guarding `/dashboard/**`.
+- `src/app` — rotas (App Router): landing page, `/login`, `/dashboard/**`,
+  o route handler do NextAuth e o proxy BFF `/api/backend/*`.
+- `src/lib/auth` — configuração do NextAuth (Keycloak, Authorization Code +
+  PKCE, sessão em JWT).
+- `src/lib/api` — cliente tipado para Client Components; sempre chama o
+  proxy BFF na mesma origem, para que o access token nunca chegue ao JS do
+  navegador.
+- `src/lib/websocket` — cliente WebSocket com reconexão, backoff e
+  heartbeat.
+- `src/lib/validation` — schemas Zod que validam todo payload de WebSocket
+  antes de ele ser usado.
+- `src/components/ui` — o kit de componentes compartilhado, sem regra de
+  negócio.
+- `src/proxy.ts` — o `proxy.ts` do Next.js 16 (antigo `middleware.ts`),
+  responsável por proteger `/dashboard/**` e por gerar o CSP com nonce em
+  cada requisição.

@@ -1,6 +1,7 @@
-// Typed client for Client Components — always calls the same-origin BFF
-// proxy (/api/backend/*), never the Go API directly, so the bearer token
-// never has to reach browser-executed JavaScript (§30).
+// Cliente tipado para Client Components — sempre chama o proxy BFF na
+// mesma origem (/api/backend/*), nunca a API Go diretamente, para que o
+// bearer token nunca precise chegar ao JavaScript executado no navegador
+// (§30).
 
 interface ErrorBody {
   code: string;
@@ -41,7 +42,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<{ data: T; 
     throw new ApiError(
       res.status,
       "INVALID_RESPONSE",
-      "The server returned an unreadable response.",
+      "O servidor retornou uma resposta ilegível.",
     );
   }
 
@@ -49,7 +50,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<{ data: T; 
     throw new ApiError(
       res.status,
       json.error?.code ?? "UNKNOWN_ERROR",
-      json.error?.message ?? "Something went wrong. Please try again.",
+      json.error?.message ?? "Algo deu errado. Tente novamente.",
     );
   }
 

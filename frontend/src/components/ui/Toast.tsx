@@ -26,7 +26,7 @@ export function Toast({ toast, onDismiss }: { toast: ToastData; onDismiss: (id: 
         <button
           type="button"
           onClick={() => onDismiss(toast.id)}
-          aria-label="Dismiss notification"
+          aria-label="Dispensar notificação"
           className="shrink-0 rounded p-1 text-muted hover:bg-black/5 dark:hover:bg-white/10"
         >
           ✕

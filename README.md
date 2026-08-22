@@ -1,117 +1,127 @@
 # NIX Platform
 
-A corporate modular platform centralizing internal functionality, integrations, automation, and
-notifications behind a single extensible application.
+Uma plataforma corporativa modular que centraliza funcionalidades internas, integrações,
+automações e notificações numa única aplicação extensível.
 
-Built as a **Modular Monolith** (Go API + Go Worker + Next.js frontend, one codebase, two
-binaries) with an **event-driven** core: PostgreSQL for state, RabbitMQ for asynchronous
-processing, and an existing external Keycloak for identity. The initial modules are
-**Diário Oficial** (a scheduled/on-demand external check) and **SecOps** (VirusTotal today,
-pluggable for more providers), sharing the same job → outbox → queue → worker → notification
-pipeline.
+Construída como um **Monólito Modular** (API Go + Worker Go + frontend Next.js, um único
+código-fonte, dois binários) com um núcleo **orientado a eventos**: PostgreSQL para estado,
+RabbitMQ para processamento assíncrono, e um Keycloak externo já existente para identidade. Os
+módulos iniciais são **Diário Oficial** (uma verificação externa agendada/sob demanda) e **SecOps**
+(VirusTotal hoje, plugável para outros provedores), compartilhando o mesmo pipeline
+job → outbox → fila → worker → notificação.
 
-## Architecture at a glance
+## Arquitetura em resumo
 
 ```
-Keycloak (existing, external) ──OIDC──▶ NIX Platform
-                                          ├── Next.js frontend (dashboard, WebSocket client)
-                                          ├── Go API (REST, WebSocket, auth, outbox writer)
-                                          ├── Go Worker (RabbitMQ consumers, outbox publisher)
-                                          ├── PostgreSQL (data, jobs, outbox, audit)
-                                          └── RabbitMQ (nix.events topic exchange, per-module
-                                              queues + DLQs)
+Keycloak (existente, externo) ──OIDC──▶ NIX Platform
+                                          ├── Frontend Next.js (painel, cliente WebSocket)
+                                          ├── API Go (REST, WebSocket, auth, gravação no outbox)
+                                          ├── Worker Go (consumidores RabbitMQ, publicador do outbox)
+                                          ├── PostgreSQL (dados, jobs, outbox, auditoria)
+                                          └── RabbitMQ (exchange nix.events, filas + DLQs por módulo)
 ```
 
-- **Next.js (App Router, TypeScript, Tailwind)** — the dashboard. Client Components call the
-  Go API only through a same-origin BFF proxy (`/api/backend/*`), so the OIDC access token never
-  reaches browser-executed JavaScript. Real-time updates arrive over a ticket-authenticated
-  WebSocket.
-- **Go** — one module (`backend/go.mod`), two entrypoints: `cmd/api` (HTTP + WebSocket) and
-  `cmd/worker` (RabbitMQ consumers + the outbox publisher). Business logic lives in
-  `internal/modules/<name>/{domain,application,infrastructure,transport[,worker]}`, isolated from
-  the platform plumbing in `internal/platform/*`.
-- **PostgreSQL** — application data, `jobs`, `outbox_events` (Transactional Outbox), `audit_logs`.
-- **RabbitMQ** — the `nix.events` topic exchange, one queue + one dead-letter queue per module,
-  publisher confirms, manual ack/nack, and application-controlled retry with backoff.
-- **Keycloak** — an **existing** external instance. This project never provisions it — see
-  [Keycloak setup](#keycloak-setup) below for the realm/client configuration it expects.
+- **Next.js (App Router, TypeScript, Tailwind)** — o painel. Os Client Components chamam a API Go
+  apenas através de um proxy BFF de mesma origem (`/api/backend/*`), então o token de acesso OIDC
+  nunca chega ao JavaScript executado no navegador. Atualizações em tempo real chegam por um
+  WebSocket autenticado por ticket.
+- **Go** — um único módulo (`backend/go.mod`), dois pontos de entrada: `cmd/api` (HTTP + WebSocket)
+  e `cmd/worker` (consumidores RabbitMQ + publicador do outbox). A regra de negócio mora em
+  `internal/modules/<nome>/{domain,application,infrastructure,transport[,worker]}`, isolada da
+  infraestrutura da plataforma em `internal/platform/*`.
+- **PostgreSQL** — dados da aplicação, `jobs`, `outbox_events` (Outbox Transacional), `audit_logs`.
+- **RabbitMQ** — exchange `nix.events` (topic), uma fila + uma dead-letter queue por módulo,
+  publisher confirms, ack/nack manual, e retry com backoff controlado pela aplicação.
+- **Keycloak** — uma instância externa **já existente**. Este projeto nunca provisiona o Keycloak —
+  veja [Configuração do Keycloak](#configuração-do-keycloak) abaixo para o que ele espera de
+  realm/client.
 
-## Prerequisites
+## Pré-requisitos
 
-- Docker and Docker Compose
+- Docker e Docker Compose
 - Git
-- An existing Keycloak instance reachable from both your machine and the containers
+- Uma instância de Keycloak já existente, acessível tanto da sua máquina quanto dos containers
 
-## Keycloak setup
+## Configuração do Keycloak
 
-NIX Platform authenticates against your organization's existing Keycloak realm. It needs **two**
-OIDC clients in that realm:
+O NIX Platform autentica contra o realm do Keycloak já existente na sua organização. São
+necessários **dois** clients OIDC nesse realm:
 
-| Client | Type | Used by |
+| Client | Tipo | Usado por |
 |---|---|---|
-| `nix-platform-api` | confidential (or public, bearer-only) | The Go API — validates access tokens locally against the realm's JWKS. |
-| `nix-platform-web` | confidential | The Next.js frontend — Authorization Code + PKCE via NextAuth. |
+| `nix-platform-api` | confidencial (ou público, bearer-only) | A API Go — valida os tokens de acesso localmente contra o JWKS do realm. |
+| `nix-platform-web` | confidencial | O frontend Next.js — Authorization Code + PKCE via NextAuth. |
 
-Steps (Keycloak admin console):
+Passos (console de administração do Keycloak):
 
-1. **Realm**: use an existing realm or create one (e.g. `nix`).
+1. **Realm**: use um realm existente ou crie um (ex.: `nix`).
 2. **Client `nix-platform-web`**:
-   - Client authentication: **on** (confidential).
-   - Standard flow (Authorization Code): **on**. Direct access grants: off.
-   - Valid redirect URIs: `http://localhost:3000/api/auth/callback/keycloak` (add your production
-     URL too).
-   - Valid post logout redirect URIs: `http://localhost:3000`.
-   - Web origins: `http://localhost:3000` (or `+` to mirror redirect URIs).
-   - Copy the generated **Client secret** into `KEYCLOAK_FRONTEND_CLIENT_SECRET`.
+   - Client authentication: **ligado** (confidencial).
+   - Standard flow (Authorization Code): **ligado**. Direct access grants: desligado.
+   - Valid redirect URIs: `http://localhost:3000/api/auth/callback/keycloak` (adicione também a
+     URL de produção).
+   - Valid post logout redirect URIs: `http://localhost:3000` — necessário para o logout completo
+     (RP-Initiated Logout) funcionar; sem isso o Keycloak recusa o redirecionamento de volta após
+     encerrar a sessão.
+   - Web origins: `http://localhost:3000` (ou `+` para espelhar as redirect URIs).
+   - Copie o **Client secret** gerado para `KEYCLOAK_FRONTEND_CLIENT_SECRET`.
 3. **Client `nix-platform-api`**:
-   - Client authentication: on (the backend never runs the OAuth dance itself, but a confidential
-     client lets you later add introspection/service-account calls without reconfiguring).
-   - Copy its ID into `KEYCLOAK_CLIENT_ID`.
-4. **Roles**: create the realm roles NIX Platform recognizes — `nix-user`, `nix-admin`,
-   `nix-integration-manager`, `nix-auditor` — and assign them to users/groups as appropriate.
-5. **OIDC endpoints**: the backend and frontend both discover everything they need
-   (`authorization_endpoint`, `jwks_uri`, etc.) from
-   `<KEYCLOAK_ISSUER_URL>/.well-known/openid-configuration` — you only need to set
-   `KEYCLOAK_ISSUER_URL` (e.g. `https://keycloak.example.com/realms/nix`), never the individual
-   endpoint URLs.
+   - Client authentication: ligado (o backend nunca executa o fluxo OAuth sozinho, mas um client
+     confidencial permite adicionar chamadas de introspection/service-account depois sem
+     reconfigurar).
+   - Copie o ID dele para `KEYCLOAK_CLIENT_ID`.
+4. **Roles**: crie as roles de realm que o NIX Platform reconhece — `nix-user`, `nix-admin`,
+   `nix-integration-manager`, `nix-auditor` — e atribua a usuários/grupos conforme apropriado.
+5. **Endpoints OIDC**: tanto o backend quanto o frontend descobrem sozinhos tudo que precisam
+   (`authorization_endpoint`, `jwks_uri`, endpoint de logout, etc.) a partir de
+   `<KEYCLOAK_ISSUER_URL>/.well-known/openid-configuration` — só é preciso configurar
+   `KEYCLOAK_ISSUER_URL` (ex.: `https://keycloak.example.com/realms/nix`), nunca as URLs de cada
+   endpoint individualmente.
 
-## Configuration
+## Configuração
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in at minimum: `DB_PASSWORD`, `RABBITMQ_DEFAULT_PASS`/`RABBITMQ_URL`, every `KEYCLOAK_*`
-value from the section above, `NEXTAUTH_SECRET` (a random 32+ byte value —
-`openssl rand -base64 32`), and, if you want the SecOps module to actually reach VirusTotal,
-`VIRUSTOTAL_API_KEY`. Every variable is documented inline in `.env.example`. Secrets are never
-committed — `.env` is gitignored.
+Preencha no mínimo: `DB_PASSWORD`, `RABBITMQ_DEFAULT_PASS`/`RABBITMQ_URL`, todos os valores
+`KEYCLOAK_*` da seção acima, `NEXTAUTH_SECRET` (um valor aleatório de 32+ bytes —
+`openssl rand -base64 32`), e, se quiser que o módulo SecOps realmente converse com o VirusTotal,
+`VIRUSTOTAL_API_KEY`. Toda variável está documentada diretamente no `.env.example`. Segredos nunca
+são commitados — `.env` está no `.gitignore`.
 
-## Running it
+**Gestão de segredos em produção**: além de variáveis de ambiente diretas, todo valor sensível
+(`DB_PASSWORD`, `RABBITMQ_URL`, `KEYCLOAK_CLIENT_SECRET`, `VIRUSTOTAL_API_KEY`) também aceita uma
+variável `<NOME>_FILE` apontando para um arquivo — o conteúdo do arquivo tem prioridade sobre a
+variável direta. Esse é o padrão usado por Docker Secrets, Kubernetes Secrets montados como
+volume, e pelo Vault Agent Sidecar Injector, então nenhum código específico de provedor é
+necessário: basta montar o segredo como arquivo e apontar `<NOME>_FILE` para ele.
+
+## Executando
 
 ```bash
 docker compose up --build
 ```
 
-This starts `postgres`, `rabbitmq`, `backend-api`, `backend-worker`, and `frontend` on the
-internal `nix_internal` network. Neither PostgreSQL nor RabbitMQ is published externally by
-default — see `docker-compose.dev.yml` to open them for local debugging:
+Isso sobe `postgres`, `rabbitmq`, `backend-api`, `backend-worker` e `frontend` na rede interna
+`nix_internal`. Nem o PostgreSQL nem o RabbitMQ são publicados externamente por padrão — veja o
+`docker-compose.dev.yml` para abri-los durante depuração local:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
-Once containers are healthy:
+Com os containers saudáveis:
 
 - Frontend: http://localhost:3000
-- API health: http://localhost:8000/health, readiness: http://localhost:8000/ready
-- RabbitMQ management UI (dev override only): http://localhost:15672
+- Health da API: http://localhost:8000/health, readiness: http://localhost:8000/ready
+- UI de gerenciamento do RabbitMQ (só no override de dev): http://localhost:15672
 
 ## Migrations
 
-Migrations are plain SQL, managed by [Goose](https://github.com/pressly/goose), and are **never**
-run automatically at startup — run them explicitly. `make migrate-*` shells out to the `goose`
-binary, so install it once:
+As migrations são SQL puro, gerenciadas pelo [Goose](https://github.com/pressly/goose), e
+**nunca** rodam automaticamente na inicialização — execute-as explicitamente. `make migrate-*`
+chama o binário `goose`, então instale-o uma vez:
 
 ```bash
 go install github.com/pressly/goose/v3/cmd/goose@latest
@@ -123,20 +133,20 @@ make migrate-status
 make migrate-down
 ```
 
-## Tests
+## Testes
 
 ```bash
 make test          # backend (go test ./...) + frontend (vitest run)
 ```
 
-Backend tests fall into two groups:
+Os testes do backend se dividem em dois grupos:
 
-- **Unit tests** (always run, no infrastructure needed): domain rules, application use cases with
-  fakes, JWT/authorization, event envelope, validators.
-- **Live-service integration tests**: exercise the real messaging, outbox, jobs, users, and
-  integrations code against an actual PostgreSQL and RabbitMQ — they're skipped automatically
-  unless `TEST_DATABASE_URL` / `TEST_RABBITMQ_URL` are set, so `go test ./...` stays green without
-  infrastructure. To run them locally:
+- **Testes unitários** (sempre rodam, sem precisar de infraestrutura): regras de domínio, casos
+  de uso da aplicação com fakes, JWT/autorização, envelope de eventos, validadores.
+- **Testes de integração contra serviços reais**: exercitam o código de mensageria, outbox, jobs,
+  usuários e integrações contra um PostgreSQL e RabbitMQ de verdade — são pulados automaticamente
+  a menos que `TEST_DATABASE_URL` / `TEST_RABBITMQ_URL` estejam definidas, então `go test ./...`
+  continua passando sem infraestrutura. Para rodá-los localmente:
 
   ```bash
   TEST_DATABASE_URL="postgres://nix:change-me@localhost:5432/nix?sslmode=disable" \
@@ -144,98 +154,138 @@ Backend tests fall into two groups:
   go test ./... -timeout 120s -p 1
   ```
 
-  `-p 1` matters here: several packages exercise the *same* live database rather than mocking it,
-  and `go test`'s default cross-package parallelism lets one package's rows leak into another's
-  assertions. `make test` already passes it.
+  `-p 1` importa aqui: vários pacotes exercitam o *mesmo* banco de dados ao vivo em vez de usar
+  mocks, e o paralelismo padrão do `go test` entre pacotes permite que linhas gravadas por um
+  pacote vazem para as verificações de outro. O `make test` já passa essa flag.
 
-  (Point these at the containers from `docker-compose.dev.yml`, which publishes 5432/5672.)
+  (Aponte essas variáveis para os containers do `docker-compose.dev.yml`, que publica 5432/5672.)
 
 ## RabbitMQ
 
-- **Exchange**: `nix.events`, type `topic`, durable.
-- **Routing keys**: `<context>.<entity>.<action>` — e.g. `diario_oficial.job.completed`,
+- **Exchange**: `nix.events`, tipo `topic`, durável.
+- **Routing keys**: `<contexto>.<entidade>.<ação>` — ex.: `diario_oficial.job.completed`,
   `integration.test.requested`, `notification.created`.
-- **Queues** (each durable, each with its own DLQ):
+- **Filas** (cada uma durável, cada uma com sua própria DLQ):
 
-  | Queue | Bound routing keys | DLQ |
+  | Fila | Routing keys associadas | DLQ |
   |---|---|---|
   | `nix.diario_oficial.worker` | `diario_oficial.job.created` | `nix.diario_oficial.dlq` |
-  | `nix.integration.worker` | `integration.test.requested` (shared by every SecOps provider) | `nix.integration.dlq` |
+  | `nix.integration.worker` | `integration.test.requested` (compartilhada por todo provedor SecOps) | `nix.integration.dlq` |
   | `nix.notification.websocket` | `notification.created`, `diario_oficial.job.completed`, `diario_oficial.job.failed`, `integration.test.completed`, `integration.status.changed` | `nix.notification.dlq` |
 
-- **Consumer**: manual ack — `internal/platform/messaging.Consumer` dispatches each delivery to
-  its own goroutine (bounded by `RABBITMQ_PREFETCH_COUNT`).
-- **Retry**: on handler failure, the consumer sleeps a computed backoff, then republishes an
-  attempt-incremented copy of the message and acks the original, rather than relying on native
-  requeue (which can't carry an updated attempt count).
-- **DLQ**: once `RABBITMQ_MAX_RETRIES` is exhausted, the message is nacked without requeue, which
-  RabbitMQ routes natively to the queue's own DLQ (each main queue declares
-  `x-dead-letter-exchange`/`-routing-key` pointing at it).
-- **Publisher confirms**: every publish (`internal/platform/messaging.Publisher` and the outbox
-  publisher) blocks until RabbitMQ confirms the message was accepted.
-- **Transactional Outbox**: business writes and their triggering event are inserted in the same
-  PostgreSQL transaction (`outbox_events`); a separate poller
-  (`internal/platform/outbox.Publisher`, running in `cmd/worker`) publishes pending rows with
-  `SELECT ... FOR UPDATE SKIP LOCKED` (safe for multiple worker replicas) and marks each
-  `published` only after the broker confirms it.
+- **Consumidor**: ack manual — `internal/platform/messaging.Consumer` despacha cada entrega para
+  sua própria goroutine (limitado por `RABBITMQ_PREFETCH_COUNT`).
+- **Retry**: quando o handler falha, o consumidor aguarda um backoff calculado, depois republica
+  uma cópia da mensagem com o contador de tentativas incrementado e confirma (ack) a original —
+  em vez de depender do requeue nativo, que não consegue carregar um contador de tentativas
+  atualizado.
+- **DLQ**: uma vez que `RABBITMQ_MAX_RETRIES` se esgota, a mensagem é rejeitada (nack) sem
+  requeue, o que o RabbitMQ roteia nativamente para a DLQ da própria fila (cada fila principal
+  declara `x-dead-letter-exchange`/`-routing-key` apontando para ela).
+- **Publisher confirms**: toda publicação (`internal/platform/messaging.Publisher` e o publicador
+  do outbox) bloqueia até o RabbitMQ confirmar que a mensagem foi aceita.
+- **Outbox Transacional**: as escritas de negócio e o evento que elas disparam são inseridos na
+  mesma transação PostgreSQL (`outbox_events`); um leitor separado
+  (`internal/platform/outbox.Publisher`, rodando em `cmd/worker`) publica as linhas pendentes com
+  `SELECT ... FOR UPDATE SKIP LOCKED` (seguro para múltiplas réplicas do worker) e só marca cada
+  uma como `published` depois que o broker confirma.
 
 ## WebSocket
 
-- **Authentication**: browsers can't set an `Authorization` header on a WebSocket handshake, so
-  the connection is authenticated with a short-lived (30s), single-use **ticket** instead of a
-  token in the URL. `POST /api/v1/ws/ticket` (JWT-authenticated, rate-limited) issues one;
-  `GET /ws?ticket=...` redeems it and upgrades.
-- **Connection**: the frontend's `lib/websocket/client.ts` fetches a fresh ticket on every
-  (re)connect.
-- **Events**: every message is the standard envelope
-  (`{id, type, version, source, occurred_at, correlation_id, payload}`), Zod-validated
-  client-side before use (`lib/validation/schemas.ts`) — a malformed message is dropped, not
-  trusted.
-- **Reconnection**: bounded exponential backoff (capped at 30s) on any close/error, plus the
-  browser's native ping/pong heartbeat handling — never a tight/aggressive retry loop.
+- **Autenticação**: navegadores não conseguem definir um cabeçalho `Authorization` no handshake de
+  WebSocket, então a conexão é autenticada com um **ticket** de curta duração (30s) e uso único,
+  em vez de um token na URL. `POST /api/v1/ws/ticket` (autenticado por JWT, com rate limiting)
+  emite um; `GET /ws?ticket=...` o resgata e faz o upgrade.
+- **Conexão**: o `lib/websocket/client.ts` do frontend busca um ticket novo a cada (re)conexão.
+- **Eventos**: toda mensagem segue o envelope padrão
+  (`{id, type, version, source, occurred_at, correlation_id, payload}`), validado com Zod no
+  cliente antes de ser usado (`lib/validation/schemas.ts`) — uma mensagem malformada é descartada,
+  nunca confiada cegamente.
+- **Reconexão**: backoff exponencial limitado (até 30s) em qualquer fechamento/erro, mais o
+  tratamento nativo de ping/pong do navegador para heartbeat — nunca um loop de reconexão
+  agressivo.
 
-## Observability
+## Segurança
 
-- **Logs**: structured (`log/slog`), JSON in production, text in development, with
-  `request_id`/`correlation_id`/`user_id` attached wherever available — never a secret.
-- **Metrics**: Prometheus exposition at `/metrics` on both the API and the worker (the worker's
-  is on a separate, non-business `WORKER_METRICS_PORT` listener).
-- **Tracing**: OpenTelemetry. A genuine no-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset (no
-  collector is part of this stack); when set, HTTP requests, RabbitMQ publish/consume, and the
-  outbox publisher all produce spans, and a job's trace context flows from the HTTP request that
-  created it through to the worker that processes it.
+- **Content-Security-Policy com nonce**: `frontend/src/proxy.ts` gera um nonce novo a cada
+  requisição, aplicado automaticamente pelo Next.js aos próprios scripts do framework — não é
+  possível usar `style=""`/`<script>` inline sem nonce em nenhum componente (por isso os
+  indicadores de status usam classes Tailwind geradas a partir de tokens de cor, nunca `style`
+  inline).
+- **Logout completo (RP-Initiated Logout)**: o botão "Sair" não apenas limpa a sessão local — ele
+  também redireciona o navegador para o endpoint de logout do próprio Keycloak
+  (`/api/auth/keycloak-logout-url` monta essa URL usando o `id_token` lido no servidor), então a
+  sessão no provedor de identidade é encerrada de verdade, não só o cookie local.
+- **Rate limiting distribuído**: `internal/platform/ratelimit.PostgresLimiter` usa uma janela fixa
+  armazenada em `rate_limit_buckets` (Postgres), compartilhada por todas as réplicas da API — sem
+  isso, cada réplica teria seu próprio contador em memória e o limite efetivo viraria N× o
+  configurado. Não usa Redis, seguindo a decisão arquitetural original (§7): o Postgres que já
+  existe é suficiente.
+- **Auditoria imutável**: a tabela `audit_logs` tem gatilhos (migration `000008`) que recusam
+  `UPDATE`, `DELETE` e `TRUNCATE` — uma trilha de auditoria que pode ser editada não prova nada.
+  Isso protege contra a aplicação e contra credenciais de operação do dia a dia; não protege
+  contra um superusuário do Postgres, que ainda pode desabilitar o gatilho antes de agir (ver
+  comentário na migration para o que fazer nesse caso).
+- **Gestão de segredos via arquivo**: ver a seção [Configuração](#configuração) acima.
+- **Scanning contínuo** (`.github/`): Dependabot atualiza dependências semanalmente
+  (`dependabot.yml`), gitleaks varre todo push/PR em busca de segredos vazados
+  (`workflows/gitleaks.yml`), CodeQL faz análise estática de segurança em Go e TypeScript
+  (`workflows/codeql.yml`), e o job `docker` do CI escaneia as três imagens já construídas com
+  Trivy em busca de CVEs conhecidas.
+- **Criptografia em repouso**: é primariamente uma decisão de infraestrutura, não algo que o
+  código da aplicação resolve sozinho. Em produção, use um provedor de PostgreSQL gerenciado com
+  criptografia em repouso habilitada por padrão (Amazon RDS, Google Cloud SQL, Azure Database for
+  PostgreSQL todos oferecem isso "de fábrica"), ou, para volumes locais/on-prem, um disco
+  criptografado com LUKS por baixo do volume `postgres_data`. A extensão `pgcrypto` já está
+  habilitada (migration `000001`) para o dia em que uma coluna específica precisar de
+  criptografia em nível de aplicação — não foi aplicada preventivamente a nenhuma coluna hoje
+  porque isso exigiria uma estratégia de busca determinística (hash) para manter índices/buscas
+  funcionando, e nenhum campo atual (email corporativo, por exemplo) justifica essa complexidade
+  extra sem um requisito concreto.
 
-## API documentation
+## Observabilidade
 
-See [`docs/openapi.yaml`](docs/openapi.yaml) — every endpoint, schema, error shape, pagination
-contract, and example. View it with any OpenAPI viewer (e.g.
+- **Logs**: estruturados (`log/slog`), JSON em produção, texto em desenvolvimento, com
+  `request_id`/`correlation_id`/`user_id` anexados sempre que disponíveis — nunca um segredo.
+- **Métricas**: exposição Prometheus em `/metrics` tanto na API quanto no worker (o do worker fica
+  num listener `WORKER_METRICS_PORT` separado, sem tráfego de negócio).
+- **Tracing**: OpenTelemetry. Um no-op de verdade quando `OTEL_EXPORTER_OTLP_ENDPOINT` não está
+  definida (nenhum coletor faz parte desta stack); quando definida, requisições HTTP,
+  publicação/consumo no RabbitMQ e o publicador do outbox produzem spans, e o contexto de rastreio
+  de um job flui da requisição HTTP que o criou até o worker que o processa.
+
+## Documentação da API
+
+Veja [`docs/openapi.yaml`](docs/openapi.yaml) — todo endpoint, schema, formato de erro, contrato
+de paginação, e exemplo. Visualize com qualquer visualizador de OpenAPI (ex.:
 `npx @redocly/cli preview-docs docs/openapi.yaml`).
 
-## Repository layout
+## Estrutura do repositório
 
 ```
 nix-platform/
-├── backend/            Go module: cmd/{api,worker}, internal/{platform,domain,modules,app}, migrations/
-├── frontend/            Next.js app
-├── docs/openapi.yaml     API reference
-├── .github/workflows/     CI
+├── backend/            Módulo Go: cmd/{api,worker}, internal/{platform,domain,modules,app}, migrations/
+├── frontend/            App Next.js
+├── docs/openapi.yaml     Referência da API
+├── .github/               CI, Dependabot, scanning de segurança
 ├── docker-compose.yml     postgres, rabbitmq, backend-api, backend-worker, frontend
-├── docker-compose.dev.yml Local-only overrides (exposes postgres/rabbitmq ports)
+├── docker-compose.dev.yml Sobreposições só para desenvolvimento local (expõe portas de postgres/rabbitmq)
 └── Makefile               dev/up/down/test/lint/migrate-*/...
 ```
 
-## Extending the platform
+## Estendendo a plataforma
 
-New business modules follow the same four-to-five-layer shape as the existing ones
-(`domain/`, `application/`, `infrastructure/`, `transport/`, optionally `worker/`) and are wired
-in exactly one place: `backend/internal/app/modules.go`. A new SecOps provider, for instance, is
-just another `domain.SecurityProvider` implementation registered in that file's `providers` map —
-no changes to the SecOps module itself, the RabbitMQ topology, or the Core.
+Novos módulos de negócio seguem a mesma estrutura de quatro a cinco camadas dos já existentes
+(`domain/`, `application/`, `infrastructure/`, `transport/`, opcionalmente `worker/`) e são
+conectados em exatamente um lugar: `backend/internal/app/modules.go`. Um novo provedor SecOps,
+por exemplo, é só mais uma implementação de `domain.SecurityProvider` registrada no mapa
+`providers` desse arquivo — nenhuma mudança no módulo SecOps em si, na topologia do RabbitMQ, ou
+no Core.
 
-Extraction to a separate service is deliberately not a starting decision — the modular monolith
-is the plan until a module has a concrete, real reason (independent scaling, independent
-deploys, a dedicated team) to be pulled out.
+Extrair um módulo para um serviço separado é deliberadamente não uma decisão inicial — o monólito
+modular é o plano até que um módulo tenha um motivo concreto e real (escala independente, deploy
+independente, um time dedicado) para ser separado.
 
-## License
+## Licença
 
-MIT — see [LICENSE](LICENSE).
+MIT — veja [LICENSE](LICENSE).

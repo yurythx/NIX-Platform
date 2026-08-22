@@ -12,7 +12,7 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
   const token = await getToken({ req });
   if (!token || !token.accessToken || token.error) {
     return NextResponse.json(
-      { data: null, error: { code: "UNAUTHORIZED", message: "authentication required" } },
+      { data: null, error: { code: "UNAUTHORIZED", message: "autenticação necessária" } },
       { status: 401 },
     );
   }
@@ -40,7 +40,7 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
     return NextResponse.json(
       {
         data: null,
-        error: { code: "DEPENDENCY_UNAVAILABLE", message: "the API is currently unreachable" },
+        error: { code: "DEPENDENCY_UNAVAILABLE", message: "a API está indisponível no momento" },
       },
       { status: 503 },
     );

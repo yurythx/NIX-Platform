@@ -37,7 +37,7 @@ export default function UsersPage() {
         setMeta((meta as PaginationMeta) ?? null);
       })
       .catch((err: unknown) =>
-        setError(err instanceof ApiError ? err.message : "Failed to load users"),
+        setError(err instanceof ApiError ? err.message : "Falha ao carregar usuários"),
       );
   }, [page]);
 
@@ -46,8 +46,8 @@ export default function UsersPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">Users</h1>
-        <p className="text-sm text-muted">Everyone with access to NIX Platform.</p>
+        <h1 className="text-xl font-semibold">Usuários</h1>
+        <p className="text-sm text-muted">Todos com acesso ao NIX Platform.</p>
       </div>
 
       {error && <ErrorState message={error} onRetry={load} />}
@@ -62,8 +62,8 @@ export default function UsersPage() {
 
       {!error && users && users.length === 0 && (
         <EmptyState
-          title="No users yet"
-          description="Users appear here once they sign in for the first time."
+          title="Ainda não há usuários"
+          description="Usuários aparecem aqui assim que fizerem login pela primeira vez."
         />
       )}
 
@@ -72,10 +72,10 @@ export default function UsersPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Nome</TableHeaderCell>
                 <TableHeaderCell>Email</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Last seen</TableHeaderCell>
+                <TableHeaderCell>Visto por último</TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -83,7 +83,7 @@ export default function UsersPage() {
                 <TableRow key={user.id}>
                   <TableCell>{user.display_name || user.username}</TableCell>
                   <TableCell>{user.email}</TableCell>
-                  <TableCell>{user.active ? "Active" : "Inactive"}</TableCell>
+                  <TableCell>{user.active ? "Ativo" : "Inativo"}</TableCell>
                   <TableCell>
                     {user.last_seen_at ? new Date(user.last_seen_at).toLocaleString() : "—"}
                   </TableCell>
@@ -95,7 +95,7 @@ export default function UsersPage() {
           {meta && meta.total_pages > 1 && (
             <div className="flex items-center justify-between text-sm text-muted">
               <span>
-                Page {meta.page} of {meta.total_pages} ({meta.total_items} users)
+                Página {meta.page} de {meta.total_pages} ({meta.total_items} usuários)
               </span>
               <div className="flex gap-2">
                 <Button
@@ -104,7 +104,7 @@ export default function UsersPage() {
                   disabled={page <= 1}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                 >
-                  Previous
+                  Anterior
                 </Button>
                 <Button
                   variant="secondary"
@@ -112,7 +112,7 @@ export default function UsersPage() {
                   disabled={page >= meta.total_pages}
                   onClick={() => setPage((p) => p + 1)}
                 >
-                  Next
+                  Próxima
                 </Button>
               </div>
             </div>
