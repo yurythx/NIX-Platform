@@ -51,7 +51,7 @@ func TestLoad_Success(t *testing.T) {
 
 func TestLoad_MissingRequired(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
-	// Intentionally leave DB_HOST, RABBITMQ_URL, KEYCLOAK_* unset.
+	// Deixa DB_HOST, RABBITMQ_URL, KEYCLOAK_* sem definir, de propósito.
 
 	_, err := Load()
 	if err == nil {

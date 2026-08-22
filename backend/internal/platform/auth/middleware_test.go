@@ -18,10 +18,11 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/config"
 )
 
-// testOIDCProvider spins up a self-contained, real HTTP OIDC discovery +
-// JWKS endpoint (no network beyond localhost) so Verifier can be exercised
-// end-to-end: discovery, JWKS caching, signature/issuer/audience/expiry
-// validation — the same code path used against a real Keycloak.
+// testOIDCProvider sobe um endpoint HTTP real e autocontido de discovery
+// OIDC + JWKS (sem rede além de localhost), para que o Verifier possa ser
+// exercitado de ponta a ponta: discovery, cache de JWKS, validação de
+// assinatura/issuer/audience/expiração — o mesmo caminho de código usado
+// contra um Keycloak real.
 type testOIDCProvider struct {
 	server     *httptest.Server
 	privateKey *rsa.PrivateKey

@@ -68,8 +68,9 @@ func TestTicketStore_UnknownTicketRejected(t *testing.T) {
 	}
 }
 
-// testServer wires a real Hub + TicketStore behind httptest, so tests dial
-// an actual WebSocket connection rather than mocking anything.
+// testServer conecta um Hub + TicketStore reais atrás de httptest, para
+// que os testes discem uma conexão WebSocket de verdade em vez de mockar
+// qualquer coisa.
 type testServer struct {
 	server *httptest.Server
 	hub    *Hub
@@ -142,9 +143,10 @@ func TestUpgradeHandler_ValidTicketConnectsAndReceivesBroadcast(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Give the server a moment to finish registering the client before we
-	// broadcast — Start() registers synchronously before the pumps run,
-	// but the register channel handoff to Run() is still async.
+	// Dá ao servidor um instante para terminar de registrar o cliente
+	// antes de fazermos o broadcast — Start() registra de forma síncrona
+	// antes das pumps rodarem, mas a entrega pelo canal register até o
+	// Run() ainda é assíncrona.
 	deadline := time.Now().Add(2 * time.Second)
 	for ts.hub.ClientCount() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)

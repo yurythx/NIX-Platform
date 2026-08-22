@@ -16,12 +16,13 @@ import (
 	"github.com/yurythx/nix-platform/internal/domain/events"
 )
 
-// These tests exercise the real RabbitMQ protocol (exchange/queue
-// declaration, publisher confirms, manual ack/nack, retry backoff, DLQ
-// routing) against a live broker. They're skipped unless TEST_RABBITMQ_URL
-// is set, so `go test ./...` stays green without infrastructure, but they
-// are not mocks — set TEST_RABBITMQ_URL (e.g.
-// amqp://nix:nix_password@localhost:5672/nix) to actually run them.
+// Estes testes exercitam o protocolo AMQP real do RabbitMQ (declaração de
+// exchange/fila, publisher confirms, ack/nack manual, backoff de retry,
+// roteamento de DLQ) contra um broker ao vivo. São pulados se
+// TEST_RABBITMQ_URL não estiver definida, para que `go test ./...`
+// continue passando sem infraestrutura, mas não são mocks — defina
+// TEST_RABBITMQ_URL (ex.: amqp://nix:nix_password@localhost:5672/nix)
+// para de fato rodá-los.
 func testConnection(t *testing.T) *Connection {
 	t.Helper()
 	url := os.Getenv("TEST_RABBITMQ_URL")
@@ -37,8 +38,9 @@ func testConnection(t *testing.T) *Connection {
 	return conn
 }
 
-// testQueueSpec builds a uniquely-named QueueSpec (so parallel/previous
-// test runs never collide) and registers cleanup to delete it.
+// testQueueSpec constrói um QueueSpec com nome único (para que execuções
+// paralelas/anteriores de teste nunca colidam) e registra a limpeza para
+// removê-lo.
 func testQueueSpec(t *testing.T, conn *Connection) QueueSpec {
 	t.Helper()
 	suffix := uuid.NewString()[:8]
@@ -85,7 +87,7 @@ func TestDeclareTopology_IsIdempotent(t *testing.T) {
 	}
 	defer ch.Close()
 
-	// Declaring the same topology again must not error.
+	// Declarar a mesma topologia de novo não pode dar erro.
 	if err := DeclareTopology(ch, []QueueSpec{spec}); err != nil {
 		t.Fatalf("second DeclareTopology call failed: %v", err)
 	}
@@ -108,8 +110,8 @@ func TestPublisher_PublishIsConfirmedAndConsumable(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	// Consume it back directly (bypassing Consumer) to prove it actually
-	// landed in the queue, durable and with the right body.
+	// Consome de volta diretamente (contornando o Consumer) para provar
+	// que realmente chegou na fila, durável e com o corpo certo.
 	ch, err := conn.Channel()
 	if err != nil {
 		t.Fatalf("open channel: %v", err)
@@ -249,10 +251,11 @@ func TestConsumer_ExhaustsRetriesAndRoutesToDLQ(t *testing.T) {
 		})
 	}()
 
-	// The handler keeps failing forever past maxRetries would never be
-	// called again for THIS message (it's routed to the DLQ), so stop the
-	// consumer shortly after we've seen maxRetries+1 attempts (the last
-	// one being the one that triggers the DLQ nack) or on a timeout.
+	// O handler continua falhando para sempre; passado maxRetries ele
+	// nunca seria chamado de novo para ESTA mensagem (ela é roteada para
+	// a DLQ), então para o consumer logo depois de vermos maxRetries+1
+	// tentativas (a última sendo a que dispara o nack de DLQ) ou por
+	// timeout.
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -276,8 +279,8 @@ func assertQueueEmpty(t *testing.T, conn *Connection, queue string) {
 	}
 	defer ch.Close()
 
-	// Give RabbitMQ a brief moment to settle the ack/requeue before we
-	// inspect queue depth.
+	// Dá ao RabbitMQ um instante para assentar o ack/requeue antes de
+	// inspecionarmos a profundidade da fila.
 	time.Sleep(300 * time.Millisecond)
 
 	q, err := ch.QueueInspect(queue)

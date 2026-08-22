@@ -106,9 +106,10 @@ func TestProcessJob_Success_CompletesAndUpdatesIntegration(t *testing.T) {
 	}
 }
 
-// countingProvider errors if TestConnection is called more than once, so
-// a test can prove a redelivered event was skipped rather than merely
-// reprocessed idempotently by coincidence.
+// countingProvider retorna erro se TestConnection for chamado mais de uma
+// vez, para que um teste possa provar que um evento redelivered foi
+// pulado, em vez de meramente reprocessado de forma idempotente por
+// coincidência.
 type countingProvider struct {
 	calls int
 }
@@ -145,8 +146,8 @@ func TestProcessJob_RedeliveryOfCompletedJob_IsANoOp(t *testing.T) {
 		t.Fatalf("first ProcessJob: %v", err)
 	}
 
-	// Simulates RabbitMQ redelivering the same integration.test.requested
-	// event after the job already completed.
+	// Simula o RabbitMQ reentregando o mesmo evento
+	// integration.test.requested depois que o job já foi concluído.
 	if err := svc.ProcessJob(ctx, job.ID, "virustotal", corrID); err != nil {
 		t.Fatalf("redelivered ProcessJob should be a no-op, got error: %v", err)
 	}

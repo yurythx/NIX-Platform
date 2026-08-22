@@ -17,11 +17,12 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
 )
 
-// These tests run the module's full application logic (transactions,
-// status transitions, outbox writes) against the real migrated Postgres
-// used across this backend — skipped unless TEST_DATABASE_URL is set.
-// Only the external Diário Oficial call itself is faked, via
-// domain.Client, so the test controls success/failure deterministically.
+// Estes testes rodam a lógica de aplicação completa do módulo
+// (transações, transições de status, escritas no outbox) contra o
+// Postgres real e migrado usado em todo este backend — pulados se
+// TEST_DATABASE_URL não estiver definida. Só a chamada externa ao Diário
+// Oficial em si é falsa (fake), via domain.Client, para que o teste
+// controle sucesso/falha de forma determinística.
 
 type fakeClient struct {
 	result *domain.CheckResult
@@ -131,9 +132,9 @@ func TestProcessJob_Success_CompletesJobAndPublishesEvent(t *testing.T) {
 	}
 }
 
-// countingClient errors if Check is called more than once, so a test can
-// prove a redelivered event was skipped rather than merely reprocessed
-// idempotently by coincidence.
+// countingClient retorna erro se Check for chamado mais de uma vez, para
+// que um teste possa provar que um evento redelivered foi pulado, em vez
+// de meramente reprocessado de forma idempotente por coincidência.
 type countingClient struct {
 	calls int
 }
@@ -163,8 +164,8 @@ func TestProcessJob_RedeliveryOfCompletedJob_IsANoOp(t *testing.T) {
 		t.Fatalf("first ProcessJob: %v", err)
 	}
 
-	// Simulates RabbitMQ redelivering the same diario_oficial.job.created
-	// event after the job already completed.
+	// Simula o RabbitMQ reentregando o mesmo evento
+	// diario_oficial.job.created depois que o job já foi concluído.
 	if err := svc.ProcessJob(ctx, job.ID, corrID); err != nil {
 		t.Fatalf("redelivered ProcessJob should be a no-op, got error: %v", err)
 	}
@@ -208,8 +209,8 @@ func TestProcessJob_Failure_MarksFailedAndReturnsErrorForRetry(t *testing.T) {
 		t.Errorf("Status = %s, want failed", fetched.Status)
 	}
 
-	// No completion/failure notification yet — the job might still
-	// succeed on retry.
+	// Ainda nenhuma notificação de conclusão/falha — o job ainda pode ter
+	// sucesso numa nova tentativa.
 	if outboxEventExists(t, pool, job.ID.String(), EventJobFailed) {
 		t.Error("did not expect a job.failed outbox event before retries are exhausted")
 	}
@@ -226,7 +227,7 @@ func TestHandleDeadLetter_MarksDeadLetterAndPublishesFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTestJob: %v", err)
 	}
-	// Simulate the attempt(s) RabbitMQ already made before giving up.
+	// Simula a(s) tentativa(s) que o RabbitMQ já fez antes de desistir.
 	if err := svc.ProcessJob(ctx, job.ID, corrID); err == nil {
 		t.Fatal("expected the fake client to fail")
 	}

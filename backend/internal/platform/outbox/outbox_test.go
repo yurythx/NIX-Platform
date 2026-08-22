@@ -17,10 +17,10 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
 )
 
-// These tests run against the real, migrated PostgreSQL used across this
-// backend's test suite (and, for one test, a real RabbitMQ) — skipped
-// unless TEST_DATABASE_URL is set, so `go test ./...` stays green without
-// infrastructure.
+// Estes testes rodam contra o PostgreSQL real e migrado usado em toda a
+// suíte de testes deste backend (e, para um teste, um RabbitMQ real) —
+// pulados se TEST_DATABASE_URL não estiver definida, para que
+// `go test ./...` continue passando sem infraestrutura disponível.
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -39,16 +39,18 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
-// truncateOutbox clears outbox_events so each test's publishPendingBatch
-// call only ever sees rows it wrote itself — publishPendingBatch
-// deliberately scans every pending row regardless of aggregate, exactly
-// like the real worker would, so tests must not leak state into each other.
+// truncateOutbox limpa outbox_events para que a chamada a
+// publishPendingBatch de cada teste só veja linhas que ela mesma escreveu
+// — publishPendingBatch varre deliberadamente toda linha pendente
+// independente do aggregate, exatamente como o worker real faria, então
+// os testes não podem deixar estado vazar de um para o outro.
 //
-// This only works against leaks from tests within THIS package/binary.
-// Other packages (diario_oficial, secops) write real outbox_events rows
-// via the same live database too and don't publish/clean them up — run
-// with `go test ./... -p 1` (see Makefile/README) so package test
-// binaries never run concurrently against the shared table.
+// Isto só protege contra vazamento entre testes DESTE pacote/binário.
+// Outros pacotes (diario_oficial, secops) também gravam linhas reais em
+// outbox_events no mesmo banco ao vivo e não as publicam/limpam — rode com
+// `go test ./... -p 1` (ver Makefile/README) para que os binários de
+// teste de cada pacote nunca rodem concorrentemente contra a tabela
+// compartilhada.
 func truncateOutbox(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `DELETE FROM outbox_events`); err != nil {
@@ -135,7 +137,8 @@ func TestWriter_RollbackDiscardsEvent(t *testing.T) {
 	}
 }
 
-// failingPublisher always fails, to exercise the outbox's retry/give-up path.
+// failingPublisher sempre falha, para exercitar o caminho de
+// retry/desistência do outbox.
 type failingPublisher struct {
 	calls int32
 }
@@ -195,8 +198,8 @@ func TestPublisher_ExhaustsAttemptsAndMarksFailed(t *testing.T) {
 		t.Errorf("publisher was called %d times, want %d (a failed row must not be retried again)", got, pub.maxAttempts)
 	}
 
-	// One more poll: the row is now "failed", not "pending" — must not be
-	// picked up again.
+	// Mais um polling: a linha agora está "failed", não "pending" — não
+	// pode ser pega de novo.
 	if err := pub.publishPendingBatch(ctx); err != nil {
 		t.Fatalf("publishPendingBatch: %v", err)
 	}
@@ -293,8 +296,9 @@ func TestPublisher_PublishesPendingRowToRealBroker(t *testing.T) {
 	}
 }
 
-// countingPublisher records how many times each event ID was published, to
-// detect double-publishing under concurrent batches.
+// countingPublisher registra quantas vezes cada id de evento foi
+// publicado, para detectar publicação em duplicidade sob lotes
+// concorrentes.
 type countingPublisher struct {
 	mu     sync.Mutex
 	counts map[string]int
@@ -343,8 +347,9 @@ func TestPublisher_ConcurrentBatches_NoDoublePublish(t *testing.T) {
 	go func() { defer wg.Done(); _ = pubB.publishPendingBatch(context.Background()) }()
 	wg.Wait()
 
-	// A third pass in case SKIP LOCKED caused one batch to see fewer rows
-	// than the other grabbed (rows never processed by either goroutine).
+	// Uma terceira passada, caso o SKIP LOCKED tenha feito um lote ver
+	// menos linhas do que o outro pegou (linhas nunca processadas por
+	// nenhuma das duas goroutines).
 	_ = pubA.publishPendingBatch(context.Background())
 
 	cp.mu.Lock()

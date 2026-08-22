@@ -59,7 +59,7 @@ func TestRecoverer_ConvertsPanicToJSON500(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
 
-	// Must not panic out of ServeHTTP.
+	// Não pode vazar um panic para fora de ServeHTTP.
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != 500 {

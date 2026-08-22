@@ -122,7 +122,7 @@ func TestRepository_RejectsInvalidTransition(t *testing.T) {
 	if err := repo.Create(ctx, tx, job); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	// queued -> completed is not a valid transition (must go through processing).
+	// queued -> completed não é uma transição válida (precisa passar por processing).
 	err = repo.MarkCompleted(ctx, tx, job.ID, nil)
 	_ = tx.Rollback(ctx)
 	if err == nil {

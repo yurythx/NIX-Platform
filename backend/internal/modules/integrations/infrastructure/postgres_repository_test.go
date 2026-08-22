@@ -24,7 +24,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// These tests rely on the "virustotal" row seeded by migration 000006.
+// Estes testes dependem da linha "virustotal" semeada pela migration 000006.
 
 func TestPostgresRepository_List_IncludesSeeded(t *testing.T) {
 	pool := testPool(t)
@@ -51,7 +51,7 @@ func TestPostgresRepository_UpdateStatusTx_ReportsChange(t *testing.T) {
 	repo := NewPostgresRepository(pool)
 	ctx := context.Background()
 
-	// Reset to a known baseline so the test is order-independent.
+	// Reseta para uma base conhecida, para que o teste independa da ordem.
 	_, err := pool.Exec(ctx, `UPDATE integrations SET status = 'unknown', last_error = NULL WHERE key = 'virustotal'`)
 	if err != nil {
 		t.Fatalf("reset baseline: %v", err)
@@ -79,7 +79,7 @@ func TestPostgresRepository_UpdateStatusTx_ReportsChange(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	// Same outcome again: status should NOT be reported as changed.
+	// Mesmo resultado de novo: o status NÃO deve ser reportado como mudado.
 	tx, err = pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
@@ -93,7 +93,7 @@ func TestPostgresRepository_UpdateStatusTx_ReportsChange(t *testing.T) {
 	}
 	_ = tx.Rollback(ctx)
 
-	// Failure transitions online -> offline with an error recorded.
+	// Uma falha transiciona online -> offline com um erro registrado.
 	tx, err = pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
