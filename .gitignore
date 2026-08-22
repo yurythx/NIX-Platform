@@ -25,6 +25,9 @@ npm-debug.log*
 # --- Docker ---
 docker-compose.override.yml
 
+# --- Stray downloaded packages (never intentional in this repo) ---
+*.deb
+
 # --- IDE / OS ---
 .vscode/
 .idea/
