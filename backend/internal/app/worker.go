@@ -9,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
+	"github.com/yurythx/nix-platform/internal/platform/outbox"
 )
 
 // Worker runs every long-lived background processor (RabbitMQ consumers,
@@ -26,12 +27,17 @@ type Worker struct {
 // is cancelled.
 type processor func(ctx context.Context) error
 
-// NewWorker builds the worker runner. As later phases add RabbitMQ
-// consumers and the outbox publisher, they are registered here.
+// NewWorker builds the worker runner. As later phases add RabbitMQ queue
+// consumers for each module, they are registered here alongside the
+// outbox publisher.
 func NewWorker(deps *Dependencies) (*Worker, error) {
+	outboxPublisher := outbox.NewPublisher(deps.DB, deps.Publisher, deps.Logger)
+
 	return &Worker{
-		deps:       deps,
-		processors: []processor{},
+		deps: deps,
+		processors: []processor{
+			outboxPublisher.Run,
+		},
 	}, nil
 }
 

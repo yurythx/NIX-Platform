@@ -18,7 +18,13 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/logging"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
+	"github.com/yurythx/nix-platform/internal/platform/outbox"
 )
+
+// OutboxSource identifies this backend as the Source stamped on every
+// event envelope written to the outbox, regardless of which module wrote
+// it — module-level provenance lives in aggregate_type/aggregate_id.
+const OutboxSource = "nix.platform"
 
 // Dependencies holds every shared platform resource. Module-specific
 // dependencies (repositories, use cases) are added to this struct as each
@@ -30,6 +36,7 @@ type Dependencies struct {
 	Verifier  *auth.Verifier
 	Messaging *messaging.Connection
 	Publisher events.EventPublisher
+	Outbox    *outbox.Writer
 }
 
 // NewDependencies builds and validates every platform dependency. It
@@ -88,6 +95,7 @@ func NewDependencies(ctx context.Context) (*Dependencies, error) {
 		Verifier:  verifier,
 		Messaging: mqConn,
 		Publisher: publisher,
+		Outbox:    outbox.NewWriter(OutboxSource),
 	}, nil
 }
 
