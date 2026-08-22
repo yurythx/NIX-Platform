@@ -1,0 +1,27 @@
+# Development overrides. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# Opens PostgreSQL and the RabbitMQ management UI on localhost for local
+# debugging only — never apply this override in a shared/production
+# environment (§15/§60).
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  rabbitmq:
+    ports:
+      - "5672:5672"   # AMQP, for connecting a local client/debugger
+      - "15672:15672" # management UI — http://localhost:15672
+
+  backend-api:
+    environment:
+      APP_ENV: development
+      APP_LOG_LEVEL: debug
+      LOG_FORMAT: text
+
+  backend-worker:
+    environment:
+      APP_ENV: development
+      APP_LOG_LEVEL: debug
+      LOG_FORMAT: text

@@ -1,0 +1,126 @@
+name: nix-platform
+
+networks:
+  nix_internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-nix}
+      POSTGRES_USER: ${DB_USER:-nix}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nix_internal
+    # No public port mapping — PostgreSQL is never exposed externally by
+    # default (§6/§60). docker-compose.dev.yml adds a mapping for local
+    # development only.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-nix} -d ${DB_NAME:-nix}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-nix}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST:-nix}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - nix_internal
+    # Neither the AMQP port nor the management UI is published externally
+    # by default (§15/§60). docker-compose.dev.yml opens the management UI
+    # for local development only.
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  backend-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-nix}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-nix}
+    networks:
+      - nix_internal
+    ports:
+      - "${HTTP_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-nix}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-nix}
+    networks:
+      - nix_internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_API_URL: ${API_PUBLIC_URL:-http://localhost:8000}
+      NEXT_PUBLIC_WS_URL: ${WEBSOCKET_PUBLIC_URL:-ws://localhost:8000/ws}
+    networks:
+      - nix_internal
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

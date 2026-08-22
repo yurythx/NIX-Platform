@@ -1,0 +1,40 @@
+# --- Go ---
+backend/bin/
+backend/dist/
+*.test
+*.out
+coverage.out
+coverage.html
+
+# --- Node / Next.js ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+npm-debug.log*
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Test / CI artifacts ---
+frontend/coverage/
+backend/coverage/
