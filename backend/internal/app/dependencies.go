@@ -19,6 +19,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/logging"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
+	"github.com/yurythx/nix-platform/internal/platform/ws"
 )
 
 // OutboxSource identifies this backend as the Source stamped on every
@@ -37,6 +38,8 @@ type Dependencies struct {
 	Messaging *messaging.Connection
 	Publisher events.EventPublisher
 	Outbox    *outbox.Writer
+	Hub       *ws.Hub
+	Tickets   *ws.TicketStore
 }
 
 // NewDependencies builds and validates every platform dependency. It
@@ -96,12 +99,17 @@ func NewDependencies(ctx context.Context) (*Dependencies, error) {
 		Messaging: mqConn,
 		Publisher: publisher,
 		Outbox:    outbox.NewWriter(OutboxSource),
+		Hub:       ws.NewHub(logger),
+		Tickets:   ws.NewTicketStore(ws.TicketTTL),
 	}, nil
 }
 
 // Close releases every resource opened by NewDependencies. Safe to call
 // once during graceful shutdown.
 func (d *Dependencies) Close() {
+	if d.Tickets != nil {
+		d.Tickets.Close()
+	}
 	if d.Messaging != nil {
 		_ = d.Messaging.Close()
 	}

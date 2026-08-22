@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,6 +41,25 @@ func run() error {
 		return fmt.Errorf("bootstrap dependencies: %w", err)
 	}
 	defer deps.Close()
+
+	// The WebSocket Hub and its feeding RabbitMQ consumer live in the API
+	// process (§37) — cmd/worker never touches them. Both run for the
+	// process lifetime and are joined during graceful shutdown below.
+	var background sync.WaitGroup
+	background.Add(2)
+	go func() {
+		defer background.Done()
+		if err := deps.Hub.Run(ctx); err != nil {
+			deps.Logger.Error("websocket hub stopped with error", slog.Any("error", err))
+		}
+	}()
+	go func() {
+		defer background.Done()
+		notificationConsumer := app.NewNotificationConsumer(deps)
+		if err := notificationConsumer.Consume(ctx, app.NotificationHandler(deps.Hub, deps.Logger)); err != nil {
+			deps.Logger.Error("notification consumer stopped with error", slog.Any("error", err))
+		}
+	}()
 
 	router := app.NewRouter(deps)
 
@@ -80,6 +100,7 @@ func run() error {
 		_ = server.Close()
 	}
 
+	background.Wait()
 	deps.Logger.Info("api stopped")
 	return nil
 }
