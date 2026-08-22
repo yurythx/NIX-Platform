@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/logging"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
+	"github.com/yurythx/nix-platform/internal/platform/telemetry"
 	"github.com/yurythx/nix-platform/internal/platform/ws"
 )
 
@@ -41,24 +43,34 @@ type Dependencies struct {
 	Hub       *ws.Hub
 	Tickets   *ws.TicketStore
 	Modules   *Modules
+
+	telemetryShutdown telemetry.Shutdown
 }
 
-// NewDependencies builds and validates every platform dependency. It
-// returns an error immediately if any required dependency (database,
-// later: RabbitMQ) cannot be reached, so the process fails fast instead of
-// serving traffic in a half-initialized state.
-func NewDependencies(ctx context.Context) (*Dependencies, error) {
+// NewDependencies builds and validates every platform dependency for one
+// process. component distinguishes "api" from "worker" in logs and traces
+// (both share this same bootstrap). It returns an error immediately if any
+// required dependency (database, RabbitMQ, OIDC discovery) cannot be
+// reached, so the process fails fast instead of serving traffic in a
+// half-initialized state.
+func NewDependencies(ctx context.Context, component string) (*Dependencies, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("app: load config: %w", err)
 	}
 
+	serviceName := cfg.App.Name + "-" + component
 	logger := logging.New(logging.Options{
 		Level:       cfg.App.LogLevel,
 		Format:      cfg.App.LogFormat,
-		Service:     cfg.App.Name,
+		Service:     serviceName,
 		Environment: cfg.App.Env,
 	})
+
+	telemetryShutdown, err := telemetry.Setup(ctx, serviceName, cfg.App.Env, cfg.OTELExporterOTLPURL, logger)
+	if err != nil {
+		return nil, fmt.Errorf("app: setup telemetry: %w", err)
+	}
 
 	pool, err := database.New(ctx, cfg.Database)
 	if err != nil {
@@ -102,6 +114,8 @@ func NewDependencies(ctx context.Context) (*Dependencies, error) {
 		Outbox:    outbox.NewWriter(OutboxSource),
 		Hub:       ws.NewHub(logger),
 		Tickets:   ws.NewTicketStore(ws.TicketTTL),
+
+		telemetryShutdown: telemetryShutdown,
 	}
 	deps.Modules = buildModules(deps)
 
@@ -119,5 +133,10 @@ func (d *Dependencies) Close() {
 	}
 	if d.DB != nil {
 		d.DB.Close()
+	}
+	if d.telemetryShutdown != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.telemetryShutdown(shutdownCtx)
 	}
 }

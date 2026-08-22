@@ -26,7 +26,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	deps, err := app.NewDependencies(ctx)
+	deps, err := app.NewDependencies(ctx, "worker")
 	if err != nil {
 		return fmt.Errorf("bootstrap dependencies: %w", err)
 	}

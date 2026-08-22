@@ -9,6 +9,9 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yurythx/nix-platform/internal/domain/events"
 )
@@ -110,11 +113,24 @@ func (c *Consumer) Consume(ctx context.Context, handler events.MessageHandler) e
 func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp.Delivery, handler events.MessageHandler) {
 	logger := c.logger.With(slog.String("queue", c.queueName), slog.String("routing_key", d.RoutingKey), slog.String("message_id", d.MessageId))
 
+	ctx = otel.GetTextMapPropagator().Extract(ctx, amqpHeaderCarrier(d.Headers))
+	ctx, span := tracer.Start(ctx, "consume "+d.RoutingKey,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "rabbitmq"),
+			attribute.String("messaging.destination.name", c.queueName),
+			attribute.String("messaging.rabbitmq.routing_key", d.RoutingKey),
+			attribute.String("messaging.message.id", d.MessageId),
+		),
+	)
+	defer span.End()
+
 	var event events.Event
 	if err := json.Unmarshal(d.Body, &event); err != nil {
 		// A malformed envelope can never succeed on retry — send it
 		// straight to the DLQ instead of burning retry attempts on it.
 		logger.Error("dropping undecodable message to DLQ", slog.Any("error", err))
+		_ = traceErr(span, err)
 		ackMu.Lock()
 		_ = d.Nack(false, false)
 		ackMu.Unlock()
@@ -128,6 +144,7 @@ func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp
 		ackMu.Unlock()
 		return
 	}
+	_ = traceErr(span, handlerErr)
 
 	attempt := attemptFromHeaders(d.Headers) + 1
 	logger = logger.With(slog.Int("attempt", attempt), slog.Any("handler_error", handlerErr))

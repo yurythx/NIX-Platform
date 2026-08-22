@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/yurythx/nix-platform/internal/app"
 )
 
@@ -36,7 +38,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	deps, err := app.NewDependencies(ctx)
+	deps, err := app.NewDependencies(ctx, "api")
 	if err != nil {
 		return fmt.Errorf("bootstrap dependencies: %w", err)
 	}
@@ -62,10 +64,15 @@ func run() error {
 	}()
 
 	router := app.NewRouter(deps)
+	// otelhttp wraps every request in a server span (a no-op if telemetry
+	// isn't configured — §51) and propagates trace context extracted from
+	// inbound headers, so a request that goes on to publish an event
+	// carries the same trace all the way to the worker.
+	instrumentedRouter := otelhttp.NewHandler(router, "http.server")
 
 	server := &http.Server{
 		Addr:              deps.Config.HTTP.Addr(),
-		Handler:           router,
+		Handler:           instrumentedRouter,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
