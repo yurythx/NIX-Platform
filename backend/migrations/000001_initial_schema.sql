@@ -3,9 +3,9 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- +goose StatementEnd
 
--- Shared trigger function: every table with an updated_at column uses this
--- to keep it current on UPDATE instead of relying on application code to
--- remember to set it.
+-- Função de trigger compartilhada: toda tabela com uma coluna updated_at
+-- usa esta função para mantê-la atualizada em todo UPDATE, em vez de
+-- depender do código da aplicação lembrar de setá-la manualmente.
 -- +goose StatementBegin
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$

@@ -11,8 +11,9 @@ CREATE TABLE users (
     last_seen_at     TIMESTAMPTZ
 );
 
--- keycloak_subject identifies the user in the external IdP and must be
--- unique — this is the join key used on every authenticated request (§32).
+-- keycloak_subject identifica o usuário no IdP externo e precisa ser
+-- único — esta é a chave de junção usada em toda requisição autenticada
+-- (§32), o valor que liga a linha local ao "sub" do token do Keycloak.
 CREATE UNIQUE INDEX idx_users_keycloak_subject ON users (keycloak_subject);
 CREATE UNIQUE INDEX idx_users_email ON users (email);
 CREATE UNIQUE INDEX idx_users_username ON users (username);

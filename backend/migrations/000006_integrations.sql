@@ -25,9 +25,10 @@ CREATE TRIGGER trg_integrations_set_updated_at
     EXECUTE FUNCTION set_updated_at();
 -- +goose StatementEnd
 
--- Seed the two integrations this boilerplate ships transport/worker
--- support for. Additional integrations (Shodan, AbuseIPDB, ...) are added
--- the same way without touching this schema (§76).
+-- Semeia as duas integrações para as quais este boilerplate já traz
+-- suporte de transport/worker. Integrações adicionais (Shodan, AbuseIPDB,
+-- ...) são adicionadas do mesmo jeito, sem precisar tocar neste schema
+-- (§76).
 INSERT INTO integrations (key, name, type) VALUES
     ('diario-oficial', 'Diário Oficial', 'diario_oficial'),
     ('virustotal', 'VirusTotal', 'secops');

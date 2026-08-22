@@ -1,8 +1,11 @@
 -- +goose Up
--- Audit trail for §49: login/logout, user.created/updated,
+-- Trilha de auditoria para o §49: login/logout, user.created/updated,
 -- integration.test, integration.config.changed, job.created/completed/failed.
--- metadata must never contain passwords, tokens or secrets — enforced by
--- the application layer's audit writer, not by the schema.
+-- metadata nunca deve conter senhas, tokens ou segredos — isto é imposto
+-- pelo writer de auditoria na camada de aplicação, não pelo schema (o
+-- banco em si aceitaria qualquer JSON). Ver também a migration 000008,
+-- que torna esta tabela append-only (protegida contra UPDATE/DELETE/
+-- TRUNCATE).
 CREATE TABLE audit_logs (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID REFERENCES users (id) ON DELETE SET NULL,
