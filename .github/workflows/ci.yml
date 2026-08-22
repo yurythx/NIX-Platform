@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Go)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: nix
+          POSTGRES_USER: nix
+          POSTGRES_PASSWORD: nix
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nix -d nix"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: nix
+          RABBITMQ_DEFAULT_PASS: nix_password
+          RABBITMQ_DEFAULT_VHOST: nix
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: backend/go.sum
+
+      - name: go fmt (check only)
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: Install goose (migrations)
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+
+      - name: Run migrations against the CI database
+        run: goose -dir migrations postgres "postgres://nix:nix@localhost:5432/nix?sslmode=disable" up
+
+      - name: go test (unit + live-service integration tests)
+        env:
+          TEST_DATABASE_URL: postgres://nix:nix@localhost:5432/nix?sslmode=disable
+          TEST_RABBITMQ_URL: amqp://nix:nix_password@localhost:5672/nix
+        run: go test ./... -timeout 180s
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    # Build-time-only placeholders — never real secrets — satisfy the
+    # fail-fast checks in lib/auth without requiring a live Keycloak in CI.
+    env:
+      KEYCLOAK_ISSUER_URL: https://ci-placeholder.invalid/realms/ci
+      KEYCLOAK_FRONTEND_CLIENT_ID: ci-placeholder
+      KEYCLOAK_FRONTEND_CLIENT_SECRET: ci-placeholder
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ci-placeholder-secret-not-for-production-use
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: npm audit (high+ severity)
+        run: npm audit --audit-level=high
+        continue-on-error: true # advisory only — don't block CI on upstream advisories
+
+  docker:
+    name: Docker Compose / image builds
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose config (structural validation)
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+
+      - name: Build backend-api image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.api
+          push: false
+
+      - name: Build backend-worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.worker
+          push: false
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
+          build-args: |
+            NEXT_PUBLIC_API_URL=http://localhost:8000
+            NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws

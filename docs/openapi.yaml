@@ -1,0 +1,537 @@
+openapi: 3.0.3
+info:
+  title: NIX Platform API
+  description: |
+    REST API for the NIX Platform — a modular monolith centralizing
+    integrations, automation and notifications. All authenticated endpoints
+    expect a Keycloak-issued OIDC access token as a Bearer JWT; the backend
+    validates it locally against a cached JWKS (never a per-request call to
+    Keycloak — see §29 of the architecture spec).
+
+    Every response uses the same envelope:
+    `{"data": <payload|null>, "error": {"code","message"}|null, "meta": {...}|omitted}`.
+    Errors never include a stack trace or other internal detail.
+  version: "1.0.0"
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development (docker compose)
+  - url: /
+    description: Same-origin (production, behind a reverse proxy)
+
+tags:
+  - name: system
+    description: Health, readiness and metrics — unauthenticated.
+  - name: users
+    description: The authenticated caller and the user directory.
+  - name: integrations
+    description: Status of every configured external integration.
+  - name: diario-oficial
+    description: Diário Oficial connectivity check (async job).
+  - name: secops
+    description: SecOps provider connectivity checks (async job), VirusTotal today.
+  - name: websocket
+    description: Real-time notification ticket issuance.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      operationId: getHealth
+      description: Indicates the process is up. Never checks external dependencies.
+      security: []
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+              example:
+                data: { status: "ok" }
+                error: null
+
+  /ready:
+    get:
+      tags: [system]
+      summary: Readiness probe
+      operationId: getReady
+      description: Checks PostgreSQL and RabbitMQ connectivity.
+      security: []
+      responses:
+        "200":
+          description: All dependencies reachable.
+          content:
+            application/json:
+              example:
+                data: { postgres: "ok", rabbitmq: "ok" }
+                error: null
+        "503":
+          description: At least one dependency is unavailable.
+          content:
+            application/json:
+              example:
+                data: { postgres: "ok", rabbitmq: "unavailable" }
+                error: null
+
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus metrics
+      operationId: getMetrics
+      security: []
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/me:
+    get:
+      tags: [users]
+      summary: Get the current authenticated user
+      operationId: getCurrentUser
+      description: >
+        Upserts the caller's user row from the verified token on every call
+        (creating it on first sight) and returns it.
+      responses:
+        "200":
+          description: The current user.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/users:
+    get:
+      tags: [users]
+      summary: List users
+      operationId: listUsers
+      security:
+        - bearerAuth: [users:read]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: A page of users.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/User"
+                      meta:
+                        $ref: "#/components/schemas/PaginationMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/users/{id}:
+    get:
+      tags: [users]
+      summary: Get a user by id
+      operationId: getUser
+      security:
+        - bearerAuth: [users:read]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The user.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/integrations:
+    get:
+      tags: [integrations]
+      summary: List every configured integration
+      operationId: listIntegrations
+      responses:
+        "200":
+          description: All integrations.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Integration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/integrations/{id}/status:
+    get:
+      tags: [integrations]
+      summary: Get one integration's current status
+      operationId: getIntegrationStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The integration.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Integration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/integrations/diario-oficial/test:
+    post:
+      tags: [diario-oficial]
+      summary: Trigger an asynchronous Diário Oficial connectivity check
+      operationId: testDiarioOficial
+      description: >
+        Does not perform the check itself. Creates a job, persists it and
+        an outbox event in one transaction, and returns immediately — the
+        worker processes it, and the frontend is notified over WebSocket
+        when it completes or fails (§34/§72). Rate-limited per caller.
+      security:
+        - bearerAuth: [integrations:test]
+      responses:
+        "202":
+          $ref: "#/components/responses/TestJobAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/integrations/secops/virustotal/test:
+    post:
+      tags: [secops]
+      summary: Trigger an asynchronous VirusTotal connectivity check
+      operationId: testVirusTotal
+      description: Same async flow as the Diário Oficial test, targeting the VirusTotal provider.
+      security:
+        - bearerAuth: [integrations:test]
+      responses:
+        "202":
+          $ref: "#/components/responses/TestJobAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/ws/ticket:
+    post:
+      tags: [websocket]
+      summary: Issue a short-lived WebSocket ticket
+      operationId: createWebSocketTicket
+      description: >
+        Returns a single-use, 30-second ticket that authorizes exactly one
+        `GET /ws?ticket=...` upgrade (§38) — browsers can't attach an
+        Authorization header to a WebSocket handshake, so this ticket is
+        the connection's credential instead. Rate-limited per caller.
+      responses:
+        "201":
+          description: A freshly issued ticket.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          ticket:
+                            type: string
+                          expires_at:
+                            type: string
+                            format: date-time
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /ws:
+    get:
+      tags: [websocket]
+      summary: WebSocket upgrade (not a plain HTTP endpoint)
+      operationId: websocketUpgrade
+      description: >
+        Not modeled as a REST operation — included for discoverability.
+        Requires `?ticket=<value>` from `POST /api/v1/ws/ticket`. On
+        connect, the client receives every platform event envelope
+        (`{id,type,version,source,occurred_at,correlation_id,payload}`) as
+        a JSON text frame — see `EventEnvelope` below.
+      security: []
+      parameters:
+        - name: ticket
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "101":
+          description: Switching Protocols — WebSocket established.
+        "401":
+          description: Missing, invalid, expired or already-used ticket.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        A Keycloak-issued OIDC access token. Validated locally (signature,
+        issuer, audience, expiry, algorithm) against a cached JWKS.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+
+  responses:
+    TestJobAccepted:
+      description: The test was queued.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Envelope"
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      job_id:
+                        type: string
+                        format: uuid
+                      status:
+                        type: string
+                        enum: [queued]
+          example:
+            data: { job_id: "3c1f1e2a-...", status: "queued" }
+            error: null
+
+    Unauthorized:
+      description: Missing, invalid or expired access token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Envelope"
+          example:
+            data: null
+            error: { code: "UNAUTHORIZED", message: "invalid or expired access token" }
+
+    Forbidden:
+      description: Authenticated, but missing the required role/permission.
+      content:
+        application/json:
+          example:
+            data: null
+            error: { code: "FORBIDDEN", message: "insufficient permission" }
+
+    NotFound:
+      description: The resource does not exist.
+      content:
+        application/json:
+          example:
+            data: null
+            error: { code: "NOT_FOUND", message: "resource not found" }
+
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/json:
+          example:
+            data: null
+            error: { code: "RATE_LIMITED", message: "too many requests, please try again later" }
+
+  schemas:
+    Envelope:
+      type: object
+      description: >
+        The base response shape. Successful operations narrow `data` to a
+        concrete type via `allOf` in their own response schema; this base
+        form documents the generic {data, error, meta} contract.
+      properties:
+        data:
+          type: object
+          nullable: true
+        error:
+          type: object
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ErrorBody"
+        meta:
+          type: object
+          nullable: true
+      required: [data, error]
+
+    ErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "email: failed on \"required\""
+      required: [code, message]
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_items:
+          type: integer
+        total_pages:
+          type: integer
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Integration:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          example: "diario-oficial"
+        name:
+          type: string
+        type:
+          type: string
+        enabled:
+          type: boolean
+        status:
+          type: string
+          enum: [unknown, online, offline, degraded, disabled]
+        last_check_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_success_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+
+    EventEnvelope:
+      type: object
+      description: The shape of every message delivered over the WebSocket (§17/§43).
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          example: "diario_oficial.job.completed"
+        version:
+          type: integer
+        source:
+          type: string
+          example: "nix.diario_oficial"
+        occurred_at:
+          type: string
+          format: date-time
+        correlation_id:
+          type: string
+          format: uuid
+        payload:
+          type: object
+      required: [id, type, version, source, occurred_at, correlation_id, payload]
