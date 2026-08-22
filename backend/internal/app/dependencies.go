@@ -1,8 +1,9 @@
-// Package app wires together every platform and module dependency
-// (database, messaging, auth, WebSocket hub, module services) and exposes
-// the assembled HTTP router used by cmd/api and the assembled worker
-// runner used by cmd/worker. It is the only place allowed to know about
-// every module at once.
+// Package app conecta entre si toda dependência de plataforma e de módulo
+// (banco de dados, mensageria, autenticação, hub de WebSocket, serviços de
+// módulo) e expõe o router HTTP já montado usado pelo cmd/api e o runner
+// de worker já montado usado pelo cmd/worker. É o único lugar autorizado a
+// conhecer todo módulo de uma vez — nenhum módulo importa outro
+// diretamente, só internal/app os conecta.
 package app
 
 import (
@@ -27,24 +28,27 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/ws"
 )
 
-// RateLimiters holds every distributed (Postgres-backed — §rate limiting
-// distribuído) rate limiter the API uses. Built once per process and
-// shared by every request, so every API replica reads/writes the same
-// rate_limit_buckets rows instead of each keeping its own independent
-// (and therefore N×-too-generous) in-memory count.
+// RateLimiters guarda todo rate limiter distribuído (baseado em Postgres —
+// rate limiting distribuído) que a API usa. Construído uma única vez por
+// processo e compartilhado por toda requisição, para que cada réplica da
+// API leia/escreva as mesmas linhas de rate_limit_buckets em vez de cada
+// uma manter sua própria contagem independente em memória (e portanto
+// N×-generosa demais).
 type RateLimiters struct {
 	TestJob  httpserver.Limiter // POST .../diario-oficial/test, .../virustotal/test
 	WSTicket httpserver.Limiter // POST /api/v1/ws/ticket
 }
 
-// OutboxSource identifies this backend as the Source stamped on every
-// event envelope written to the outbox, regardless of which module wrote
-// it — module-level provenance lives in aggregate_type/aggregate_id.
+// OutboxSource identifica este backend como o Source carimbado em todo
+// envelope de evento gravado no outbox, independente de qual módulo o
+// escreveu — a proveniência no nível de módulo vive em
+// aggregate_type/aggregate_id.
 const OutboxSource = "nix.platform"
 
-// Dependencies holds every shared platform resource. Module-specific
-// dependencies (repositories, use cases) are added to this struct as each
-// module is wired in; nothing here should hold business logic.
+// Dependencies guarda todo recurso de plataforma compartilhado.
+// Dependências específicas de módulo (repositórios, casos de uso) são
+// adicionadas a esta struct conforme cada módulo é conectado; nada aqui
+// deve carregar regra de negócio.
 type Dependencies struct {
 	Config       *config.Config
 	Logger       *slog.Logger
@@ -61,12 +65,12 @@ type Dependencies struct {
 	telemetryShutdown telemetry.Shutdown
 }
 
-// NewDependencies builds and validates every platform dependency for one
-// process. component distinguishes "api" from "worker" in logs and traces
-// (both share this same bootstrap). It returns an error immediately if any
-// required dependency (database, RabbitMQ, OIDC discovery) cannot be
-// reached, so the process fails fast instead of serving traffic in a
-// half-initialized state.
+// NewDependencies constrói e valida toda dependência de plataforma para um
+// processo. component distingue "api" de "worker" em logs e traces (os
+// dois compartilham este mesmo bootstrap). Retorna um erro imediatamente
+// se qualquer dependência obrigatória (banco de dados, RabbitMQ, discovery
+// OIDC) não puder ser alcançada, para que o processo falhe rápido em vez
+// de servir tráfego num estado parcialmente inicializado.
 func NewDependencies(ctx context.Context, component string) (*Dependencies, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -104,6 +108,11 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 		return nil, fmt.Errorf("app: connect to rabbitmq: %w", err)
 	}
 
+	// Declara a topologia (exchange, filas, DLQs, bindings) aqui no
+	// bootstrap — tanto o cmd/api quanto o cmd/worker chamam
+	// NewDependencies, então a topologia existe garantidamente antes de
+	// qualquer um dos dois tentar publicar ou consumir, não importa qual
+	// suba primeiro.
 	topologyCh, err := mqConn.Channel()
 	if err != nil {
 		pool.Close()
@@ -144,8 +153,8 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 	return deps, nil
 }
 
-// Close releases every resource opened by NewDependencies. Safe to call
-// once during graceful shutdown.
+// Close libera todo recurso aberto por NewDependencies. Seguro de chamar
+// uma vez durante o graceful shutdown.
 func (d *Dependencies) Close() {
 	if d.Tickets != nil {
 		d.Tickets.Close()

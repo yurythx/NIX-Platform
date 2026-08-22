@@ -10,9 +10,10 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/ws"
 )
 
-// NewNotificationConsumer builds the consumer that feeds the WebSocket Hub
-// (§37/§72): RabbitMQ -> Notification Consumer -> Hub -> Browser. It runs
-// inside cmd/api (the Hub only exists there), not cmd/worker.
+// NewNotificationConsumer constrói o consumer que alimenta o Hub de
+// WebSocket (§37/§72): RabbitMQ -> Notification Consumer -> Hub ->
+// Navegador. Roda dentro do cmd/api (o Hub só existe lá), nunca no
+// cmd/worker.
 func NewNotificationConsumer(deps *Dependencies) *messaging.Consumer {
 	return messaging.NewConsumer(
 		deps.Messaging,
@@ -23,15 +24,17 @@ func NewNotificationConsumer(deps *Dependencies) *messaging.Consumer {
 	)
 }
 
-// NotificationHandler forwards every event it receives to the Hub as-is —
-// the Hub and this handler carry no business logic, they only relay
-// already-formed event envelopes to connected browsers (§37).
+// NotificationHandler encaminha todo evento que recebe para o Hub tal
+// como está — o Hub e este handler não carregam nenhuma regra de negócio,
+// só retransmitem envelopes de evento já formados para os navegadores
+// conectados (§37).
 func NotificationHandler(hub *ws.Hub, logger *slog.Logger) events.MessageHandler {
 	return func(ctx context.Context, event events.Event) error {
 		body, err := json.Marshal(event)
 		if err != nil {
-			// Should be unreachable (we just unmarshaled this envelope),
-			// but never silently drop a notification — log loudly.
+			// Deveria ser inalcançável (acabamos de desserializar este
+			// mesmo envelope), mas nunca descarta uma notificação
+			// silenciosamente — loga bem alto se acontecer.
 			logger.Error("notification: failed to re-marshal event for broadcast", slog.Any("error", err))
 			return err
 		}

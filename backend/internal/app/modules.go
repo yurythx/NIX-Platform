@@ -22,10 +22,12 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 )
 
-// Modules holds every business module's application service and HTTP
-// handlers. Built once per process (cmd/api and cmd/worker each get their
-// own via NewDependencies) — this is the only file allowed to import every
-// module at once (§76).
+// Modules guarda o serviço de aplicação e os handlers HTTP de todo módulo
+// de negócio. Construído uma vez por processo (cmd/api e cmd/worker cada
+// um recebe o seu via NewDependencies) — este é o único arquivo autorizado
+// a importar todo módulo de uma vez (§76), servindo como o "ponto de
+// montagem" central que conecta domain/application/infrastructure/
+// transport de cada módulo entre si e com a plataforma.
 type Modules struct {
 	Users struct {
 		Handlers *usersTransport.Handlers
@@ -44,6 +46,12 @@ type Modules struct {
 	}
 }
 
+// buildModules constrói cada módulo de negócio na ordem certa: primeiro
+// as dependências compartilhadas (repositório de jobs, writer de
+// auditoria), depois users e integrations (que não dependem de outros
+// módulos), e por último diario_oficial e secops, que dependem do
+// integrationsSvc já construído para registrar o resultado de seus testes
+// (ver internal/modules/integrations/application.Service.RecordCheckResult).
 func buildModules(deps *Dependencies) *Modules {
 	jobsRepo := jobs.NewRepository(deps.DB)
 	auditWriter := audit.NewWriter(deps.DB)

@@ -17,10 +17,10 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/ws"
 )
 
-// NewRouter assembles the full HTTP router: the platform base (health,
-// metrics, request id, recovery, CORS, security headers), /ready wired to
-// every essential dependency, and — as later phases add them — the
-// versioned /api/v1 business routes and /ws.
+// NewRouter monta o router HTTP completo: a base da plataforma (health,
+// metrics, request id, recovery, CORS, security headers), o /ready
+// conectado a toda dependência essencial, e as rotas de negócio
+// versionadas em /api/v1 e /ws.
 func NewRouter(deps *Dependencies) chi.Router {
 	r := httpserver.New(httpserver.Options{
 		Logger:         deps.Logger,
@@ -34,9 +34,9 @@ func NewRouter(deps *Dependencies) chi.Router {
 	}
 	r.Get("/ready", httpserver.ReadyHandler(checks, 3*time.Second))
 
-	// /ws itself is ticket-authenticated (browsers can't set an
-	// Authorization header on the handshake — §38), so it deliberately
-	// does NOT sit behind auth.RequireAuthentication.
+	// O próprio /ws é autenticado por ticket (navegadores não conseguem
+	// definir um header Authorization no handshake — §38), então
+	// deliberadamente NÃO fica atrás de auth.RequireAuthentication.
 	r.Get("/ws", ws.UpgradeHandler(deps.Hub, deps.Tickets, deps.Config.FrontendURL, deps.Logger))
 
 	r.Route("/api/v1", func(api chi.Router) {
@@ -54,8 +54,8 @@ func NewRouter(deps *Dependencies) chi.Router {
 	return r
 }
 
-// wsTicketRateLimitKey rate-limits ticket issuance per authenticated user
-// rather than per IP, since the endpoint always runs behind
+// wsTicketRateLimitKey limita a emissão de tickets por usuário autenticado
+// em vez de por IP, já que o endpoint sempre roda atrás de
 // auth.RequireAuthentication.
 func wsTicketRateLimitKey(r *http.Request) string {
 	if identity, ok := auth.IdentityFromContext(r.Context()); ok && identity.Subject != "" {
