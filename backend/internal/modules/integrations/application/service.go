@@ -1,8 +1,8 @@
-// Package application implements the integrations module's use cases
-// (§22): ListIntegrations, GetIntegrationStatus, plus RecordCheckResult —
-// a generic status-check service the diario_oficial and secops worker
-// handlers call after running a test, so integration health tracking
-// isn't duplicated per module.
+// Package application implementa os casos de uso do módulo integrations
+// (§22): ListIntegrations, GetIntegrationStatus, e RecordCheckResult — um
+// serviço genérico de verificação de status que os workers de
+// diario_oficial e secops chamam depois de rodar um teste, para que o
+// rastreamento de saúde de integração não seja duplicado em cada módulo.
 package application
 
 import (
@@ -31,10 +31,12 @@ func (s *Service) GetIntegrationStatus(ctx context.Context, id uuid.UUID) (*doma
 	return s.repo.GetByID(ctx, id)
 }
 
-// RecordCheckResult updates the named integration's status on tx and
-// reports whether the status actually changed, so the caller can decide
-// whether to also write an integration.status.changed outbox event on the
-// same transaction.
+// RecordCheckResult atualiza o status da integração identificada por key
+// em tx e reporta se o status de fato mudou, para que quem chama decida
+// se também deve gravar um evento de outbox integration.status.changed
+// na mesma transação. É chamado pelos workers de diario_oficial/secops
+// logo depois de executarem um teste de conectividade (sucesso ou falha),
+// nunca diretamente por um handler HTTP.
 func (s *Service) RecordCheckResult(ctx context.Context, tx pgx.Tx, key string, success bool, lastError string) (*domain.Integration, bool, error) {
 	var errPtr *string
 	if lastError != "" {

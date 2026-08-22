@@ -25,7 +25,11 @@ func NewHandlers(service *application.Service, logger *slog.Logger, maxPageSize 
 	return &Handlers{service: service, logger: logger, maxPageSize: maxPageSize}
 }
 
-// GetCurrentUser handles GET /api/v1/me.
+// GetCurrentUser trata GET /api/v1/me. Sincroniza a linha local do usuário
+// a partir da identidade do token a cada chamada (ver
+// application.Service.GetCurrentUser) — é assim que o frontend descobre
+// quem é o usuário logado e, no primeiro acesso, dispara a criação da
+// conta local.
 func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	identity, ok := auth.IdentityFromContext(r.Context())
 	if !ok {
@@ -46,7 +50,9 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOK(w, toUserResponse(user))
 }
 
-// ListUsers handles GET /api/v1/users.
+// ListUsers trata GET /api/v1/users — protegido por permissão
+// users:read (ver routes.go); page/page_size vêm da query string e são
+// limitados por h.maxPageSize (§46).
 func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
@@ -61,7 +67,7 @@ func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOKWithMeta(w, toUserResponses(users), meta)
 }
 
-// GetUser handles GET /api/v1/users/{id}.
+// GetUser trata GET /api/v1/users/{id}.
 func (h *Handlers) GetUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

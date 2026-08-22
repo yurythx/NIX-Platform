@@ -1,3 +1,5 @@
+// Package infrastructure implementa o domain.Repository do módulo
+// integrations contra o PostgreSQL.
 package infrastructure
 
 import (
@@ -67,6 +69,11 @@ func (r *PostgresRepository) GetByKey(ctx context.Context, key string) (*domain.
 }
 
 func (r *PostgresRepository) UpdateStatusTx(ctx context.Context, tx pgx.Tx, key string, success bool, lastError *string) (*domain.Integration, bool, error) {
+	// Trava a linha antes de ler o status anterior para comparar com o
+	// novo de forma segura sob concorrência — dois testes da mesma
+	// integração rodando ao mesmo tempo (ex.: um usuário clicando "testar"
+	// duas vezes seguidas) não podem os dois achar que "mudou de status"
+	// comparando contra um valor já obsoleto.
 	var previousStatus domain.Status
 	err := tx.QueryRow(ctx, `SELECT status FROM integrations WHERE key = $1 FOR UPDATE`, key).Scan(&previousStatus)
 	if err != nil {

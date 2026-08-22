@@ -1,5 +1,5 @@
-// Package domain holds the integrations module's entity and repository
-// contract (§74).
+// Package domain guarda a entidade e o contrato de repositório do módulo
+// integrations (§74).
 package domain
 
 import (
@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Status is an integration's last known health (§42/§74).
+// Status é o último estado de saúde conhecido de uma integração (§42/§74).
 type Status string
 
 const (
@@ -21,8 +21,9 @@ const (
 	StatusDisabled Status = "disabled"
 )
 
-// Integration is a configured external system the platform can check the
-// status of and, for some types, trigger a test run against.
+// Integration é um sistema externo configurado, do qual a plataforma pode
+// consultar o status e, para alguns tipos, disparar uma execução de teste
+// (ex.: Diário Oficial, VirusTotal).
 type Integration struct {
 	ID            uuid.UUID
 	Key           string
@@ -37,15 +38,19 @@ type Integration struct {
 	UpdatedAt     time.Time
 }
 
-// Repository persists Integration rows.
+// Repository persiste as linhas de Integration.
 type Repository interface {
 	List(ctx context.Context) ([]*Integration, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*Integration, error)
 	GetByKey(ctx context.Context, key string) (*Integration, error)
 
-	// UpdateStatusTx records the outcome of a health/test check for the
-	// integration identified by key, on the caller's transaction so it can
-	// be committed atomically alongside an outbox event when the status
-	// actually changed (§9's integration.status.changed routing key).
+	// UpdateStatusTx registra o resultado de uma verificação de
+	// saúde/teste para a integração identificada por key, na transação de
+	// quem chama, para que possa ser commitada atomicamente junto de um
+	// evento de outbox quando o status realmente mudar (a routing key
+	// integration.status.changed do §9). changed reporta exatamente isso
+	// — só vale a pena publicar o evento quando o status observado é
+	// diferente do que já estava gravado, evitando notificar o frontend
+	// de "mudanças" que não mudaram nada.
 	UpdateStatusTx(ctx context.Context, tx pgx.Tx, key string, success bool, lastError *string) (updated *Integration, changed bool, err error)
 }

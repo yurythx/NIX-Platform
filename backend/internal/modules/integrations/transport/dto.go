@@ -1,4 +1,4 @@
-// Package transport implements the integrations module's HTTP handlers.
+// Package transport implementa os handlers HTTP do módulo integrations.
 package transport
 
 import (
@@ -7,7 +7,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/modules/integrations/domain"
 )
 
-// IntegrationResponse is the public shape of an integration (§74).
+// IntegrationResponse é o formato público de uma integração (§74).
 type IntegrationResponse struct {
 	ID            string     `json:"id"`
 	Key           string     `json:"key"`

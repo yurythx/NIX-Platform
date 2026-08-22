@@ -1,5 +1,5 @@
-// Package infrastructure implements the users module's domain.Repository
-// against PostgreSQL.
+// Package infrastructure implementa o domain.Repository do módulo users
+// contra o PostgreSQL.
 package infrastructure
 
 import (
@@ -26,9 +26,10 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 var _ domain.Repository = (*PostgresRepository)(nil)
 
 func (r *PostgresRepository) UpsertByKeycloakSubject(ctx context.Context, u *domain.User) (domain.UpsertResult, error) {
-	// `xmax = 0` is the standard Postgres idiom for "this row was just
-	// inserted, not updated by the ON CONFLICT branch" — lets us know
-	// whether to raise a user.created audit entry without a second query.
+	// `xmax = 0` é o idioma padrão do Postgres para "esta linha acabou de
+	// ser inserida, não atualizada pelo ramo ON CONFLICT" — permite saber
+	// se deve disparar uma entrada de auditoria user.created sem precisar
+	// de uma segunda query.
 	const q = `
 		INSERT INTO users (id, keycloak_subject, username, email, display_name, active, created_at, updated_at, last_seen_at)
 		VALUES ($1, $2, $3, $4, $5, true, now(), now(), now())

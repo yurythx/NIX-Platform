@@ -1,5 +1,6 @@
-// Package application implements the users module's use cases (§22):
-// CreateUser (implicitly, via SyncFromIdentity), GetCurrentUser, ListUsers.
+// Package application implementa os casos de uso do módulo users (§22):
+// CreateUser (implicitamente, via SyncFromIdentity), GetCurrentUser,
+// ListUsers.
 package application
 
 import (
@@ -14,17 +15,18 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/audit"
 )
 
-// SyncIdentityInput is the subset of an authenticated caller's identity
-// the users module needs. Defined here (not imported from
-// internal/platform/auth) so this layer stays decoupled from the OIDC
-// transport concern per §21/§22.
+// SyncIdentityInput é o subconjunto da identidade de um chamador
+// autenticado que o módulo users precisa. Definido aqui (não importado de
+// internal/platform/auth) para que esta camada continue desacoplada da
+// preocupação de transporte OIDC, conforme §21/§22 — o caso de uso não
+// sabe (nem precisa saber) que a identidade veio de um token Keycloak.
 type SyncIdentityInput struct {
 	Subject  string
 	Username string
 	Email    string
 }
 
-// Service implements the users module's use cases.
+// Service implementa os casos de uso do módulo users.
 type Service struct {
 	repo  domain.Repository
 	audit *audit.Writer
@@ -34,9 +36,11 @@ func NewService(repo domain.Repository, auditWriter *audit.Writer) *Service {
 	return &Service{repo: repo, audit: auditWriter}
 }
 
-// GetCurrentUser implements "GetCurrentUser" (§22): it upserts the user
-// row from the verified identity (creating it on first sight) and returns
-// it. Called by GET /api/v1/me.
+// GetCurrentUser implementa "GetCurrentUser" (§22): faz upsert da linha de
+// usuário a partir da identidade já verificada (criando-a no primeiro
+// acesso) e a retorna. Chamado por GET /api/v1/me — é o mecanismo que
+// mantém a tabela local de usuários sincronizada com o Keycloak sem um
+// fluxo de cadastro separado: o primeiro login já cria a conta.
 func (s *Service) GetCurrentUser(ctx context.Context, in SyncIdentityInput) (*domain.User, error) {
 	if in.Subject == "" {
 		return nil, apperrors.Unauthorized("missing subject")
@@ -52,6 +56,9 @@ func (s *Service) GetCurrentUser(ctx context.Context, in SyncIdentityInput) (*do
 		return nil, fmt.Errorf("users: sync current user: %w", err)
 	}
 
+	// Só registra na auditoria quando a conta é criada de fato — logins
+	// subsequentes do mesmo usuário apenas atualizam last_seen_at
+	// silenciosamente, sem gerar uma entrada de auditoria a cada request.
 	if result.Created && s.audit != nil {
 		uid := result.User.ID
 		_ = s.audit.Record(ctx, audit.Entry{
@@ -65,7 +72,7 @@ func (s *Service) GetCurrentUser(ctx context.Context, in SyncIdentityInput) (*do
 	return result.User, nil
 }
 
-// ListUsers implements "ListUsers" (§22).
+// ListUsers implementa "ListUsers" (§22).
 func (s *Service) ListUsers(ctx context.Context, p pagination.Params) ([]*domain.User, pagination.Meta, error) {
 	users, total, err := s.repo.List(ctx, p)
 	if err != nil {
@@ -74,7 +81,7 @@ func (s *Service) ListUsers(ctx context.Context, p pagination.Params) ([]*domain
 	return users, pagination.NewMeta(p, total), nil
 }
 
-// GetUser fetches a single user by id.
+// GetUser busca um único usuário pelo id.
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	u, err := s.repo.GetByID(ctx, id)
 	if err != nil {

@@ -1,6 +1,7 @@
-// Package domain holds the users module's entity and repository contract.
-// It imports nothing from HTTP, RabbitMQ, PostgreSQL, or Keycloak — those
-// belong to transport/infrastructure.
+// Package domain guarda a entidade e o contrato de repositório do módulo
+// users. Não importa nada de HTTP, RabbitMQ, PostgreSQL ou Keycloak —
+// essas dependências pertencem a transport/infrastructure, mantendo a
+// regra de negócio isolada de detalhes de implementação.
 package domain
 
 import (
@@ -12,9 +13,11 @@ import (
 	"github.com/yurythx/nix-platform/internal/domain/pagination"
 )
 
-// User is a NIX Platform account, mirrored from Keycloak on each
-// authenticated request (Keycloak is the identity source of truth; this
-// row holds only what the platform itself needs — §32).
+// User é uma conta do NIX Platform, espelhada do Keycloak a cada
+// requisição autenticada (o Keycloak é a fonte da verdade da identidade;
+// esta linha guarda só o que a própria plataforma precisa — §32, ex.:
+// para referenciar o usuário em audit_logs ou exibir uma lista de
+// usuários sem chamar o Keycloak a cada consulta).
 type User struct {
 	ID              uuid.UUID
 	KeycloakSubject string
@@ -27,18 +30,21 @@ type User struct {
 	LastSeenAt      *time.Time
 }
 
-// UpsertResult reports whether Upsert created a new row, so callers can
-// decide whether a user.created audit entry is warranted.
+// UpsertResult reporta se o Upsert criou uma linha nova, para que quem
+// chama decida se um registro de auditoria user.created é necessário
+// (só faz sentido registrar a criação, não toda atualização de
+// last_seen_at a cada login).
 type UpsertResult struct {
 	User    *User
 	Created bool
 }
 
-// Repository persists User rows.
+// Repository persiste as linhas de User.
 type Repository interface {
-	// UpsertByKeycloakSubject creates the user if this is the first time
-	// this Keycloak subject has been seen, or refreshes
-	// username/email/last_seen_at otherwise.
+	// UpsertByKeycloakSubject cria o usuário se esta for a primeira vez
+	// que este subject do Keycloak é visto, ou atualiza
+	// username/email/last_seen_at caso contrário — é assim que a conta
+	// local "nasce" no primeiro login, sem um passo de cadastro separado.
 	UpsertByKeycloakSubject(ctx context.Context, u *User) (UpsertResult, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*User, error)
 	List(ctx context.Context, p pagination.Params) ([]*User, int64, error)

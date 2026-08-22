@@ -1,6 +1,6 @@
-// Package transport implements the users module's HTTP handlers. It
-// contains no business logic — only request parsing/validation, calling
-// into application.Service, and shaping responses (§24).
+// Package transport implementa os handlers HTTP do módulo users. Não
+// contém nenhuma regra de negócio — só parsing/validação de requisição,
+// chamadas para application.Service, e formatação de resposta (§24).
 package transport
 
 import (
@@ -9,7 +9,9 @@ import (
 	"github.com/yurythx/nix-platform/internal/modules/users/domain"
 )
 
-// UserResponse is the public shape of a user returned by the API.
+// UserResponse é o formato público de um usuário retornado pela API —
+// deliberadamente não inclui KeycloakSubject, que é um detalhe interno de
+// sincronização com o Keycloak, não algo que o cliente precisa ver.
 type UserResponse struct {
 	ID          string     `json:"id"`
 	Username    string     `json:"username"`
