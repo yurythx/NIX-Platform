@@ -41,4 +41,14 @@ COPY --from=builder --chown=nix:nix /app/.next/static ./.next/static
 USER nix
 EXPOSE 3000
 ENV PORT=3000
+# O server.js standalone do Next.js escuta em process.env.HOSTNAME, e o
+# Docker injeta automaticamente HOSTNAME=<id do container> em todo
+# container (reflete /etc/hostname) — sem sobrescrever isso, o servidor
+# escuta só no IP específico do container na rede docker, não em todas as
+# interfaces. Resultado: funciona through a porta publicada (o NAT do
+# Docker ainda alcança esse IP), mas HEALTHCHECK/qualquer coisa rodando
+# DENTRO do próprio container batendo em localhost:3000 recebe connection
+# refused, e o container fica marcado "unhealthy" apesar de estar
+# funcionando. "0.0.0.0" faz o server.js escutar em toda interface.
+ENV HOSTNAME="0.0.0.0"
 ENTRYPOINT ["node", "server.js"]

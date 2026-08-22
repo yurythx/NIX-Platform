@@ -69,10 +69,26 @@ Passos (console de administração do Keycloak):
    - Client authentication: ligado (o backend nunca executa o fluxo OAuth sozinho, mas um client
      confidencial permite adicionar chamadas de introspection/service-account depois sem
      reconfigurar).
-   - Copie o ID dele para `KEYCLOAK_CLIENT_ID`.
-4. **Roles**: crie as roles de realm que o NIX Platform reconhece — `nix-user`, `nix-admin`,
+   - Copie o ID dele para `KEYCLOAK_CLIENT_ID` e para `KEYCLOAK_AUDIENCE` (por padrão os dois
+     apontam para o mesmo client id, `nix-platform-api`).
+4. **Mapeador de audience em `nix-platform-web` (passo fácil de esquecer, e sem o qual TODO
+   token é rejeitado)**: por padrão, um token emitido para o client `nix-platform-web` carrega
+   `aud: "account"` — não `nix-platform-api` — porque o Keycloak só inclui automaticamente o
+   client que fez o login, mais o client `account` embutido. Como o backend valida
+   `aud` contra `KEYCLOAK_AUDIENCE` (`nix-platform-api`), sem este passo **toda requisição
+   autenticada falha** com "invalid or expired access token", mesmo com um token genuíno e
+   fresco. Adicione um mapeador de protocolo em `nix-platform-web` → aba **Client scopes** →
+   scope dedicado (ou diretamente em **Dedicated scopes** do client) → **Add mapper** → **By
+   configuration** → **Audience**:
+   - Included Client Audience: `nix-platform-api`.
+   - Add to access token: ligado.
+   - (Via `kcadm.sh`, equivalente:
+     `create clients/<id-do-nix-platform-web>/protocol-mappers/models -r <realm> -s name=nix-platform-api-audience -s protocol=openid-connect -s protocolMapper=oidc-audience-mapper -s 'config={"included.client.audience":"nix-platform-api","access.token.claim":"true"}'`.)
+   - Verifique decodificando um access token gerado (ex. em [jwt.io](https://jwt.io)): o campo
+     `aud` deve conter `"nix-platform-api"`.
+5. **Roles**: crie as roles de realm que o NIX Platform reconhece — `nix-user`, `nix-admin`,
    `nix-integration-manager`, `nix-auditor` — e atribua a usuários/grupos conforme apropriado.
-5. **Endpoints OIDC**: tanto o backend quanto o frontend descobrem sozinhos tudo que precisam
+6. **Endpoints OIDC**: tanto o backend quanto o frontend descobrem sozinhos tudo que precisam
    (`authorization_endpoint`, `jwks_uri`, endpoint de logout, etc.) a partir de
    `<KEYCLOAK_ISSUER_URL>/.well-known/openid-configuration` — só é preciso configurar
    `KEYCLOAK_ISSUER_URL` (ex.: `https://keycloak.example.com/realms/nix`), nunca as URLs de cada

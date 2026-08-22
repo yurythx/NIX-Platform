@@ -64,14 +64,24 @@ services:
     networks:
       - nix_internal
     ports:
-      - "${HTTP_PORT:-8000}:8000"
+      # Os dois lados usam a mesma HTTP_PORT: o processo dentro do
+      # container também lê essa variável (via env_file) para decidir em
+      # qual porta escutar (§62) — mapear para um container-side fixo
+      # quebraria a publicação se HTTP_PORT for customizada no .env.
+      - "${HTTP_PORT:-8000}:${HTTP_PORT:-8000}"
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    # 127.0.0.1, não "localhost": Alpine/musl resolve "localhost" para o
+    # IPv6 loopback (::1) primeiro dentro do container, e nem todo
+    # servidor aceita conexões nesse endereço (o Go dual-stack aceita por
+    # padrão hoje, mas depender disso é frágil — ver a nota equivalente no
+    # serviço frontend, onde essa mesma ambiguidade quebrava de verdade o
+    # healthcheck do servidor standalone do Next.js).
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${HTTP_PORT:-8000}/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -95,7 +105,7 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9100/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${WORKER_METRICS_PORT:-9100}/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -122,8 +132,16 @@ services:
     depends_on:
       backend-api:
         condition: service_healthy
+    # 127.0.0.1, não "localhost" (ver a mesma nota em backend-api): aqui
+    # isto não é só uma precaução — sem ela o healthcheck falhava de
+    # verdade. O server.js standalone do Next.js, com HOSTNAME=0.0.0.0
+    # (ver o Dockerfile), escuta só no wildcard IPv4; "localhost" dentro
+    # do container Alpine resolve para ::1 primeiro, então "wget --spider
+    # http://localhost:3000" batia num socket IPv6 em que nada escutava e
+    # o container ficava preso em "unhealthy" mesmo com o servidor
+    # respondendo normalmente (inclusive pela porta publicada).
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000"]
       interval: 10s
       timeout: 5s
       retries: 5
