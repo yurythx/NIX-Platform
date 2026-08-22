@@ -1,8 +1,9 @@
 package auth
 
-// Roles known to the platform (§31). Keycloak is the source of truth for
-// role assignment — these constants exist so authorization checks in code
-// don't scatter string literals.
+// Roles conhecidos pela plataforma (§31). O Keycloak é a fonte da verdade
+// para a atribuição de roles a usuários — estas constantes existem só para
+// que as checagens de autorização no código não espalhem strings literais
+// (evitando erro de digitação silencioso em um "nix-admn" em algum lugar).
 const (
 	RoleUser               RoleName = "nix-user"
 	RoleAdmin              RoleName = "nix-admin"
@@ -12,11 +13,12 @@ const (
 
 type RoleName = string
 
-// Permission is a fine-grained capability checked by RequirePermission,
-// for handlers where "does the caller have one of these roles" isn't
-// specific enough. The mapping below is intentionally simple — a single
-// static role -> permissions table — and is the extension point if the
-// platform later needs per-resource or attribute-based rules.
+// Permission é uma capacidade granular verificada por RequirePermission,
+// para handlers em que "o chamador tem um destes roles" não é específico
+// o bastante. O mapeamento abaixo é deliberadamente simples — uma única
+// tabela estática role -> permissões — e é o ponto de extensão caso a
+// plataforma precise no futuro de regras por recurso ou baseadas em
+// atributos (attribute-based access control).
 type Permission string
 
 const (
@@ -28,9 +30,10 @@ const (
 	PermAuditRead          Permission = "audit:read"
 )
 
-// rolePermissions grants nix-admin every permission implicitly (checked
-// separately in HasPermission) and gives the other roles the minimum set
-// implied by their name in the spec.
+// rolePermissions concede ao nix-admin toda permissão implicitamente
+// (verificado à parte em HasPermission) e dá aos demais roles o conjunto
+// mínimo implicado pelo próprio nome, conforme a especificação — ex.: um
+// "nix-auditor" só pode ler (audit, users, integrations), nunca escrever.
 var rolePermissions = map[RoleName][]Permission{
 	RoleUser: {
 		PermUsersRead,
@@ -47,8 +50,8 @@ var rolePermissions = map[RoleName][]Permission{
 	},
 }
 
-// HasPermission reports whether identity's roles grant permission.
-// nix-admin always has every permission.
+// HasPermission reporta se os roles de identity concedem permission.
+// nix-admin sempre tem toda permissão, independente do mapa acima.
 func HasPermission(identity Identity, permission Permission) bool {
 	if identity.HasRole(RoleAdmin) {
 		return true

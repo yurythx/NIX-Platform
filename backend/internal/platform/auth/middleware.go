@@ -10,9 +10,10 @@ import (
 	"github.com/yurythx/nix-platform/pkg/httputil"
 )
 
-// RequireAuthentication extracts and verifies the bearer token from the
-// Authorization header, storing the resulting Identity in the request
-// context. It must run before RequireRole/RequirePermission.
+// RequireAuthentication extrai e verifica o bearer token do header
+// Authorization, guardando a Identity resultante no contexto da
+// requisição. Precisa rodar antes de RequireRole/RequirePermission, já que
+// os dois leem a identidade do contexto que este middleware preenche.
 func RequireAuthentication(verifier *Verifier, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,8 +52,9 @@ func bearerToken(r *http.Request) (string, error) {
 	return token, nil
 }
 
-// RequireRole authorizes the request only if the authenticated identity
-// has at least one of roles. Must run after RequireAuthentication.
+// RequireRole autoriza a requisição somente se a identidade autenticada
+// tiver pelo menos um dos roles informados. Precisa rodar depois de
+// RequireAuthentication.
 func RequireRole(logger *slog.Logger, roles ...RoleName) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,8 +72,9 @@ func RequireRole(logger *slog.Logger, roles ...RoleName) func(http.Handler) http
 	}
 }
 
-// RequirePermission authorizes the request only if the authenticated
-// identity's roles grant permission. Must run after RequireAuthentication.
+// RequirePermission autoriza a requisição somente se os roles da
+// identidade autenticada concederem permission. Precisa rodar depois de
+// RequireAuthentication.
 func RequirePermission(logger *slog.Logger, permission Permission) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

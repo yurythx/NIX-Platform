@@ -1,8 +1,9 @@
-// Package telemetry configures distributed tracing (§51). If
-// OTEL_EXPORTER_OTLP_ENDPOINT is unset, Setup leaves OpenTelemetry's
-// default no-op tracer provider in place — the platform never requires a
-// collector to be running (none is listed among the docker-compose
-// services in §5) — it only exports traces when one is configured.
+// Package telemetry configura o distributed tracing (§51). Se
+// OTEL_EXPORTER_OTLP_ENDPOINT não estiver definido, Setup deixa o tracer
+// provider no-op padrão do OpenTelemetry no lugar — a plataforma nunca
+// exige que um collector esteja rodando (nenhum está listado entre os
+// serviços do docker-compose no §5) — ela só exporta traces quando um
+// endpoint é configurado.
 package telemetry
 
 import (
@@ -18,18 +19,22 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.42.0"
 )
 
-// Shutdown flushes and stops the tracer provider. Safe to call even when
-// tracing was never enabled (returns a no-op).
+// Shutdown esvazia os buffers e para o tracer provider. Seguro de chamar
+// mesmo quando o tracing nunca foi habilitado (nesse caso, é um no-op).
 type Shutdown func(context.Context) error
 
-// Setup configures the global tracer provider and text-map propagator.
-// serviceName/environment are attached to every span as resource
-// attributes. endpoint is the OTLP/HTTP collector address (host:port,
-// no scheme) — typically OTEL_EXPORTER_OTLP_ENDPOINT.
+// Setup configura o tracer provider global e o propagador de contexto
+// (text-map propagator). serviceName/environment são anexados a todo span
+// como atributos de resource. endpoint é o endereço do collector
+// OTLP/HTTP (host:porta, sem esquema) — tipicamente
+// OTEL_EXPORTER_OTLP_ENDPOINT.
 func Setup(ctx context.Context, serviceName, environment, endpoint string, logger *slog.Logger) (Shutdown, error) {
-	// Every service that talks to another (HTTP client calls, RabbitMQ
-	// publish/consume) should propagate trace context the same way,
-	// regardless of whether an exporter is configured.
+	// Todo serviço que fala com outro (chamadas de cliente HTTP,
+	// publish/consume no RabbitMQ) deve propagar o contexto de trace da
+	// mesma forma, independentemente de um exporter estar configurado ou
+	// não — assim os headers de trace já saem corretos mesmo com tracing
+	// desabilitado, e ligar um collector depois não exige mudar nenhum
+	// outro código.
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},

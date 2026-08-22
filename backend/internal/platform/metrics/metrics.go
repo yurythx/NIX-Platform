@@ -1,9 +1,15 @@
-// Package metrics centralizes every Prometheus metric the platform
-// exposes at /metrics (§53). Defining them all here — rather than
-// scattering promauto calls across every package — makes it possible to
-// see the platform's full metric surface in one file and avoids duplicate
-// registration mistakes; each var is registered against the default
-// registry exactly once at package init.
+// Package metrics centraliza toda métrica Prometheus que a plataforma
+// expõe em /metrics (§53). Defini-las todas aqui — em vez de espalhar
+// chamadas a promauto por todo pacote — permite enxergar a superfície
+// completa de métricas da plataforma num único arquivo e evita erros de
+// registro duplicado; cada var é registrada no registry padrão exatamente
+// uma vez, na inicialização do pacote.
+//
+// Os textos de "Help" de cada métrica ficam em inglês deliberadamente —
+// são o contrato consumido por Prometheus/Grafana/alertas, não texto de
+// UI, e seguem a convenção do ecossistema (o mesmo padrão usado pelas
+// métricas nativas do próprio Prometheus e de toda métrica de terceiros
+// que este projeto pode vir a agregar num dashboard).
 package metrics
 
 import (
@@ -92,10 +98,11 @@ var (
 	}, []string{"provider"})
 )
 
-// RegisterPostgresPoolMetrics registers nix_postgres_connections{state=...}
-// gauges backed by pool's live stats (acquired/idle/max — §53). GaugeFunc
-// values are computed lazily at scrape time, so this adds no background
-// goroutine of its own. Call exactly once per pool.
+// RegisterPostgresPoolMetrics registra os gauges
+// nix_postgres_connections{state=...} baseados nas estatísticas ao vivo do
+// pool (acquired/idle/max — §53). Valores de GaugeFunc são calculados de
+// forma preguiçosa no momento do scrape, então isso não adiciona nenhuma
+// goroutine em segundo plano própria. Chamar exatamente uma vez por pool.
 func RegisterPostgresPoolMetrics(pool *pgxpool.Pool) {
 	promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Name:        "nix_postgres_connections",

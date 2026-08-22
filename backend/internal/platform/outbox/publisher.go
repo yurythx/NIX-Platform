@@ -14,11 +14,12 @@ import (
 	"github.com/yurythx/nix-platform/internal/domain/events"
 )
 
-// Publisher polls outbox_events for pending rows and forwards them to
-// RabbitMQ via the injected events.EventPublisher, marking each row
-// "published" only once the broker has confirmed it (§14/§16). It never
-// imports the messaging package directly — only the domain interface — so
-// it can be tested with a fake publisher.
+// Publisher faz polling de outbox_events buscando linhas pendentes e as
+// encaminha ao RabbitMQ via o events.EventPublisher injetado, marcando
+// cada linha como "published" somente depois que o broker a confirma
+// (§14/§16). Nunca importa o pacote messaging diretamente — só a
+// interface de domínio — o que permite testá-lo com um publisher falso
+// (fake), sem precisar de um RabbitMQ real no teste.
 type Publisher struct {
 	pool           *pgxpool.Pool
 	eventPublisher events.EventPublisher
@@ -29,9 +30,10 @@ type Publisher struct {
 	maxAttempts  int
 }
 
-// NewPublisher builds an outbox Publisher with sensible defaults: poll
-// every 2s, up to 20 rows per batch, giving up (marking a row "failed"
-// rather than retrying forever) after 10 failed publish attempts.
+// NewPublisher constrói um Publisher de outbox com padrões razoáveis:
+// faz polling a cada 2s, até 20 linhas por lote, desistindo (marcando uma
+// linha como "failed" em vez de tentar para sempre) depois de 10
+// tentativas de publicação falhas.
 func NewPublisher(pool *pgxpool.Pool, eventPublisher events.EventPublisher, logger *slog.Logger) *Publisher {
 	return &Publisher{
 		pool:           pool,
@@ -43,8 +45,8 @@ func NewPublisher(pool *pgxpool.Pool, eventPublisher events.EventPublisher, logg
 	}
 }
 
-// Run polls until ctx is cancelled. It's meant to be registered as one of
-// cmd/worker's background processors.
+// Run faz polling até ctx ser cancelado. Pensado para ser registrado como
+// um dos processadores em segundo plano do cmd/worker.
 func (p *Publisher) Run(ctx context.Context) error {
 	ticker := time.NewTicker(p.pollInterval)
 	defer ticker.Stop()
@@ -67,16 +69,17 @@ type outboxRow struct {
 	attempts int
 }
 
-// publishPendingBatch locks up to batchSize pending rows with SELECT ...
-// FOR UPDATE SKIP LOCKED (safe for multiple worker replicas polling
-// concurrently — each grabs a disjoint set of rows) and, for each,
-// publishes and updates its status within the same transaction.
+// publishPendingBatch trava até batchSize linhas pendentes com SELECT ...
+// FOR UPDATE SKIP LOCKED (seguro para múltiplas réplicas do worker fazendo
+// polling ao mesmo tempo — cada uma pega um conjunto disjunto de linhas,
+// sem duas réplicas processarem a mesma linha) e, para cada uma, publica
+// e atualiza seu status dentro da mesma transação.
 func (p *Publisher) publishPendingBatch(ctx context.Context) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("outbox: begin transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+	defer func() { _ = tx.Rollback(ctx) }() // vira no-op depois de um commit bem-sucedido
 
 	const selectQ = `
 		SELECT id, payload, attempts
@@ -115,6 +118,11 @@ func (p *Publisher) publishPendingBatch(ctx context.Context) error {
 	return nil
 }
 
+// publishRow tenta publicar uma única linha do outbox e ajusta seu status
+// de acordo com o resultado: envelope ilegível vai direto para "failed"
+// (nunca teria sucesso numa nova tentativa); falha de publicação soma uma
+// tentativa e, se ainda não estourou maxAttempts, fica "pending" para a
+// próxima rodada de polling tentar de novo; sucesso marca "published".
 func (p *Publisher) publishRow(ctx context.Context, tx pgx.Tx, row outboxRow) {
 	var event events.Event
 	if err := json.Unmarshal(row.payload, &event); err != nil {

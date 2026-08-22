@@ -9,18 +9,20 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/config"
 )
 
-// Verifier validates OIDC access tokens against the configured Keycloak
-// realm. It performs OIDC discovery once at startup and caches the JWKS
-// in-process (refreshed only on an unrecognized key id, per go-oidc's
-// remote key set implementation) — no per-request call to Keycloak.
+// Verifier valida access tokens OIDC contra o realm do Keycloak
+// configurado. Faz o discovery OIDC uma única vez no startup e mantém o
+// JWKS em cache no próprio processo (só é atualizado quando aparece um key
+// id desconhecido, conforme a implementação de remote key set do go-oidc)
+// — sem nenhuma chamada ao Keycloak por requisição (§29).
 type Verifier struct {
 	idTokenVerifier *oidc.IDTokenVerifier
 	clientID        string
 }
 
-// NewVerifier performs OIDC discovery against cfg.IssuerURL. It fails fast
-// (returns an error) if the issuer is unreachable or malformed, so
-// misconfiguration surfaces at startup instead of on the first request.
+// NewVerifier faz o discovery OIDC contra cfg.IssuerURL. Falha rápido
+// (retorna um erro) se o issuer estiver inalcançável ou malformado, para
+// que uma configuração errada apareça no startup em vez de na primeira
+// requisição que precisar validar um token.
 func NewVerifier(ctx context.Context, cfg config.KeycloakConfig) (*Verifier, error) {
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
 	if err != nil {
@@ -38,10 +40,10 @@ func NewVerifier(ctx context.Context, cfg config.KeycloakConfig) (*Verifier, err
 	}, nil
 }
 
-// Verify validates rawToken's signature, issuer, audience, expiry and
-// algorithm, then extracts the platform Identity from its claims. It never
-// calls out to Keycloak — verification is entirely local against the
-// cached JWKS.
+// Verify valida a assinatura, o issuer, a audiência, a expiração e o
+// algoritmo de rawToken, e então extrai a Identity da plataforma a partir
+// das suas claims. Nunca chama o Keycloak — a verificação é inteiramente
+// local, contra o JWKS em cache.
 func (v *Verifier) Verify(ctx context.Context, rawToken string) (Identity, error) {
 	token, err := v.idTokenVerifier.Verify(ctx, rawToken)
 	if err != nil {

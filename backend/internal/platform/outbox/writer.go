@@ -1,9 +1,10 @@
-// Package outbox implements the Transactional Outbox pattern (§16): an
-// event is written to the outbox_events table in the same PostgreSQL
-// transaction as the business data it describes, so a partial failure
-// (data committed but RabbitMQ unreachable, or vice versa) can never
-// happen. A separate Publisher polls pending rows and forwards them to
-// RabbitMQ, marking each published only after the broker confirms it.
+// Package outbox implementa o padrão Transactional Outbox (§16): um evento
+// é gravado na tabela outbox_events dentro da mesma transação PostgreSQL
+// que os dados de negócio que ele descreve, para que uma falha parcial
+// (dado commitado mas RabbitMQ inalcançável, ou vice-versa) nunca possa
+// acontecer. Um Publisher separado faz polling das linhas pendentes e as
+// encaminha ao RabbitMQ, marcando cada uma como publicada somente depois
+// que o broker confirma o recebimento.
 package outbox
 
 import (
@@ -17,23 +18,25 @@ import (
 	"github.com/yurythx/nix-platform/internal/domain/events"
 )
 
-// Writer inserts outbox rows. It takes no database handle itself —
-// callers pass the pgx.Tx of the business transaction they're already in,
-// so the outbox insert is atomic with whatever business data was just
-// written on that same tx.
+// Writer insere linhas no outbox. Não recebe um handle de banco próprio —
+// quem chama passa o pgx.Tx da transação de negócio em que já está, para
+// que o insert no outbox seja atômico com qualquer dado de negócio que
+// acabou de ser gravado nessa mesma transação (ex.: criar um Job e seu
+// evento "job.created" juntos, ou os dois ou nenhum dos dois).
 type Writer struct {
-	source string // events.Event.Source for every event this writer builds, e.g. "nix.diario_oficial"
+	source string // events.Event.Source para todo evento que este writer constrói, ex.: "nix.diario_oficial"
 }
 
-// NewWriter builds a Writer that stamps every event with source.
+// NewWriter constrói um Writer que carimba todo evento com source.
 func NewWriter(source string) *Writer {
 	return &Writer{source: source}
 }
 
-// Write builds the standard event envelope (§17) and inserts it into
-// outbox_events within tx. It must be called before tx.Commit(); the event
-// only becomes visible to the Publisher once the surrounding transaction
-// commits.
+// Write monta o envelope de evento padrão (§17) e o insere em
+// outbox_events dentro de tx. Precisa ser chamado antes de tx.Commit(); o
+// evento só se torna visível ao Publisher depois que a transação em volta
+// é commitada — é essa visibilidade adiada que garante a atomicidade do
+// padrão outbox.
 func (w *Writer) Write(ctx context.Context, tx pgx.Tx, eventType, aggregateType, aggregateID string, correlationID uuid.UUID, payload any) error {
 	event, err := events.New(eventType, w.source, correlationID, payload)
 	if err != nil {

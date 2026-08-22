@@ -1,9 +1,11 @@
-// Package audit writes the audit_logs trail (§49): login/logout,
+// Package audit grava a trilha de audit_logs (§49): login/logout,
 // user.created/updated, integration.test, integration.config.changed,
-// job.created/completed/failed. Callers are responsible for never putting
-// a password, access/refresh token, client secret, or integration secret
-// into Entry.Metadata — this package does not attempt to redact content it
-// doesn't understand the shape of.
+// job.created/completed/failed. Quem chama é responsável por nunca
+// colocar uma senha, access/refresh token, client secret ou segredo de
+// integração em Entry.Metadata — este pacote não tenta redigir/mascarar
+// conteúdo cujo formato ele não conhece; a auditoria imutável (migration
+// 000008, que bloqueia UPDATE/DELETE/TRUNCATE em audit_logs) protege
+// contra alteração posterior, não contra segredo indevidamente gravado.
 package audit
 
 import (
@@ -15,8 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Well-known action names (§49). Callers may also use their own
-// "<context>.<action>" strings for module-specific events not listed here.
+// Nomes de ação bem conhecidos (§49). Quem chama também pode usar suas
+// próprias strings "<contexto>.<ação>" para eventos específicos de módulo
+// não listados aqui.
 const (
 	ActionLogin                    = "login"
 	ActionLogout                   = "logout"
@@ -29,7 +32,7 @@ const (
 	ActionJobFailed                = "job.failed"
 )
 
-// Entry is one audit record.
+// Entry é um registro de auditoria.
 type Entry struct {
 	UserID        *uuid.UUID
 	Action        string
@@ -40,26 +43,27 @@ type Entry struct {
 	IPAddress     string
 }
 
-// execer is satisfied by both *pgxpool.Pool and pgx.Tx, so Record can be
-// used either standalone or atomically alongside other writes on an
-// existing transaction.
+// execer é satisfeita tanto por *pgxpool.Pool quanto por pgx.Tx, para que
+// Record possa ser usado tanto isoladamente quanto atomicamente junto de
+// outras escritas numa transação já existente (ex.: gravar o audit_log de
+// "user.created" na mesma transação que insere a linha do usuário).
 type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// Writer inserts audit_logs rows.
+// Writer insere linhas em audit_logs.
 type Writer struct {
 	db execer
 }
 
-// NewWriter builds a Writer over db, which may be a *pgxpool.Pool for
-// standalone writes or a pgx.Tx to make the audit entry atomic with other
-// changes in the same transaction.
+// NewWriter constrói um Writer sobre db, que pode ser um *pgxpool.Pool
+// para escritas isoladas ou um pgx.Tx para tornar a entrada de auditoria
+// atômica com outras mudanças na mesma transação.
 func NewWriter(db execer) *Writer {
 	return &Writer{db: db}
 }
 
-// Record inserts entry.
+// Record insere entry.
 func (w *Writer) Record(ctx context.Context, entry Entry) error {
 	metadata := entry.Metadata
 	if metadata == nil {
