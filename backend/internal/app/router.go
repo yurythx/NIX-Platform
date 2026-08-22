@@ -12,8 +12,10 @@ import (
 	usersTransport "github.com/yurythx/nix-platform/internal/modules/users/transport"
 
 	"github.com/yurythx/nix-platform/internal/platform/auth"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
+	"github.com/yurythx/nix-platform/internal/platform/idempotency"
 	"github.com/yurythx/nix-platform/internal/platform/ws"
 )
 
@@ -41,6 +43,13 @@ func NewRouter(deps *Dependencies) chi.Router {
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(auth.RequireAuthentication(deps.Verifier, deps.Logger))
+		// Precisa vir depois de RequireAuthentication — chaves de
+		// idempotência são escopadas por usuário autenticado (ver
+		// internal/platform/idempotency.Middleware). Montado uma única
+		// vez para todo /api/v1: só tem efeito em requisições que
+		// realmente enviam o header Idempotency-Key, então não afeta
+		// nenhuma rota que não o use.
+		api.Use(idempotency.Middleware(deps.Idempotency, deps.Logger))
 
 		api.With(httpserver.RateLimit(deps.Logger, deps.RateLimiters.WSTicket, wsTicketRateLimitKey)).
 			Post("/ws/ticket", ws.TicketHandler(deps.Tickets, deps.Logger))
@@ -49,6 +58,7 @@ func NewRouter(deps *Dependencies) chi.Router {
 		integrationsTransport.RegisterRoutes(api, deps.Modules.Integrations.Handlers)
 		diarioTransport.RegisterRoutes(api, deps.Modules.DiarioOficial.Handlers, deps.Logger, deps.RateLimiters.TestJob)
 		secopsTransport.RegisterRoutes(api, deps.Modules.SecOps.Handlers, deps.Logger, deps.RateLimiters.TestJob)
+		configflags.RegisterRoutes(api, deps.Modules.ConfigFlags.Handlers, deps.Logger)
 	})
 
 	return r

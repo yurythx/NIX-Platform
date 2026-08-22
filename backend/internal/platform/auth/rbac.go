@@ -28,6 +28,12 @@ const (
 	PermIntegrationsTest   Permission = "integrations:test"
 	PermIntegrationsManage Permission = "integrations:manage"
 	PermAuditRead          Permission = "audit:read"
+	// PermFeatureFlagsManage não é concedida a nenhum role em
+	// rolePermissions abaixo — só o nix-admin a possui, através do atalho
+	// em HasPermission. Alternar feature flags em produção afeta todo
+	// mundo imediatamente, então é deliberadamente restrito ao papel mais
+	// privilegiado, sem meio-termo por role.
+	PermFeatureFlagsManage Permission = "feature_flags:manage"
 )
 
 // rolePermissions concede ao nix-admin toda permissão implicitamente

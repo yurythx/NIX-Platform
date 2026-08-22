@@ -13,6 +13,7 @@ import (
 	secopsWorker "github.com/yurythx/nix-platform/internal/modules/secops/worker"
 
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
+	"github.com/yurythx/nix-platform/internal/platform/idempotency"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
 	"github.com/yurythx/nix-platform/internal/platform/ratelimit"
@@ -56,6 +57,7 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 		processors: []processor{
 			supervised("outbox_publisher", deps.Logger, outboxPublisher.Run),
 			supervised("rate_limit_cleanup", deps.Logger, ratelimit.Cleanup(deps.DB)),
+			supervised("idempotency_cleanup", deps.Logger, idempotency.Cleanup(deps.DB)),
 			supervised("diario_oficial.worker", deps.Logger, func(ctx context.Context) error {
 				return diarioConsumer.Consume(ctx, diarioWorker.JobCreatedHandler(deps.Modules.DiarioOficial.Service))
 			}),

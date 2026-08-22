@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,6 +14,7 @@ import (
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/secops/domain"
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
+	"github.com/yurythx/nix-platform/internal/platform/resilience"
 )
 
 const defaultBaseURL = "https://www.virustotal.com/api/v3"
@@ -24,14 +26,22 @@ const providerLabel = "virustotal"
 // Client chama a API v3 do VirusTotal. Nunca bloqueia por mais tempo que o
 // timeout configurado (§48) e nunca entra em panic por uma API key
 // ausente ou uma API inalcançável/com erro — ambos os casos aparecem como
-// um erro DependencyUnavailable seguro de mostrar ao cliente.
+// um erro DependencyUnavailable seguro de mostrar ao cliente. A chamada de
+// rede em si roda atrás de um circuit breaker (§ Circuit Breaker &
+// Resiliência HTTP): depois de falhas consecutivas, o breaker abre e as
+// chamadas passam a falhar rápido com CIRCUIT_OPEN, sem sequer tentar a
+// requisição, poupando tanto o VirusTotal quanto a cota de API da chave
+// configurada.
 type Client struct {
 	apiKey  string
 	baseURL string
 	client  *http.Client
+	breaker *resilience.Breaker[*http.Response]
 }
 
-func NewClient(apiKey, baseURL string, timeout time.Duration) *Client {
+// NewClient constrói um Client do VirusTotal, com o timeout e o circuit
+// breaker (logger recebe as transições de estado) configurados.
+func NewClient(apiKey, baseURL string, timeout time.Duration, logger *slog.Logger) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
@@ -39,6 +49,7 @@ func NewClient(apiKey, baseURL string, timeout time.Duration) *Client {
 		apiKey:  apiKey,
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: timeout},
+		breaker: resilience.New[*http.Response](resilience.Options{Name: providerLabel, Logger: logger}),
 	}
 }
 
@@ -120,10 +131,29 @@ func (c *Client) do(ctx context.Context, path string) (*http.Response, error) {
 
 	metrics.IntegrationRequestsTotal.WithLabelValues(providerLabel).Inc()
 	start := time.Now()
-	resp, err := c.client.Do(req)
+	// O status >= 500 é verificado DENTRO do callback do breaker, não
+	// depois — um provedor respondendo consistentemente com erro de
+	// servidor deve abrir o circuito tanto quanto uma falha de rede. Um
+	// 4xx (ex.: 401 de API key inválida) não conta: é uma resposta HTTP
+	// válida que statusToError, chamado por quem invoca do(), interpreta
+	// como um erro específico de domínio, não como o provedor fora do ar.
+	resp, err := c.breaker.Execute(func() (*http.Response, error) {
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= http.StatusInternalServerError {
+			resp.Body.Close()
+			return nil, fmt.Errorf("virustotal responded with status %d", resp.StatusCode)
+		}
+		return resp, nil
+	})
 	metrics.IntegrationDuration.WithLabelValues(providerLabel).Observe(time.Since(start).Seconds())
 	if err != nil {
 		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
+		if appErr, ok := apperrors.As(err); ok && appErr.Code == "CIRCUIT_OPEN" {
+			return nil, appErr
+		}
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("virustotal request failed: %v", err)).WithCode("INTEGRATION_UNAVAILABLE")
 	}
 	return resp, nil

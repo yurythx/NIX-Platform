@@ -6,12 +6,14 @@ package infrastructure
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/domain"
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
+	"github.com/yurythx/nix-platform/internal/platform/resilience"
 )
 
 // providerLabel é o valor deste cliente para o rótulo "provider" em toda
@@ -22,16 +24,23 @@ const providerLabel = "diario-oficial"
 // bloqueia por mais tempo que o timeout configurado (§48) e nunca entra em
 // panic por um endpoint ausente/inalcançável — ambos os casos aparecem
 // como um erro DependencyUnavailable seguro de mostrar ao cliente, em vez
-// disso.
+// disso. A chamada de rede em si roda atrás de um circuit breaker (§
+// Circuit Breaker & Resiliência HTTP): depois de falhas consecutivas, o
+// breaker abre e Check passa a falhar rápido com CIRCUIT_OPEN, sem sequer
+// tentar a requisição, até o Diário Oficial mostrar sinal de vida de novo.
 type HTTPClient struct {
 	baseURL string
 	client  *http.Client
+	breaker *resilience.Breaker[*http.Response]
 }
 
-func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
+// NewHTTPClient constrói um HTTPClient contra baseURL, com o timeout e o
+// circuit breaker (logger recebe as transições de estado) configurados.
+func NewHTTPClient(baseURL string, timeout time.Duration, logger *slog.Logger) *HTTPClient {
 	return &HTTPClient{
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: timeout},
+		breaker: resilience.New[*http.Response](resilience.Options{Name: providerLabel, Logger: logger}),
 	}
 }
 
@@ -52,18 +61,34 @@ func (c *HTTPClient) Check(ctx context.Context) (*domain.CheckResult, error) {
 
 	metrics.IntegrationRequestsTotal.WithLabelValues(providerLabel).Inc()
 	start := time.Now()
-	resp, err := c.client.Do(req)
+	// O status >= 500 é verificado DENTRO do callback do breaker, não
+	// depois — assim tanto uma falha de rede quanto um provedor
+	// respondendo consistentemente com erro de servidor contam como
+	// falha para o circuit breaker. Um 4xx (ex.: 404) não conta: é uma
+	// resposta HTTP válida, só não a que se esperava, e não é sinal de
+	// que o provedor está indisponível.
+	resp, err := c.breaker.Execute(func() (*http.Response, error) {
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= http.StatusInternalServerError {
+			resp.Body.Close()
+			return nil, fmt.Errorf("diario oficial responded with status %d", resp.StatusCode)
+		}
+		return resp, nil
+	})
 	metrics.IntegrationDuration.WithLabelValues(providerLabel).Observe(time.Since(start).Seconds())
 	if err != nil {
 		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
+		if appErr, ok := apperrors.As(err); ok && appErr.Code == "CIRCUIT_OPEN" {
+			// Já é um erro de domínio pronto para o cliente — repassa
+			// como está, sem envolver numa mensagem genérica de mais.
+			return nil, appErr
+		}
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("diario oficial request failed: %v", err)).WithCode("INTEGRATION_UNAVAILABLE")
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode >= http.StatusInternalServerError {
-		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
-		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("diario oficial responded with status %d", resp.StatusCode)).WithCode("INTEGRATION_UNAVAILABLE")
-	}
 
 	return &domain.CheckResult{
 		StatusCode: resp.StatusCode,

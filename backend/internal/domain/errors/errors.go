@@ -23,6 +23,7 @@ const (
 	CodeValidation            Code = "VALIDATION_ERROR"
 	CodeRateLimited           Code = "RATE_LIMITED"
 	CodeDependencyUnavailable Code = "DEPENDENCY_UNAVAILABLE"
+	CodeFeatureDisabled       Code = "FEATURE_DISABLED"
 	CodeInternal              Code = "INTERNAL_ERROR"
 )
 
@@ -95,6 +96,16 @@ func RateLimited(message string) *Error {
 
 func DependencyUnavailable(message string) *Error {
 	return &Error{Status: 503, Code: CodeDependencyUnavailable, Message: message}
+}
+
+// FeatureDisabled reporta que uma funcionalidade existe mas foi desligada
+// via feature flag (internal/platform/configflags) — status 503, como
+// DependencyUnavailable, já que do ponto de vista do cliente é a mesma
+// experiência ("isto não está disponível agora"), mas com um Code
+// específico para o cliente distinguir "provedor externo com problema" de
+// "um administrador desligou isto de propósito".
+func FeatureDisabled(message string) *Error {
+	return &Error{Status: 503, Code: CodeFeatureDisabled, Message: message}
 }
 
 // Internal envolve um erro inesperado. A mensagem retornada ao cliente é

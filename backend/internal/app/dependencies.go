@@ -17,8 +17,10 @@ import (
 	"github.com/yurythx/nix-platform/internal/domain/events"
 	"github.com/yurythx/nix-platform/internal/platform/auth"
 	"github.com/yurythx/nix-platform/internal/platform/config"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
+	"github.com/yurythx/nix-platform/internal/platform/idempotency"
 	"github.com/yurythx/nix-platform/internal/platform/logging"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
@@ -61,6 +63,8 @@ type Dependencies struct {
 	Tickets      *ws.TicketStore
 	Modules      *Modules
 	RateLimiters *RateLimiters
+	Idempotency  idempotency.Store
+	Flags        configflags.Store
 
 	telemetryShutdown telemetry.Shutdown
 }
@@ -145,6 +149,8 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 			// Equivalente a 1 req/s, burst 5: até 5 requisições a cada 5s.
 			WSTicket: ratelimit.NewPostgresLimiter(pool, 5, 5),
 		},
+		Idempotency: idempotency.NewPostgresStore(pool),
+		Flags:       configflags.NewPostgresStore(pool),
 
 		telemetryShutdown: telemetryShutdown,
 	}

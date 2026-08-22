@@ -96,6 +96,29 @@ var (
 		Name: "nix_integration_failures_total",
 		Help: "Failed outbound integration requests, by provider.",
 	}, []string{"provider"})
+
+	// --- Circuit Breaker (internal/platform/resilience) ---
+	CircuitBreakerState = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nix_circuit_breaker_state",
+		Help: "Current circuit breaker state, by name (0=closed, 1=half-open, 2=open).",
+	}, []string{"name"})
+
+	CircuitBreakerTransitionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "nix_circuit_breaker_transitions_total",
+		Help: "Circuit breaker state transitions, by name, origin state and destination state.",
+	}, []string{"name", "from", "to"})
+
+	// --- Idempotency (internal/platform/idempotency) ---
+	IdempotencyOutcomesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "nix_idempotency_outcomes_total",
+		Help: "Outcomes of idempotency-key-guarded requests, by outcome (new/replayed/conflict/reused_key).",
+	}, []string{"outcome"})
+
+	// --- Feature flags (internal/platform/configflags) ---
+	FeatureFlagChecksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "nix_feature_flag_checks_total",
+		Help: "Feature flag evaluations, by flag key and result (enabled/disabled).",
+	}, []string{"flag", "result"})
 )
 
 // RegisterPostgresPoolMetrics registra os gauges

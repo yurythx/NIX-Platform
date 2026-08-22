@@ -12,8 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/domain"
 	"github.com/yurythx/nix-platform/internal/platform/audit"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
@@ -31,6 +33,15 @@ const (
 	EventIntegrationStatusChanged = "integration.status.changed"
 
 	integrationKey = "diario-oficial"
+
+	// FeatureFlagKey é a flag que controla se o teste de conectividade
+	// com o Diário Oficial pode ser disparado (§ Feature Flags &
+	// Configuração Dinâmica) — um interruptor de emergência que um
+	// nix-admin pode desligar em produção sem reimplantar o serviço, ex.:
+	// se o endpoint do Diário Oficial começar a se comportar mal e
+	// disparos repetidos estiverem causando problema em algum lugar a
+	// jusante.
+	FeatureFlagKey = "diario_oficial_scraping_enabled"
 )
 
 // jobPayload é o corpo de todo evento do ciclo de vida de um job do
@@ -48,9 +59,14 @@ type Service struct {
 	client       domain.Client
 	integrations *integrations.Service
 	audit        *audit.Writer
+	flags        configflags.Store
 	logger       *slog.Logger
 }
 
+// NewService constrói o Service. flags pode ser nil — nesse caso a
+// checagem de feature flag em CreateTestJob é pulada e o teste é sempre
+// permitido, o que mantém testes de aplicação que não se importam com
+// feature flags simples de escrever (ver service_test.go).
 func NewService(
 	db *pgxpool.Pool,
 	jobsRepo *jobs.Repository,
@@ -58,6 +74,7 @@ func NewService(
 	client domain.Client,
 	integrationsSvc *integrations.Service,
 	auditWriter *audit.Writer,
+	flags configflags.Store,
 	logger *slog.Logger,
 ) *Service {
 	return &Service{
@@ -67,6 +84,7 @@ func NewService(
 		client:       client,
 		integrations: integrationsSvc,
 		audit:        auditWriter,
+		flags:        flags,
 		logger:       logger,
 	}
 }
@@ -78,6 +96,16 @@ func NewService(
 // responsabilidade do worker, acionado de forma assíncrona pelo evento
 // que acabou de ser gravado no outbox.
 func (s *Service) CreateTestJob(ctx context.Context, correlationID uuid.UUID, requestedBy *uuid.UUID) (*jobs.Job, error) {
+	if s.flags != nil {
+		enabled, err := s.flags.IsEnabled(ctx, FeatureFlagKey, true)
+		if err != nil {
+			return nil, fmt.Errorf("diario_oficial: check feature flag: %w", err)
+		}
+		if !enabled {
+			return nil, apperrors.FeatureDisabled(fmt.Sprintf("the %q feature is currently disabled", FeatureFlagKey))
+		}
+	}
+
 	job, err := jobs.New(JobType, correlationID, struct{}{})
 	if err != nil {
 		return nil, fmt.Errorf("diario_oficial: build job: %w", err)

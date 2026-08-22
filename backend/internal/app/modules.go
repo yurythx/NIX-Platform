@@ -19,6 +19,7 @@ import (
 	usersTransport "github.com/yurythx/nix-platform/internal/modules/users/transport"
 
 	"github.com/yurythx/nix-platform/internal/platform/audit"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 )
 
@@ -44,6 +45,9 @@ type Modules struct {
 		Service  *secopsApp.Service
 		Handlers *secopsTransport.Handlers
 	}
+	ConfigFlags struct {
+		Handlers *configflags.Handlers
+	}
 }
 
 // buildModules constrói cada módulo de negócio na ordem certa: primeiro
@@ -67,17 +71,19 @@ func buildModules(deps *Dependencies) *Modules {
 	m.Integrations.Service = integrationsSvc
 	m.Integrations.Handlers = integrationsTransport.NewHandlers(integrationsSvc, deps.Logger)
 
-	diarioClient := diarioInfra.NewHTTPClient(deps.Config.DiarioOficial.BaseURL, deps.Config.DiarioOficial.Timeout)
-	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, integrationsSvc, auditWriter, deps.Logger)
+	diarioClient := diarioInfra.NewHTTPClient(deps.Config.DiarioOficial.BaseURL, deps.Config.DiarioOficial.Timeout, deps.Logger)
+	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
 	m.DiarioOficial.Service = diarioSvc
 	m.DiarioOficial.Handlers = diarioTransport.NewHandlers(diarioSvc, deps.Logger)
 
 	providers := map[string]secopsDomain.SecurityProvider{
-		"virustotal": virustotal.NewClient(deps.Config.VirusTotal.APIKey, deps.Config.VirusTotal.BaseURL, deps.Config.VirusTotal.Timeout),
+		"virustotal": virustotal.NewClient(deps.Config.VirusTotal.APIKey, deps.Config.VirusTotal.BaseURL, deps.Config.VirusTotal.Timeout, deps.Logger),
 	}
-	secopsSvc := secopsApp.NewService(deps.DB, jobsRepo, deps.Outbox, providers, integrationsSvc, auditWriter, deps.Logger)
+	secopsSvc := secopsApp.NewService(deps.DB, jobsRepo, deps.Outbox, providers, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
 	m.SecOps.Service = secopsSvc
 	m.SecOps.Handlers = secopsTransport.NewHandlers(secopsSvc, deps.Logger)
+
+	m.ConfigFlags.Handlers = configflags.NewHandlers(deps.Flags, auditWriter, deps.Logger)
 
 	return m
 }

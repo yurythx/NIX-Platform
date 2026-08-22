@@ -32,11 +32,12 @@ func NewWriter(source string) *Writer {
 	return &Writer{source: source}
 }
 
-// Write monta o envelope de evento padrão (§17) e o insere em
-// outbox_events dentro de tx. Precisa ser chamado antes de tx.Commit(); o
-// evento só se torna visível ao Publisher depois que a transação em volta
-// é commitada — é essa visibilidade adiada que garante a atomicidade do
-// padrão outbox.
+// Write monta o envelope de evento padrão (§17), o valida contra o JSON
+// Schema do contrato de evento (§ Schema Validator para Eventos do
+// Outbox — ver schema.go) e o insere em outbox_events dentro de tx.
+// Precisa ser chamado antes de tx.Commit(); o evento só se torna visível
+// ao Publisher depois que a transação em volta é commitada — é essa
+// visibilidade adiada que garante a atomicidade do padrão outbox.
 func (w *Writer) Write(ctx context.Context, tx pgx.Tx, eventType, aggregateType, aggregateID string, correlationID uuid.UUID, payload any) error {
 	event, err := events.New(eventType, w.source, correlationID, payload)
 	if err != nil {
@@ -46,6 +47,15 @@ func (w *Writer) Write(ctx context.Context, tx pgx.Tx, eventType, aggregateType,
 	envelope, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("outbox: marshal event envelope: %w", err)
+	}
+
+	// Validado depois de serializar, contra o MESMO JSON que será
+	// gravado — não contra o struct Go em memória — para pegar qualquer
+	// divergência introduzida pela própria serialização (ex.: um futuro
+	// campo com tag `json:"-"` que devesse ter sido incluído) e não só
+	// erros de construção do struct events.Event.
+	if err := validateEnvelope(envelope); err != nil {
+		return fmt.Errorf("outbox: invalid event envelope for %s: %w", eventType, err)
 	}
 
 	const q = `

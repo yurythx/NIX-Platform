@@ -11,6 +11,27 @@ info:
     Toda resposta usa o mesmo envelope:
     `{"data": <payload|null>, "error": {"code","message"}|null, "meta": {...}|omitido}`.
     Erros nunca incluem stack trace ou outro detalhe interno.
+
+    **Idempotência**: qualquer endpoint de escrita (POST/PUT/PATCH) aceita
+    opcionalmente o header `Idempotency-Key` (ver
+    `#/components/parameters/IdempotencyKey`). Reenviar a mesma requisição
+    (mesmo método, caminho e corpo) com a mesma chave nunca executa o
+    handler duas vezes — a segunda chamada em diante recebe de volta a
+    resposta já produzida pela primeira (`Idempotent-Replay: true` no
+    header da resposta), em vez de criar um segundo job/efeito colateral.
+    Reusar a mesma chave com um corpo diferente é rejeitado com 409
+    (`IDEMPOTENCY_KEY_REUSED`); uma segunda chamada enquanto a primeira
+    ainda está em andamento recebe 409 (`IDEMPOTENCY_KEY_IN_PROGRESS`). Ver
+    ADR [002](adr/002-enterprise-resilience-and-governance.md).
+
+    **Resiliência e disponibilidade condicional**: chamadas que dependem
+    de um provedor externo (Diário Oficial, VirusTotal) podem retornar 503
+    por dois motivos distintos, diferenciados pelo `error.code`:
+    `CIRCUIT_OPEN` (o circuit breaker interno detectou falhas consecutivas
+    e está poupando o provedor — tentativas vão voltar a funcionar
+    sozinhas depois de um curto intervalo) ou `FEATURE_DISABLED` (um
+    administrador desligou a integração via feature flag — ver
+    `/api/v1/admin/feature-flags`, não se resolve sozinho).
   version: "1.0.0"
   license:
     name: MIT
@@ -35,6 +56,8 @@ tags:
     description: Verificações de conectividade dos provedores SecOps (job assíncrono); hoje, VirusTotal.
   - name: websocket
     description: Emissão de ticket para notificações em tempo real.
+  - name: admin
+    description: "Operações administrativas restritas ao papel nix-admin, ex.: feature flags."
 
 security:
   - bearerAuth: []
@@ -244,9 +267,13 @@ paths:
         um evento de outbox em uma única transação, e retorna
         imediatamente — o worker o processa, e o frontend é notificado via
         WebSocket quando ele concluir ou falhar (§34/§72). Sujeito a rate
-        limiting por chamador.
+        limiting por chamador. Aceita `Idempotency-Key` — recomendado para
+        evitar criar jobs duplicados num duplo clique ou retry automático
+        do cliente.
       security:
         - bearerAuth: [integrations:test]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "202":
           $ref: "#/components/responses/TestJobAccepted"
@@ -254,17 +281,25 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/IntegrationUnavailable"
 
   /api/v1/integrations/secops/virustotal/test:
     post:
       tags: [secops]
       summary: Dispara uma verificação assíncrona de conectividade com o VirusTotal
       operationId: testVirusTotal
-      description: Mesmo fluxo assíncrono do teste do Diário Oficial, direcionado ao provedor VirusTotal.
+      description: >
+        Mesmo fluxo assíncrono do teste do Diário Oficial, direcionado ao
+        provedor VirusTotal. Aceita `Idempotency-Key` pelo mesmo motivo.
       security:
         - bearerAuth: [integrations:test]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "202":
           $ref: "#/components/responses/TestJobAccepted"
@@ -272,8 +307,12 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/IntegrationUnavailable"
 
   /api/v1/ws/ticket:
     post:
@@ -334,6 +373,87 @@ paths:
         "401":
           description: Ticket ausente, inválido, expirado ou já utilizado.
 
+  /api/v1/admin/feature-flags:
+    get:
+      tags: [admin]
+      summary: Lista toda feature flag registrada
+      operationId: listFeatureFlags
+      description: >
+        Restrito ao papel nix-admin. Inclui as flags semeadas por migration
+        (`secops_virustotal_enabled`, `diario_oficial_scraping_enabled`) e
+        qualquer outra já criada via PATCH.
+      security:
+        - bearerAuth: [feature_flags:manage]
+      responses:
+        "200":
+          description: Toda feature flag registrada.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/FeatureFlag"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/admin/feature-flags/{key}:
+    patch:
+      tags: [admin]
+      summary: Habilita ou desabilita uma feature flag
+      operationId: setFeatureFlag
+      description: >
+        Restrito ao papel nix-admin. Efeito imediato em toda réplica da
+        API/worker — não há cache em memória, cada checagem de flag
+        consulta o Postgres diretamente (§ Feature Flags & Configuração
+        Dinâmica). Se `key` ainda não existir, é criada nesta chamada
+        (upsert).
+      security:
+        - bearerAuth: [feature_flags:manage]
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "diario_oficial_scraping_enabled"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+            example:
+              enabled: false
+      responses:
+        "200":
+          description: A flag após a alteração.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/FeatureFlag"
+        "400":
+          description: Corpo inválido ou chave da flag ausente.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -362,9 +482,34 @@ components:
         maximum: 200
         default: 20
 
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >
+        Chave única por operação lógica (recomenda-se um UUID gerado no
+        cliente), escopada ao usuário autenticado. Reenviar a mesma
+        requisição com a mesma chave reproduz a resposta original em vez
+        de reexecutar a operação — ver a nota de Idempotência na descrição
+        geral da API.
+      schema:
+        type: string
+      example: "3f2b9e0a-6d34-4e77-9c3e-2b6f8e6b6a3d"
+
   responses:
     TestJobAccepted:
-      description: O teste foi enfileirado.
+      description: >
+        O teste foi enfileirado. Se a requisição carregou um
+        `Idempotency-Key` já usado com sucesso antes (mesmo corpo), esta é
+        uma resposta reproduzida (replay) da chamada original — o header
+        `Idempotent-Replay: true` distingue esse caso, e nenhum job novo
+        foi criado.
+      headers:
+        Idempotent-Replay:
+          description: Presente e "true" somente quando esta resposta é um replay de uma chamada anterior com a mesma Idempotency-Key.
+          schema:
+            type: string
+            enum: ["true"]
       content:
         application/json:
           schema:
@@ -384,6 +529,52 @@ components:
           example:
             data: { job_id: "3c1f1e2a-...", status: "queued" }
             error: null
+
+    IdempotencyConflict:
+      description: >
+        Conflito relacionado à Idempotency-Key: `IDEMPOTENCY_KEY_IN_PROGRESS`
+        se uma requisição com a mesma chave ainda está sendo processada, ou
+        `IDEMPOTENCY_KEY_REUSED` se a chave já foi usada com um corpo de
+        requisição diferente.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Envelope"
+          examples:
+            in_progress:
+              summary: Requisição original ainda em andamento
+              value:
+                data: null
+                error: { code: "IDEMPOTENCY_KEY_IN_PROGRESS", message: "a request with this Idempotency-Key is already being processed" }
+            reused:
+              summary: Mesma chave usada com um corpo diferente
+              value:
+                data: null
+                error: { code: "IDEMPOTENCY_KEY_REUSED", message: "Idempotency-Key was already used with a different request" }
+
+    IntegrationUnavailable:
+      description: >
+        A integração externa está temporariamente indisponível.
+        `CIRCUIT_OPEN` (o circuit breaker interno abriu depois de falhas
+        consecutivas — tende a se resolver sozinho) e `FEATURE_DISABLED`
+        (um nix-admin desligou a integração via feature flag — só volta
+        quando religada) usam o mesmo status 503, diferenciados pelo
+        `error.code`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Envelope"
+          examples:
+            circuit_open:
+              summary: Circuit breaker aberto
+              value:
+                data: null
+                error: { code: "CIRCUIT_OPEN", message: "virustotal: temporarily unavailable (circuit breaker open)" }
+            feature_disabled:
+              summary: Feature flag desabilitada por um administrador
+              value:
+                data: null
+                error: { code: "FEATURE_DISABLED", message: "the \"secops_virustotal_enabled\" feature is currently disabled" }
 
     Unauthorized:
       description: Access token ausente, inválido ou expirado.
@@ -515,6 +706,25 @@ components:
         last_error:
           type: string
           nullable: true
+
+    FeatureFlag:
+      type: object
+      description: Uma feature flag alterável em tempo de execução (§ Feature Flags & Configuração Dinâmica).
+      properties:
+        key:
+          type: string
+          example: "diario_oficial_scraping_enabled"
+        enabled:
+          type: boolean
+        description:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        updated_by:
+          type: string
+          description: Subject (Keycloak) do administrador que fez a última alteração; ausente se a flag nunca foi alterada manualmente.
+      required: [key, enabled, description, updated_at]
 
     EventEnvelope:
       type: object

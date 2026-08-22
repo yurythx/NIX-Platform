@@ -17,6 +17,7 @@ import (
 	integrations "github.com/yurythx/nix-platform/internal/modules/integrations/application"
 	"github.com/yurythx/nix-platform/internal/modules/secops/domain"
 	"github.com/yurythx/nix-platform/internal/platform/audit"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
@@ -51,9 +52,14 @@ type Service struct {
 	providers    map[string]domain.SecurityProvider
 	integrations *integrations.Service
 	audit        *audit.Writer
+	flags        configflags.Store
 	logger       *slog.Logger
 }
 
+// NewService constrói o Service. flags pode ser nil — nesse caso a
+// checagem de feature flag em CreateTestJob é pulada e o teste é sempre
+// permitido, o que mantém testes de aplicação que não se importam com
+// feature flags simples de escrever (ver service_test.go).
 func NewService(
 	db *pgxpool.Pool,
 	jobsRepo *jobs.Repository,
@@ -61,6 +67,7 @@ func NewService(
 	providers map[string]domain.SecurityProvider,
 	integrationsSvc *integrations.Service,
 	auditWriter *audit.Writer,
+	flags configflags.Store,
 	logger *slog.Logger,
 ) *Service {
 	return &Service{
@@ -70,15 +77,37 @@ func NewService(
 		providers:    providers,
 		integrations: integrationsSvc,
 		audit:        auditWriter,
+		flags:        flags,
 		logger:       logger,
 	}
 }
 
-// CreateTestJob valida que o provedor requisitado existe, e então cria o
-// job e seu evento de outbox disparador atomicamente (§34).
+// featureFlagKey deriva a chave de feature flag de um provedor a partir
+// do seu providerKey — "secops_<provider>_enabled" — para que um novo
+// provedor (Shodan, AbuseIPDB, ...) já nasça com seu próprio interruptor
+// sem precisar de nenhuma mudança de código aqui, só uma linha na
+// migration/no admin de feature flags (§36/§76).
+func featureFlagKey(providerKey string) string {
+	return "secops_" + providerKey + "_enabled"
+}
+
+// CreateTestJob valida que o provedor requisitado existe e que sua
+// feature flag está habilitada, e então cria o job e seu evento de
+// outbox disparador atomicamente (§34).
 func (s *Service) CreateTestJob(ctx context.Context, providerKey string, correlationID uuid.UUID, requestedBy *uuid.UUID) (*jobs.Job, error) {
 	if _, ok := s.providers[providerKey]; !ok {
 		return nil, apperrors.BadRequest(fmt.Sprintf("unknown security provider %q", providerKey))
+	}
+
+	if s.flags != nil {
+		flagKey := featureFlagKey(providerKey)
+		enabled, err := s.flags.IsEnabled(ctx, flagKey, true)
+		if err != nil {
+			return nil, fmt.Errorf("secops: check feature flag: %w", err)
+		}
+		if !enabled {
+			return nil, apperrors.FeatureDisabled(fmt.Sprintf("the %q feature is currently disabled", flagKey))
+		}
 	}
 
 	job, err := jobs.New(JobType, correlationID, jobInput{ProviderKey: providerKey})

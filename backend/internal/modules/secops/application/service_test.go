@@ -51,7 +51,7 @@ func newService(pool *pgxpool.Pool, provider *fakeProvider) *Service {
 	outboxWriter := outbox.NewWriter("nix.test")
 	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
 	providers := map[string]domain.SecurityProvider{"virustotal": provider}
-	return NewService(pool, jobsRepo, outboxWriter, providers, integrationsSvc, nil, testLogger())
+	return NewService(pool, jobsRepo, outboxWriter, providers, integrationsSvc, nil, nil, testLogger())
 }
 
 func resetIntegration(t *testing.T, pool *pgxpool.Pool) {
@@ -133,7 +133,7 @@ func TestProcessJob_RedeliveryOfCompletedJob_IsANoOp(t *testing.T) {
 	outboxWriter := outbox.NewWriter("nix.test")
 	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
 	provider := &countingProvider{}
-	svc := NewService(pool, jobsRepo, outboxWriter, map[string]domain.SecurityProvider{"virustotal": provider}, integrationsSvc, nil, testLogger())
+	svc := NewService(pool, jobsRepo, outboxWriter, map[string]domain.SecurityProvider{"virustotal": provider}, integrationsSvc, nil, nil, testLogger())
 	ctx := context.Background()
 	corrID := uuid.New()
 

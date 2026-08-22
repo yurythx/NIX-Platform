@@ -63,7 +63,7 @@ func newService(pool *pgxpool.Pool, client domain.Client) *Service {
 	jobsRepo := jobs.NewRepository(pool)
 	outboxWriter := outbox.NewWriter("nix.test")
 	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
-	return NewService(pool, jobsRepo, outboxWriter, client, integrationsSvc, nil, testLogger())
+	return NewService(pool, jobsRepo, outboxWriter, client, integrationsSvc, nil, nil, testLogger())
 }
 
 func outboxEventExists(t *testing.T, pool *pgxpool.Pool, aggregateID, eventType string) bool {

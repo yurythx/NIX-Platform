@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nix-platform.internal/schemas/event-envelope.json",
+  "title": "NIX Platform event envelope",
+  "description": "Formato padrão de todo evento gravado em outbox_events e publicado no RabbitMQ (§17). Validado antes do INSERT — ver internal/platform/outbox/schema.go.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "version", "source", "occurred_at", "correlation_id", "payload"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
+      "description": "Convenção <contexto>.<entidade>.<ação> (§9), ex.: diario_oficial.job.completed — exige pelo menos um ponto (ex.: notification.created, com só duas partes, também é um type real e válido na plataforma), não exatamente três segmentos."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "correlation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "payload": {}
+  }
+}
