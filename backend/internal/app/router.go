@@ -42,13 +42,13 @@ func NewRouter(deps *Dependencies) chi.Router {
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(auth.RequireAuthentication(deps.Verifier, deps.Logger))
 
-		api.With(httpserver.RateLimit(deps.Logger, 1, 5, wsTicketRateLimitKey)).
+		api.With(httpserver.RateLimit(deps.Logger, deps.RateLimiters.WSTicket, wsTicketRateLimitKey)).
 			Post("/ws/ticket", ws.TicketHandler(deps.Tickets, deps.Logger))
 
 		usersTransport.RegisterRoutes(api, deps.Modules.Users.Handlers, deps.Logger)
 		integrationsTransport.RegisterRoutes(api, deps.Modules.Integrations.Handlers)
-		diarioTransport.RegisterRoutes(api, deps.Modules.DiarioOficial.Handlers, deps.Logger)
-		secopsTransport.RegisterRoutes(api, deps.Modules.SecOps.Handlers, deps.Logger)
+		diarioTransport.RegisterRoutes(api, deps.Modules.DiarioOficial.Handlers, deps.Logger, deps.RateLimiters.TestJob)
+		secopsTransport.RegisterRoutes(api, deps.Modules.SecOps.Handlers, deps.Logger, deps.RateLimiters.TestJob)
 	})
 
 	return r

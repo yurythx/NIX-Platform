@@ -1,0 +1,46 @@
+name: CodeQL (SAST)
+
+# Análise estática de segurança: procura padrões de vulnerabilidade
+# conhecidos (SQL injection, path traversal, uso inseguro de criptografia,
+# etc.) diretamente no código-fonte — complementa o gitleaks (que procura
+# segredos vazados, não bugs de segurança) e o Trivy (que escaneia as
+# imagens já construídas, não o código-fonte em si).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Novos padrões de vulnerabilidade são adicionados ao CodeQL com
+    # frequência — rodar semanalmente pega código antigo que nenhum PR
+    # recente tocou.
+    - cron: "0 6 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

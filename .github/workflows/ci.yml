@@ -154,6 +154,8 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile.api
           push: false
+          load: true # deixa a imagem disponível localmente para o Trivy escanear abaixo
+          tags: nix-platform/backend-api:ci
 
       - name: Build backend-worker image
         uses: docker/build-push-action@v6
@@ -161,6 +163,8 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile.worker
           push: false
+          load: true
+          tags: nix-platform/backend-worker:ci
 
       - name: Build frontend image
         uses: docker/build-push-action@v6
@@ -168,6 +172,34 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: false
+          load: true
+          tags: nix-platform/frontend:ci
           build-args: |
             NEXT_PUBLIC_API_URL=http://localhost:8000
             NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+
+      # Escaneia cada imagem já construída em busca de CVEs conhecidas nos
+      # pacotes do sistema operacional e nas dependências de linguagem
+      # embutidas na imagem final — cobre uma superfície diferente do
+      # govulncheck/npm audit acima (que só olham o código-fonte/deps
+      # declaradas, não a imagem OCI resultante com todas as camadas).
+      - name: Scan backend-api image (Trivy)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: nix-platform/backend-api:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Scan backend-worker image (Trivy)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: nix-platform/backend-worker:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Scan frontend image (Trivy)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: nix-platform/frontend:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"

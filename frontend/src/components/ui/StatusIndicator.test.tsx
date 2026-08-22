@@ -7,10 +7,10 @@ describe("StatusIndicator", () => {
   it.each([
     ["online", "Online"],
     ["offline", "Offline"],
-    ["degraded", "Degraded"],
-    ["disabled", "Disabled"],
-    ["unknown", "Unknown"],
-  ] as const)("renders the %s status as text %s (not just color)", (status, label) => {
+    ["degraded", "Degradado"],
+    ["disabled", "Desabilitado"],
+    ["unknown", "Desconhecido"],
+  ] as const)("renderiza o status %s como texto %s (não só cor)", (status, label) => {
     render(<StatusIndicator status={status} />);
     expect(screen.getByText(label)).toBeInTheDocument();
   });

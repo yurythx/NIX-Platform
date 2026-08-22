@@ -26,6 +26,15 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-danger: var(--danger);
+  /* Expostas como classes utilitárias (bg-status-online, etc.) para que
+     StatusIndicator/Header nunca precisem de um atributo style="" inline
+     — o CSP com nonce (proxy.ts) bloqueia estilo inline, e nonce não se
+     aplica a atributos style, só a tags <style>/<script>. */
+  --color-status-online: var(--status-online);
+  --color-status-offline: var(--status-offline);
+  --color-status-degraded: var(--status-degraded);
+  --color-status-disabled: var(--status-disabled);
+  --color-status-unknown: var(--status-unknown);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

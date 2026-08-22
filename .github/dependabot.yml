@@ -1,0 +1,59 @@
+# Atualização automática de dependências (§ segurança contínua).
+# O Dependabot abre um PR sozinho sempre que encontra uma versão nova —
+# não substitui o CI (que continua validando cada PR), mas garante que
+# dependências desatualizadas/vulneráveis não fiquem esquecidas
+# indefinidamente só porque ninguém mexeu no código que as usa.
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(backend)"
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(frontend)"
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          # Next.js e React são atualizados isoladamente — um upgrade de
+          # major nessa dupla costuma exigir revisão manual (breaking
+          # changes de framework), então não deve ficar escondido dentro
+          # de um PR agrupado com dezenas de outras libs.
+          - "next"
+          - "react"
+          - "react-dom"
+
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps(ci)"

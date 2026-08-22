@@ -10,10 +10,13 @@ import (
 )
 
 // RegisterRoutes mounts the diario_oficial module's routes onto an
-// already auth.RequireAuthentication-protected router.
-func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger) {
+// already auth.RequireAuthentication-protected router. limiter is built
+// once in internal/app (backed by Postgres, shared across every API
+// replica — §rate limiting distribuído) and passed in rather than
+// constructed here, so every module doesn't stand up its own store.
+func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter httpserver.Limiter) {
 	r.With(
 		auth.RequirePermission(logger, auth.PermIntegrationsTest),
-		httpserver.RateLimit(logger, 0.5, 3, RateLimitKey), // 1 test / 2s, small burst
+		httpserver.RateLimit(logger, limiter, RateLimitKey),
 	).Post("/integrations/diario-oficial/test", h.TestDiarioOficial)
 }

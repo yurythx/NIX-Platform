@@ -15,6 +15,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
+	"github.com/yurythx/nix-platform/internal/platform/ratelimit"
 )
 
 // Worker runs every long-lived background processor (RabbitMQ consumers,
@@ -53,6 +54,7 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 		deps: deps,
 		processors: []processor{
 			supervised("outbox_publisher", deps.Logger, outboxPublisher.Run),
+			supervised("rate_limit_cleanup", deps.Logger, ratelimit.Cleanup(deps.DB)),
 			supervised("diario_oficial.worker", deps.Logger, func(ctx context.Context) error {
 				return diarioConsumer.Consume(ctx, diarioWorker.JobCreatedHandler(deps.Modules.DiarioOficial.Service))
 			}),

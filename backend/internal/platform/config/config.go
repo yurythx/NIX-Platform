@@ -138,6 +138,35 @@ func (l *loader) str(key string, required bool, def string) string {
 	return v
 }
 
+// secret funciona como str, mas primeiro verifica se existe uma variável
+// "<KEY>_FILE" apontando para um arquivo — se sim, o CONTEÚDO do arquivo
+// (sem espaços/quebras de linha nas pontas) é usado como valor, e a
+// variável "<KEY>" direta é ignorada.
+//
+// Isto é o padrão universal para rotação/gestão de segredos sem precisar
+// de código específico para cada backend: Docker Swarm secrets monta cada
+// segredo como um arquivo em /run/secrets/<nome>; Kubernetes Secrets
+// montados como volume funcionam do mesmo jeito; o Vault Agent Sidecar
+// Injector escreve o segredo lido do Vault num arquivo local; AWS
+// Secrets Manager com o CSI driver também. Nenhum desses precisa que a
+// aplicação fale a API específica do provedor — só que ela saiba ler
+// "<KEY>_FILE" em vez de "<KEY>" quando o arquivo existir. Usado para
+// todo valor que é de fato um segredo (senha, client secret, chave de
+// API) — nunca para configuração não sensível (host, nome de banco,
+// etc.), que continua vindo direto de env var via str().
+func (l *loader) secret(key string, required bool, def string) string {
+	filePath, hasFileVar := os.LookupEnv(key + "_FILE")
+	if hasFileVar && filePath != "" {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			l.errs = append(l.errs, fmt.Sprintf("%s_FILE (failed to read %q: %v)", key, filePath, err))
+			return def
+		}
+		return strings.TrimSpace(string(content))
+	}
+	return l.str(key, required, def)
+}
+
 func (l *loader) intVal(key string, required bool, def int) int {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
@@ -191,7 +220,7 @@ func Load() (*Config, error) {
 			Port:            l.intVal("DB_PORT", true, 0),
 			Name:            l.str("DB_NAME", true, ""),
 			User:            l.str("DB_USER", true, ""),
-			Password:        l.str("DB_PASSWORD", true, ""),
+			Password:        l.secret("DB_PASSWORD", true, ""),
 			SSLMode:         l.str("DB_SSLMODE", false, "disable"),
 			MaxConns:        int32(l.intVal("DB_MAX_CONNS", false, 20)),
 			MinConns:        int32(l.intVal("DB_MIN_CONNS", false, 2)),
@@ -200,7 +229,7 @@ func Load() (*Config, error) {
 			ConnectTimeout:  l.durationVal("DB_CONNECT_TIMEOUT", false, 5*time.Second),
 		},
 		RabbitMQ: RabbitMQConfig{
-			URL:           l.str("RABBITMQ_URL", true, ""),
+			URL:           l.secret("RABBITMQ_URL", true, ""),
 			MaxRetries:    l.intVal("RABBITMQ_MAX_RETRIES", false, 3),
 			PrefetchCount: l.intVal("RABBITMQ_PREFETCH_COUNT", false, 10),
 		},
@@ -208,7 +237,7 @@ func Load() (*Config, error) {
 			IssuerURL:    l.str("KEYCLOAK_ISSUER_URL", true, ""),
 			Realm:        l.str("KEYCLOAK_REALM", true, ""),
 			ClientID:     l.str("KEYCLOAK_CLIENT_ID", true, ""),
-			ClientSecret: l.str("KEYCLOAK_CLIENT_SECRET", false, ""),
+			ClientSecret: l.secret("KEYCLOAK_CLIENT_SECRET", false, ""),
 			Audience:     l.str("KEYCLOAK_AUDIENCE", true, ""),
 		},
 		Jobs: JobsConfig{
@@ -223,7 +252,7 @@ func Load() (*Config, error) {
 			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
 		},
 		VirusTotal: VirusTotalConfig{
-			APIKey:  l.str("VIRUSTOTAL_API_KEY", false, ""),
+			APIKey:  l.secret("VIRUSTOTAL_API_KEY", false, ""),
 			BaseURL: l.str("VIRUSTOTAL_BASE_URL", false, "https://www.virustotal.com/api/v3"),
 			Timeout: l.durationVal("VIRUSTOTAL_TIMEOUT", false, 10*time.Second),
 		},

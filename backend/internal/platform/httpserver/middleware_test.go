@@ -85,7 +85,7 @@ func TestSecurityHeaders_SetsBaselineHeaders(t *testing.T) {
 }
 
 func TestRateLimit_AllowsWithinBurstThenRejects(t *testing.T) {
-	handler := RateLimit(testLogger(), 0, 2, func(r *http.Request) string { return "same-key" })(
+	handler := RateLimit(testLogger(), NewInMemoryLimiter(0, 2), func(r *http.Request) string { return "same-key" })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }),
 	)
 
@@ -108,7 +108,7 @@ func TestRateLimit_AllowsWithinBurstThenRejects(t *testing.T) {
 
 func TestRateLimit_DifferentKeysAreIndependent(t *testing.T) {
 	callCount := map[string]int{}
-	handler := RateLimit(testLogger(), 0, 1, func(r *http.Request) string { return r.Header.Get("X-User") })(
+	handler := RateLimit(testLogger(), NewInMemoryLimiter(0, 1), func(r *http.Request) string { return r.Header.Get("X-User") })(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			callCount[r.Header.Get("X-User")]++
 			w.WriteHeader(http.StatusOK)

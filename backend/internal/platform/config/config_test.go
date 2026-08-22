@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -64,6 +66,38 @@ func TestLoad_InvalidAppEnv(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected error for invalid APP_ENV, got nil")
+	}
+}
+
+func TestLoad_SecretFromFile_TakesPrecedenceOverDirectEnvVar(t *testing.T) {
+	setRequiredEnv(t)
+
+	secretFile := filepath.Join(t.TempDir(), "db_password")
+	if err := os.WriteFile(secretFile, []byte("password-from-file\n"), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+	t.Setenv("DB_PASSWORD_FILE", secretFile)
+	// Continua definida (por setRequiredEnv) como "secret" — o valor do
+	// arquivo deve vencer, simulando Docker/Kubernetes secrets montados
+	// como arquivo tendo prioridade sobre uma env var direta.
+	t.Setenv("DB_PASSWORD", "should-be-ignored")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.Database.Password != "password-from-file" {
+		t.Errorf("Database.Password = %q, want %q (do arquivo, com espaços/quebra de linha removidos)", cfg.Database.Password, "password-from-file")
+	}
+}
+
+func TestLoad_SecretFile_MissingFileIsAConfigError(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DB_PASSWORD_FILE", "/does/not/exist")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("esperava um erro quando DB_PASSWORD_FILE aponta para um arquivo inexistente")
 	}
 }
 

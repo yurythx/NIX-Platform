@@ -121,11 +121,24 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// clientLimiter is a per-key token bucket limiter with lazy eviction of
-// stale entries. It is intentionally in-memory/single-instance — the
-// platform has no Redis by design (§7); a multi-instance deployment should
-// front the API with an infrastructure-level rate limiter instead.
-type clientLimiter struct {
+// Limiter decides whether a request identified by key is allowed right
+// now. RateLimit is deliberately decoupled from any specific
+// implementation: InMemoryLimiter below works for a single process, while
+// internal/platform/ratelimit.PostgresLimiter shares state across every
+// API replica — swapping one for the other doesn't touch this middleware.
+type Limiter interface {
+	Allow(ctx context.Context, key string) (bool, error)
+}
+
+// InMemoryLimiter is a per-key token bucket limiter with lazy eviction of
+// stale entries. It is intentionally single-instance: with more than one
+// API replica, each gets its own independent bucket, so the *effective*
+// limit becomes N × the configured one. Fine for local development or a
+// single-replica deployment; production should use
+// internal/platform/ratelimit.PostgresLimiter instead, which every
+// replica shares (§ rate limiting distribuído — a plataforma não usa
+// Redis por design, §7, então o compartilhamento é feito via Postgres).
+type InMemoryLimiter struct {
 	mu       sync.Mutex
 	limiters map[string]*rateEntry
 	rps      rate.Limit
@@ -137,8 +150,8 @@ type rateEntry struct {
 	lastSeen time.Time
 }
 
-func newClientLimiter(rps float64, burst int) *clientLimiter {
-	cl := &clientLimiter{
+func NewInMemoryLimiter(rps float64, burst int) *InMemoryLimiter {
+	cl := &InMemoryLimiter{
 		limiters: make(map[string]*rateEntry),
 		rps:      rate.Limit(rps),
 		burst:    burst,
@@ -147,7 +160,7 @@ func newClientLimiter(rps float64, burst int) *clientLimiter {
 	return cl
 }
 
-func (cl *clientLimiter) evictLoop() {
+func (cl *InMemoryLimiter) evictLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -161,7 +174,7 @@ func (cl *clientLimiter) evictLoop() {
 	}
 }
 
-func (cl *clientLimiter) allow(key string) bool {
+func (cl *InMemoryLimiter) Allow(_ context.Context, key string) (bool, error) {
 	cl.mu.Lock()
 	entry, ok := cl.limiters[key]
 	if !ok {
@@ -172,18 +185,26 @@ func (cl *clientLimiter) allow(key string) bool {
 	limiter := entry.limiter
 	cl.mu.Unlock()
 
-	return limiter.Allow()
+	return limiter.Allow(), nil
 }
 
 // RateLimit returns a middleware limiting each client (identified by
-// keyFunc, typically the authenticated user id or remote IP) to rps
-// requests/second with the given burst.
-func RateLimit(logger *slog.Logger, rps float64, burst int, keyFunc func(*http.Request) string) func(http.Handler) http.Handler {
-	cl := newClientLimiter(rps, burst)
+// keyFunc, typically the authenticated user id or remote IP) according to
+// limiter. A Limiter error (e.g. the database backing a PostgresLimiter is
+// briefly unreachable) fails OPEN — the request is allowed through and the
+// error logged — rather than turning a rate-limit outage into a full
+// outage of the endpoint it protects.
+func RateLimit(logger *slog.Logger, limiter Limiter, keyFunc func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := keyFunc(r)
-			if !cl.allow(key) {
+			allowed, err := limiter.Allow(r.Context(), key)
+			if err != nil {
+				logging.FromContext(r.Context(), logger).Error("rate limiter check failed, allowing request", slog.Any("error", err))
+				next.ServeHTTP(w, r)
+				return
+			}
+			if !allowed {
 				httputil.WriteError(w, r, logger, apperrors.RateLimited("too many requests, please try again later"))
 				return
 			}

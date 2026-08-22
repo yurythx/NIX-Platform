@@ -59,6 +59,53 @@ func TestWriter_Record(t *testing.T) {
 	}
 }
 
+// Prova em cima do banco real (não apenas documentado em comentário) que
+// a migration 000008 realmente bloqueia UPDATE/DELETE/TRUNCATE em
+// audit_logs — uma trilha de auditoria que pode ser editada não prova
+// nada.
+func TestAuditLogs_AreImmutable(t *testing.T) {
+	pool := testPool(t)
+	writer := NewWriter(pool)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	if err := writer.Record(ctx, Entry{Action: "test.immutability", CorrelationID: &corrID}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	t.Run("UPDATE é rejeitado", func(t *testing.T) {
+		_, err := pool.Exec(ctx, `UPDATE audit_logs SET action = 'tampered' WHERE correlation_id = $1`, corrID)
+		if err == nil {
+			t.Fatal("esperava erro ao tentar UPDATE em audit_logs, mas foi bem-sucedido")
+		}
+	})
+
+	t.Run("DELETE é rejeitado", func(t *testing.T) {
+		_, err := pool.Exec(ctx, `DELETE FROM audit_logs WHERE correlation_id = $1`, corrID)
+		if err == nil {
+			t.Fatal("esperava erro ao tentar DELETE em audit_logs, mas foi bem-sucedido")
+		}
+	})
+
+	t.Run("TRUNCATE é rejeitado", func(t *testing.T) {
+		_, err := pool.Exec(ctx, `TRUNCATE audit_logs`)
+		if err == nil {
+			t.Fatal("esperava erro ao tentar TRUNCATE em audit_logs, mas foi bem-sucedido")
+		}
+	})
+
+	// A linha original precisa continuar exatamente como foi gravada —
+	// nenhuma das tentativas acima deve ter alterado nada.
+	var action string
+	err := pool.QueryRow(ctx, `SELECT action FROM audit_logs WHERE correlation_id = $1`, corrID).Scan(&action)
+	if err != nil {
+		t.Fatalf("query row: %v", err)
+	}
+	if action != "test.immutability" {
+		t.Errorf("action = %q, want unchanged %q", action, "test.immutability")
+	}
+}
+
 func TestWriter_Record_NilUserAndEmptyIP(t *testing.T) {
 	pool := testPool(t)
 	writer := NewWriter(pool)

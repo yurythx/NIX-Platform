@@ -1,0 +1,29 @@
+name: Secret scanning (gitleaks)
+
+# Roda o gitleaks via binário direto (não a GitHub Action oficial), que
+# exige uma license key para repositórios privados de organização — o
+# binário standalone é sempre gratuito e cobre o mesmo caso de uso:
+# impedir que uma senha, token ou chave de API vaze num commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gitleaks:
+    name: Scan for leaked secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # histórico completo — gitleaks varre todos os commits do PR/push, não só o HEAD
+
+      - name: Install gitleaks
+        run: |
+          curl -sSL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+
+      - name: Run gitleaks
+        run: ./gitleaks detect --source . --verbose --redact
