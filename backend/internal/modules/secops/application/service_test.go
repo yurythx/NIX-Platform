@@ -106,6 +106,56 @@ func TestProcessJob_Success_CompletesAndUpdatesIntegration(t *testing.T) {
 	}
 }
 
+// countingProvider errors if TestConnection is called more than once, so
+// a test can prove a redelivered event was skipped rather than merely
+// reprocessed idempotently by coincidence.
+type countingProvider struct {
+	calls int
+}
+
+func (p *countingProvider) Name() string { return "virustotal" }
+func (p *countingProvider) TestConnection(ctx context.Context) error {
+	p.calls++
+	if p.calls > 1 {
+		return fmt.Errorf("TestConnection called again — the job should have been skipped as a duplicate delivery")
+	}
+	return nil
+}
+func (p *countingProvider) AnalyzeTarget(ctx context.Context, target string) (*domain.SecCheckResult, error) {
+	return &domain.SecCheckResult{Success: true}, nil
+}
+
+func TestProcessJob_RedeliveryOfCompletedJob_IsANoOp(t *testing.T) {
+	pool := testPool(t)
+	resetIntegration(t, pool)
+	jobsRepo := jobs.NewRepository(pool)
+	outboxWriter := outbox.NewWriter("nix.test")
+	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
+	provider := &countingProvider{}
+	svc := NewService(pool, jobsRepo, outboxWriter, map[string]domain.SecurityProvider{"virustotal": provider}, integrationsSvc, nil, testLogger())
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateTestJob(ctx, "virustotal", corrID, nil)
+	if err != nil {
+		t.Fatalf("CreateTestJob: %v", err)
+	}
+
+	if err := svc.ProcessJob(ctx, job.ID, "virustotal", corrID); err != nil {
+		t.Fatalf("first ProcessJob: %v", err)
+	}
+
+	// Simulates RabbitMQ redelivering the same integration.test.requested
+	// event after the job already completed.
+	if err := svc.ProcessJob(ctx, job.ID, "virustotal", corrID); err != nil {
+		t.Fatalf("redelivered ProcessJob should be a no-op, got error: %v", err)
+	}
+
+	if provider.calls != 1 {
+		t.Errorf("provider.TestConnection called %d times, want exactly 1", provider.calls)
+	}
+}
+
 func TestHandleDeadLetter_MarksOfflineAfterFailures(t *testing.T) {
 	pool := testPool(t)
 	resetIntegration(t, pool)

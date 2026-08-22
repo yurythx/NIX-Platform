@@ -111,7 +111,21 @@ func (s *Service) CreateTestJob(ctx context.Context, providerKey string, correla
 // diario_oficial, a failure is recorded but returned as an error so the
 // messaging consumer retries — only HandleDeadLetter publishes the
 // user-facing failure notification.
+//
+// Idempotency (§18): see the identical guard in diario_oficial's
+// ProcessJob — a redelivered event for an already-terminal job is a
+// no-op rather than an error-triggering reprocess attempt.
 func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, providerKey string, correlationID uuid.UUID) error {
+	current, err := s.jobsRepo.GetByID(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("secops: load job %s: %w", jobID, err)
+	}
+	if current.Status == jobs.StatusCompleted || current.Status == jobs.StatusDeadLetter {
+		s.logger.Info("secops: duplicate delivery of an already-finished job, skipping",
+			slog.String("job_id", jobID.String()), slog.String("status", string(current.Status)))
+		return nil
+	}
+
 	provider, ok := s.providers[providerKey]
 	if !ok {
 		return fmt.Errorf("secops: unknown provider %q for job %s", providerKey, jobID)
@@ -137,7 +151,7 @@ func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, providerKey s
 		return checkErr
 	}
 
-	err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
+	err = database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		if err := s.outboxWriter.Write(ctx, tx, EventTestCompleted, "job", jobID.String(), correlationID, eventPayload{JobID: jobID, ProviderKey: providerKey}); err != nil {
 			return err
 		}

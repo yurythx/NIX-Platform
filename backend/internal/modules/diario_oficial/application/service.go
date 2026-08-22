@@ -108,7 +108,25 @@ func (s *Service) CreateTestJob(ctx context.Context, correlationID uuid.UUID, re
 // messaging consumer) retries per §12 — it deliberately does NOT publish a
 // job.failed notification yet, since the job may still succeed on retry.
 // Only HandleDeadLetter, called once RabbitMQ gives up, does that.
+//
+// Idempotency (§18): RabbitMQ's at-least-once delivery means the same
+// diario_oficial.job.created event can arrive more than once (a redelivery
+// racing an ack, a retry republish crossing with the original, ...). If
+// this job has already reached a terminal state, re-running the check
+// would be redundant at best and, since MarkProcessing/MarkCompleted
+// enforce valid status transitions, would error at worst — so terminal
+// jobs are a no-op here instead of being reprocessed.
 func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, correlationID uuid.UUID) error {
+	current, err := s.jobsRepo.GetByID(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("diario_oficial: load job %s: %w", jobID, err)
+	}
+	if current.Status == jobs.StatusCompleted || current.Status == jobs.StatusDeadLetter {
+		s.logger.Info("diario_oficial: duplicate delivery of an already-finished job, skipping",
+			slog.String("job_id", jobID.String()), slog.String("status", string(current.Status)))
+		return nil
+	}
+
 	checkResult, checkErr := s.client.Check(ctx)
 
 	txErr := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
@@ -132,7 +150,7 @@ func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, correlationID
 
 	// Success: publish job.completed and update integration status in one
 	// transaction — same guarantee as job creation (§16).
-	err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
+	err = database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		if err := s.outboxWriter.Write(ctx, tx, EventJobCompleted, "job", jobID.String(), correlationID, jobPayload{JobID: jobID}); err != nil {
 			return err
 		}

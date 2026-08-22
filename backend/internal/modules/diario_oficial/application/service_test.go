@@ -131,6 +131,58 @@ func TestProcessJob_Success_CompletesJobAndPublishesEvent(t *testing.T) {
 	}
 }
 
+// countingClient errors if Check is called more than once, so a test can
+// prove a redelivered event was skipped rather than merely reprocessed
+// idempotently by coincidence.
+type countingClient struct {
+	calls int
+}
+
+func (c *countingClient) Check(ctx context.Context) (*domain.CheckResult, error) {
+	c.calls++
+	if c.calls > 1 {
+		return nil, fmt.Errorf("Check called again — the job should have been skipped as a duplicate delivery")
+	}
+	return &domain.CheckResult{StatusCode: 200, Summary: "ok"}, nil
+}
+
+func TestProcessJob_RedeliveryOfCompletedJob_IsANoOp(t *testing.T) {
+	pool := testPool(t)
+	resetIntegration(t, pool)
+	client := &countingClient{}
+	svc := newService(pool, client)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateTestJob(ctx, corrID, nil)
+	if err != nil {
+		t.Fatalf("CreateTestJob: %v", err)
+	}
+
+	if err := svc.ProcessJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("first ProcessJob: %v", err)
+	}
+
+	// Simulates RabbitMQ redelivering the same diario_oficial.job.created
+	// event after the job already completed.
+	if err := svc.ProcessJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("redelivered ProcessJob should be a no-op, got error: %v", err)
+	}
+
+	if client.calls != 1 {
+		t.Errorf("external Check called %d times, want exactly 1", client.calls)
+	}
+
+	repo := jobs.NewRepository(pool)
+	fetched, err := repo.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if fetched.Status != jobs.StatusCompleted {
+		t.Errorf("Status = %s, want completed (unchanged by the redelivery)", fetched.Status)
+	}
+}
+
 func TestProcessJob_Failure_MarksFailedAndReturnsErrorForRetry(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool, &fakeClient{err: fmt.Errorf("connection refused")})
