@@ -1,25 +1,27 @@
-// Package pagination provides a shared page/page_size contract for every
-// list endpoint in the platform, enforcing an upper bound so no handler can
-// accidentally return an unbounded listing.
+// Package pagination fornece um contrato compartilhado de page/page_size
+// para todo endpoint de listagem da plataforma, impondo um teto superior
+// para que nenhum handler consiga acidentalmente retornar uma listagem sem
+// limite (o que, com uma tabela grande, derrubaria a API ou o cliente).
 package pagination
 
 const (
 	DefaultPage     = 1
 	DefaultPageSize = 20
-	// AbsoluteMaxPageSize is the hard ceiling applied even if a caller's
-	// configured MaxPageSize is set higher by mistake.
+	// AbsoluteMaxPageSize é o teto rígido aplicado mesmo se o
+	// MaxPageSize configurado por quem chama for definido mais alto por
+	// engano.
 	AbsoluteMaxPageSize = 200
 )
 
-// Params is a validated, bounded page request.
+// Params é uma requisição de página já validada e limitada.
 type Params struct {
 	Page     int
 	PageSize int
 }
 
-// New builds Params from raw (possibly zero/absent) query values, clamping
-// page to >=1 and pageSize to [1, maxPageSize]. maxPageSize <= 0 falls back
-// to AbsoluteMaxPageSize.
+// New constrói Params a partir de valores brutos de query (possivelmente
+// zero/ausentes), limitando page a >=1 e pageSize a [1, maxPageSize].
+// maxPageSize <= 0 cai no padrão AbsoluteMaxPageSize.
 func New(page, pageSize, maxPageSize int) Params {
 	if page < 1 {
 		page = DefaultPage
@@ -36,18 +38,18 @@ func New(page, pageSize, maxPageSize int) Params {
 	return Params{Page: page, PageSize: pageSize}
 }
 
-// Offset returns the SQL OFFSET for these params.
+// Offset retorna o OFFSET SQL correspondente a estes params.
 func (p Params) Offset() int {
 	return (p.Page - 1) * p.PageSize
 }
 
-// Limit returns the SQL LIMIT for these params.
+// Limit retorna o LIMIT SQL correspondente a estes params.
 func (p Params) Limit() int {
 	return p.PageSize
 }
 
-// Meta is the pagination metadata returned in the response envelope's
-// "meta" field.
+// Meta são os metadados de paginação retornados no campo "meta" do
+// envelope de resposta (§27/§46).
 type Meta struct {
 	Page       int   `json:"page"`
 	PageSize   int   `json:"page_size"`
@@ -55,7 +57,8 @@ type Meta struct {
 	TotalPages int   `json:"total_pages"`
 }
 
-// NewMeta computes Meta from the requested params and the total row count.
+// NewMeta calcula Meta a partir dos params requisitados e da contagem
+// total de linhas.
 func NewMeta(p Params, totalItems int64) Meta {
 	totalPages := 0
 	if p.PageSize > 0 {

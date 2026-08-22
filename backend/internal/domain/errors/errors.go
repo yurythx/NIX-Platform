@@ -1,7 +1,8 @@
-// Package errors defines the application-wide error taxonomy. Domain and
-// application code returns these errors instead of raw driver/library
-// errors; the transport layer maps them to HTTP status codes and never
-// leaks internal details (stack traces, SQL, driver messages) to clients.
+// Package errors define a taxonomia de erros usada em toda a aplicação.
+// Código de domínio e de aplicação retorna estes erros em vez de erros
+// brutos de driver/biblioteca; a camada de transporte os mapeia para
+// códigos de status HTTP e nunca vaza detalhe interno (stack trace, SQL,
+// mensagens de driver) para o cliente.
 package errors
 
 import (
@@ -9,8 +10,8 @@ import (
 	"fmt"
 )
 
-// Code is a stable, machine-readable error identifier returned to clients
-// in the standard error envelope's "code" field.
+// Code é um identificador de erro estável e legível por máquina, retornado
+// ao cliente no campo "code" do envelope de erro padrão.
 type Code string
 
 const (
@@ -25,8 +26,9 @@ const (
 	CodeInternal              Code = "INTERNAL_ERROR"
 )
 
-// Error is the canonical application error. Message is safe to expose to
-// API clients; Err (when set) wraps the underlying cause for logging only.
+// Error é o erro canônico da aplicação. Message é seguro de expor a
+// clientes da API; Err (quando definido) envolve a causa subjacente
+// apenas para fins de log — nunca é serializado na resposta HTTP.
 type Error struct {
 	Status  int
 	Code    Code
@@ -41,11 +43,12 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
-// Unwrap allows errors.Is/errors.As to reach the wrapped cause.
+// Unwrap permite que errors.Is/errors.As alcancem a causa envolvida.
 func (e *Error) Unwrap() error { return e.Err }
 
-// WithCode returns a copy of e with its Code replaced. Useful for
-// domain-specific codes that still map to a standard HTTP status, e.g.
+// WithCode retorna uma cópia de e com o Code substituído. Útil para
+// códigos específicos de domínio que ainda assim mapeiam para um status
+// HTTP padrão, ex.:
 // DependencyUnavailable("...").WithCode("INTEGRATION_UNAVAILABLE").
 func (e *Error) WithCode(code Code) *Error {
 	cp := *e
@@ -53,8 +56,9 @@ func (e *Error) WithCode(code Code) *Error {
 	return &cp
 }
 
-// WithCause returns a copy of e wrapping the given underlying error for
-// logging/observability, without changing the message exposed to clients.
+// WithCause retorna uma cópia de e envolvendo o erro subjacente informado,
+// só para fins de log/observabilidade, sem alterar a mensagem exposta ao
+// cliente.
 func (e *Error) WithCause(cause error) *Error {
 	cp := *e
 	cp.Err = cause
@@ -93,14 +97,15 @@ func DependencyUnavailable(message string) *Error {
 	return &Error{Status: 503, Code: CodeDependencyUnavailable, Message: message}
 }
 
-// Internal wraps an unexpected error. The message returned to clients is
-// always generic; callers must not put sensitive detail in it.
+// Internal envolve um erro inesperado. A mensagem retornada ao cliente é
+// sempre genérica; quem chama não deve colocar detalhe sensível nela — o
+// detalhe real fica só em cause, disponível para o log.
 func Internal(cause error) *Error {
 	return &Error{Status: 500, Code: CodeInternal, Message: "an unexpected error occurred", Err: cause}
 }
 
-// As is a small helper for transport code: it reports whether err (or
-// something it wraps) is an *Error, returning it if so.
+// As é um pequeno helper para código de transporte: reporta se err (ou
+// algo que ele envolve) é um *Error, retornando-o se for o caso.
 func As(err error) (*Error, bool) {
 	var appErr *Error
 	if stderrors.As(err, &appErr) {

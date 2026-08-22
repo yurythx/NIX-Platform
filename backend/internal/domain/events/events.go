@@ -1,7 +1,9 @@
-// Package events defines the platform-wide event envelope and the
-// messaging abstractions the domain/application layers depend on.
-// Concrete transport (RabbitMQ) lives in internal/platform/messaging and
-// implements these interfaces — the domain never imports an AMQP client.
+// Package events define o envelope de evento usado em toda a plataforma e
+// as abstrações de mensageria das quais as camadas de domínio/aplicação
+// dependem. O transporte concreto (RabbitMQ) vive em
+// internal/platform/messaging e implementa estas interfaces — o domínio
+// nunca importa um cliente AMQP diretamente (§25), o que permite trocar de
+// broker sem tocar em regra de negócio.
 package events
 
 import (
@@ -13,12 +15,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// EnvelopeVersion is the current event envelope schema version.
+// EnvelopeVersion é a versão atual do schema do envelope de evento.
 const EnvelopeVersion = 1
 
-// Event is the standard envelope every published/consumed message carries.
-// Type doubles as the RabbitMQ routing key and must follow the
-// "<context>.<entity>.<action>" convention, e.g. "diario_oficial.job.completed".
+// Event é o envelope padrão que toda mensagem publicada/consumida carrega.
+// Type também serve como routing key do RabbitMQ e precisa seguir a
+// convenção "<contexto>.<entidade>.<ação>", ex.:
+// "diario_oficial.job.completed".
 type Event struct {
 	ID            uuid.UUID       `json:"id"`
 	Type          string          `json:"type"`
@@ -29,7 +32,7 @@ type Event struct {
 	Payload       json.RawMessage `json:"payload"`
 }
 
-// New builds an Event envelope, marshaling payload into the Payload field.
+// New constrói um envelope Event, serializando payload no campo Payload.
 func New(eventType, source string, correlationID uuid.UUID, payload any) (Event, error) {
 	if eventType == "" {
 		return Event{}, fmt.Errorf("events: type is required")
@@ -57,26 +60,29 @@ func New(eventType, source string, correlationID uuid.UUID, payload any) (Event,
 	}, nil
 }
 
-// UnmarshalPayload decodes the event payload into dst.
+// UnmarshalPayload decodifica o payload do evento em dst.
 func (e Event) UnmarshalPayload(dst any) error {
 	return json.Unmarshal(e.Payload, dst)
 }
 
-// EventPublisher publishes a fully-formed event envelope. Implementations
-// must use the event's Type as the routing key and should provide
-// at-least-once delivery guarantees (e.g. RabbitMQ publisher confirms).
+// EventPublisher publica um envelope de evento já totalmente formado.
+// Implementações precisam usar o Type do evento como routing key e devem
+// oferecer garantia de entrega pelo menos uma vez (at-least-once —
+// ex.: publisher confirms do RabbitMQ).
 type EventPublisher interface {
 	Publish(ctx context.Context, event Event) error
 }
 
-// MessageHandler processes one consumed event. Returning nil acknowledges
-// the message; returning an error triggers the transport's retry/DLQ
-// policy. Handlers must be idempotent — the same event ID may be delivered
-// more than once.
+// MessageHandler processa um evento consumido. Retornar nil confirma
+// (acknowledge) a mensagem; retornar um erro dispara a política de
+// retry/DLQ do transporte. Handlers precisam ser idempotentes — o mesmo id
+// de evento pode ser entregue mais de uma vez (ex.: numa redelivery após
+// falha de rede antes do ack chegar ao broker).
 type MessageHandler func(ctx context.Context, event Event) error
 
-// EventConsumer subscribes handler to a transport-specific source (queue)
-// and blocks until ctx is cancelled or an unrecoverable error occurs.
+// EventConsumer assina handler a uma origem específica do transporte
+// (uma fila) e bloqueia até ctx ser cancelado ou ocorrer um erro
+// irrecuperável.
 type EventConsumer interface {
 	Consume(ctx context.Context, handler MessageHandler) error
 }
