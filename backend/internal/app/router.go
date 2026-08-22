@@ -22,6 +22,7 @@ func NewRouter(deps *Dependencies) chi.Router {
 
 	checks := []httpserver.Check{
 		{Name: "postgres", Fn: database.Ping(deps.DB)},
+		{Name: "rabbitmq", Fn: deps.Messaging.Ping},
 	}
 	r.Get("/ready", httpserver.ReadyHandler(checks, 3*time.Second))
 

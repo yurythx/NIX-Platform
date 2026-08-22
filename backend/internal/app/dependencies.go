@@ -12,20 +12,24 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/yurythx/nix-platform/internal/domain/events"
 	"github.com/yurythx/nix-platform/internal/platform/auth"
 	"github.com/yurythx/nix-platform/internal/platform/config"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/logging"
+	"github.com/yurythx/nix-platform/internal/platform/messaging"
 )
 
 // Dependencies holds every shared platform resource. Module-specific
 // dependencies (repositories, use cases) are added to this struct as each
 // module is wired in; nothing here should hold business logic.
 type Dependencies struct {
-	Config   *config.Config
-	Logger   *slog.Logger
-	DB       *pgxpool.Pool
-	Verifier *auth.Verifier
+	Config    *config.Config
+	Logger    *slog.Logger
+	DB        *pgxpool.Pool
+	Verifier  *auth.Verifier
+	Messaging *messaging.Connection
+	Publisher events.EventPublisher
 }
 
 // NewDependencies builds and validates every platform dependency. It
@@ -56,17 +60,43 @@ func NewDependencies(ctx context.Context) (*Dependencies, error) {
 		return nil, fmt.Errorf("app: initialize OIDC verifier: %w", err)
 	}
 
+	mqConn, err := messaging.Connect(ctx, cfg.RabbitMQ.URL, logger)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app: connect to rabbitmq: %w", err)
+	}
+
+	topologyCh, err := mqConn.Channel()
+	if err != nil {
+		pool.Close()
+		_ = mqConn.Close()
+		return nil, fmt.Errorf("app: open channel to declare topology: %w", err)
+	}
+	if err := messaging.DeclareTopology(topologyCh, messaging.AllQueues()); err != nil {
+		pool.Close()
+		_ = mqConn.Close()
+		return nil, fmt.Errorf("app: declare rabbitmq topology: %w", err)
+	}
+	_ = topologyCh.Close()
+
+	publisher := messaging.NewPublisher(mqConn)
+
 	return &Dependencies{
-		Config:   cfg,
-		Logger:   logger,
-		DB:       pool,
-		Verifier: verifier,
+		Config:    cfg,
+		Logger:    logger,
+		DB:        pool,
+		Verifier:  verifier,
+		Messaging: mqConn,
+		Publisher: publisher,
 	}, nil
 }
 
 // Close releases every resource opened by NewDependencies. Safe to call
 // once during graceful shutdown.
 func (d *Dependencies) Close() {
+	if d.Messaging != nil {
+		_ = d.Messaging.Close()
+	}
 	if d.DB != nil {
 		d.DB.Close()
 	}
