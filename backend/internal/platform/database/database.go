@@ -1,7 +1,7 @@
-// Package database configures the shared PostgreSQL connection pool
-// (pgx/v5 + pgxpool). Modules receive a *pgxpool.Pool (or a narrower
-// interface over it) through dependency injection — nothing in this
-// package knows about business schemas.
+// Package database configura o pool de conexões PostgreSQL compartilhado
+// (pgx/v5 + pgxpool). Os módulos recebem um *pgxpool.Pool (ou uma interface
+// mais estreita sobre ele) via injeção de dependência — nada neste pacote
+// conhece os schemas de negócio.
 package database
 
 import (
@@ -15,13 +15,14 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/config"
 )
 
-// pgxTx is a local alias so callers of WithTx don't need to import pgx
-// directly just to spell the transaction type.
+// pgxTx é um alias local para que quem chama WithTx não precise importar o
+// pacote pgx diretamente só para escrever o tipo da transação.
 type pgxTx = pgx.Tx
 
-// New builds and validates a pgxpool.Pool from the given database config.
-// It applies pool sizing/lifetime/idle settings and performs an initial
-// ping so misconfiguration fails fast at startup rather than on first use.
+// New constrói e valida um *pgxpool.Pool a partir da configuração de banco
+// informada. Aplica os parâmetros de tamanho de pool/tempo de vida/ociosidade
+// e faz um ping inicial, para que uma configuração errada falhe rápido no
+// startup (fail fast) em vez de só na primeira query real da aplicação.
 func New(ctx context.Context, cfg config.DatabaseConfig) (*pgxpool.Pool, error) {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {
@@ -49,22 +50,30 @@ func New(ctx context.Context, cfg config.DatabaseConfig) (*pgxpool.Pool, error) 
 	return pool, nil
 }
 
-// Ping is a readiness Check function suitable for httpserver.Check.
+// Ping é uma função de verificação (Check) de readiness, compatível com
+// httpserver.Check — usada pelo endpoint /ready para reportar se o
+// PostgreSQL está alcançável (§54).
 func Ping(pool *pgxpool.Pool) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		return pool.Ping(ctx)
 	}
 }
 
-// WithTx runs fn inside a PostgreSQL transaction, committing on success and
-// rolling back on error or panic. Used by application use cases that must
-// write business data and an outbox event atomically (§16).
+// WithTx roda fn dentro de uma transação PostgreSQL, fazendo commit em caso
+// de sucesso e rollback em caso de erro ou panic. Usado por casos de uso da
+// camada de aplicação que precisam gravar dado de negócio e um evento de
+// outbox atomicamente — a mesma transação garante que "o job foi criado" e
+// "o evento que vai disparar o worker" nascem juntos ou não nascem nenhum
+// dos dois (§16, o padrão Transactional Outbox).
 func WithTx(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Context, tx pgxTx) error) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("database: begin transaction: %w", err)
 	}
 
+	// Se fn (ou algo que ela chame) der panic, ainda assim tenta reverter
+	// a transação antes de repropagar o panic — senão a conexão fica presa
+	// numa transação aberta e "vazando" no pool.
 	defer func() {
 		if p := recover(); p != nil {
 			_ = tx.Rollback(ctx)
@@ -85,6 +94,7 @@ func WithTx(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Context
 	return nil
 }
 
-// DefaultTimeout is the default per-query timeout applied by callers that
-// don't derive a more specific deadline from the incoming request context.
+// DefaultTimeout é o timeout padrão por query aplicado por quem chama e não
+// deriva um prazo mais específico a partir do contexto da requisição de
+// entrada.
 const DefaultTimeout = 5 * time.Second

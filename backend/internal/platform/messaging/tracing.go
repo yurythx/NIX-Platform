@@ -8,10 +8,12 @@ import (
 
 var tracer = otel.Tracer("nix.messaging")
 
-// amqpHeaderCarrier adapts amqp.Table to otel's TextMapCarrier so trace
-// context travels with a message from Publish to Consume — a no-op when
-// tracing is disabled (§51's default), and a real cross-process link
-// (HTTP request -> outbox -> RabbitMQ -> worker) when it's configured.
+// amqpHeaderCarrier adapta amqp.Table para o TextMapCarrier do otel, para
+// que o contexto de trace viaje junto com uma mensagem do Publish até o
+// Consume — vira no-op quando o tracing está desabilitado (padrão do §51),
+// e um link real entre processos (requisição HTTP -> outbox -> RabbitMQ ->
+// worker) quando está configurado, permitindo ver o fluxo completo de um
+// job num único trace.
 type amqpHeaderCarrier amqp.Table
 
 func (c amqpHeaderCarrier) Get(key string) string {

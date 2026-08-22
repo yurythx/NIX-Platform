@@ -8,25 +8,30 @@ import (
 	"github.com/yurythx/nix-platform/pkg/httputil"
 )
 
-// Check is one readiness dependency check (e.g. "postgres", "rabbitmq").
+// Check é uma verificação de dependência de readiness (ex.: "postgres",
+// "rabbitmq") — um nome para exibir no relatório e a função que
+// efetivamente testa se a dependência está alcançável.
 type Check struct {
 	Name string
 	Fn   func(ctx context.Context) error
 }
 
-// HealthHandler answers liveness: the process is up and able to handle
-// HTTP requests. It never checks external dependencies — that is /ready's
-// job — so a struggling dependency doesn't get the process killed by an
-// orchestrator's liveness probe.
+// HealthHandler responde à sonda de liveness: o processo está de pé e
+// consegue atender requisições HTTP. Nunca verifica dependências externas
+// — essa é a responsabilidade do /ready — para que uma dependência com
+// problema (ex.: Postgres fora do ar) não faça um orquestrador (Kubernetes,
+// Docker Swarm) matar o processo via probe de liveness quando na verdade
+// o processo em si está saudável (§54).
 func HealthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteOK(w, map[string]string{"status": "ok"})
 	}
 }
 
-// ReadyHandler checks every essential dependency (PostgreSQL, RabbitMQ)
-// with the given per-check timeout and reports 200 only if all succeed,
-// 503 otherwise.
+// ReadyHandler verifica cada dependência essencial (PostgreSQL, RabbitMQ)
+// com o timeout por verificação informado, e reporta 200 somente se todas
+// tiverem sucesso — 503 caso contrário. Usado por um orquestrador para
+// decidir se deve rotear tráfego para esta instância.
 func ReadyHandler(checks []Check, timeout time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		results := make(map[string]string, len(checks))

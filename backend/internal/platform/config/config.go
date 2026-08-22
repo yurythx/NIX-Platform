@@ -1,7 +1,9 @@
-// Package config loads and validates the NIX Platform configuration from
-// environment variables. Missing required configuration makes Load return
-// an error immediately (fail fast) instead of letting the application start
-// in a partially configured state.
+// Package config carrega e valida a configuração do NIX Platform a partir
+// de variáveis de ambiente. Configuração obrigatória ausente faz Load
+// retornar um erro imediatamente (fail fast) em vez de deixar a aplicação
+// subir num estado parcialmente configurado — é preferível o processo nem
+// iniciar a iniciar e falhar de forma imprevisível no primeiro request que
+// tocar a configuração faltante.
 package config
 
 import (
@@ -12,7 +14,7 @@ import (
 	"time"
 )
 
-// AppConfig holds general application identity settings.
+// AppConfig guarda as configurações gerais de identidade da aplicação.
 type AppConfig struct {
 	Env       string // development | staging | production
 	Name      string
@@ -20,7 +22,7 @@ type AppConfig struct {
 	LogFormat string // json | text
 }
 
-// HTTPConfig holds the HTTP server bind settings.
+// HTTPConfig guarda as configurações de bind do servidor HTTP.
 type HTTPConfig struct {
 	Host string
 	Port int
@@ -30,7 +32,7 @@ func (c HTTPConfig) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
 
-// DatabaseConfig holds the PostgreSQL connection and pool settings.
+// DatabaseConfig guarda as configurações de conexão e pool do PostgreSQL.
 type DatabaseConfig struct {
 	Host            string
 	Port            int
@@ -45,7 +47,7 @@ type DatabaseConfig struct {
 	ConnectTimeout  time.Duration
 }
 
-// DSN returns a libpq-style connection string suitable for pgxpool.
+// DSN retorna uma connection string no estilo libpq, pronta para o pgxpool.
 func (c DatabaseConfig) DSN() string {
 	return fmt.Sprintf(
 		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s connect_timeout=%d",
@@ -53,14 +55,17 @@ func (c DatabaseConfig) DSN() string {
 	)
 }
 
-// RabbitMQConfig holds RabbitMQ connection and retry/prefetch settings.
+// RabbitMQConfig guarda as configurações de conexão e de retry/prefetch do
+// RabbitMQ.
 type RabbitMQConfig struct {
 	URL           string
 	MaxRetries    int
 	PrefetchCount int
 }
 
-// KeycloakConfig holds the OIDC settings for the externally managed Keycloak.
+// KeycloakConfig guarda as configurações OIDC do Keycloak gerenciado
+// externamente — este projeto nunca cria/administra o Keycloak em si,
+// apenas consome um realm/client já existentes (§29).
 type KeycloakConfig struct {
 	IssuerURL    string
 	Realm        string
@@ -69,14 +74,14 @@ type KeycloakConfig struct {
 	Audience     string
 }
 
-// JobsConfig holds asynchronous job processing settings.
+// JobsConfig guarda as configurações de processamento assíncrono de jobs.
 type JobsConfig struct {
 	Timeout time.Duration
 }
 
-// WorkerConfig holds settings for cmd/worker's own minimal HTTP listener,
-// used only for /health and /metrics (Docker healthcheck + Prometheus
-// scrape) — never for business traffic.
+// WorkerConfig guarda as configurações do listener HTTP mínimo próprio do
+// cmd/worker, usado só para /health e /metrics (healthcheck do Docker +
+// scrape do Prometheus) — nunca para tráfego de negócio.
 type WorkerConfig struct {
 	MetricsHost string
 	MetricsPort int
@@ -86,22 +91,24 @@ func (c WorkerConfig) MetricsAddr() string {
 	return fmt.Sprintf("%s:%d", c.MetricsHost, c.MetricsPort)
 }
 
-// DiarioOficialConfig holds settings for the Diário Oficial integration.
-// BaseURL is intentionally allowed to be empty — an unconfigured
-// environment should report the integration as unavailable, not crash.
+// DiarioOficialConfig guarda as configurações da integração com o Diário
+// Oficial. BaseURL é deliberadamente permitido vazio — um ambiente sem
+// essa integração configurada deve reportá-la como indisponível, não
+// derrubar o processo.
 type DiarioOficialConfig struct {
 	BaseURL string
 	Timeout time.Duration
 }
 
-// VirusTotalConfig holds settings for the VirusTotal SecOps integration.
+// VirusTotalConfig guarda as configurações da integração SecOps com o
+// VirusTotal.
 type VirusTotalConfig struct {
 	APIKey  string
 	BaseURL string
 	Timeout time.Duration
 }
 
-// Config is the fully validated application configuration.
+// Config é a configuração da aplicação já totalmente validada.
 type Config struct {
 	App      AppConfig
 	HTTP     HTTPConfig
@@ -121,8 +128,9 @@ type Config struct {
 	MaxPageSize         int
 }
 
-// loader accumulates lookup errors so Load reports every missing variable at
-// once instead of forcing the operator through a fix-one-restart-repeat loop.
+// loader acumula os erros de leitura para que Load reporte de uma vez toda
+// variável faltante, em vez de forçar quem está operando a passar por um
+// ciclo de "corrige uma, reinicia, corrige a próxima".
 type loader struct {
 	errs []string
 }
@@ -199,8 +207,9 @@ func (l *loader) durationVal(key string, required bool, def time.Duration) time.
 	return d
 }
 
-// Load reads configuration from the process environment. It returns an
-// error naming every missing/invalid required variable if validation fails.
+// Load lê a configuração a partir do ambiente do processo. Retorna um erro
+// nomeando toda variável obrigatória ausente/inválida, caso a validação
+// falhe.
 func Load() (*Config, error) {
 	l := &loader{}
 
@@ -274,7 +283,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// IsProduction reports whether the application is running in production.
+// IsProduction reporta se a aplicação está rodando em produção.
 func (c *Config) IsProduction() bool {
 	return c.App.Env == "production"
 }

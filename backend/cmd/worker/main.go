@@ -1,7 +1,9 @@
-// Command worker runs the NIX Platform asynchronous processors: RabbitMQ
-// queue consumers (diario_oficial, integrations, notifications), the
-// outbox publisher, and job execution. It shares platform dependencies
-// with cmd/api but never serves HTTP traffic.
+// Command worker roda os processadores assíncronos do NIX Platform:
+// consumers das filas do RabbitMQ (diario_oficial, integrations,
+// notifications), o publisher do outbox e a execução dos jobs. Compartilha
+// as dependências de plataforma com o cmd/api, mas nunca serve tráfego
+// HTTP de negócio — só um listener mínimo para /health e /metrics
+// (ver RunMetricsServer em internal/app/worker.go).
 package main
 
 import (
@@ -39,10 +41,18 @@ func run() error {
 
 	deps.Logger.Info("worker starting")
 
+	// Roda os consumers/outbox publisher e o listener de métricas em
+	// goroutines separadas; o processo só é considerado "rodando de
+	// verdade" quando ambos estão de pé (ambos escrevem em errCh quando
+	// terminam, seja por erro ou pelo cancelamento de ctx).
 	errCh := make(chan error, 2)
 	go func() { errCh <- runner.Run(ctx) }()
 	go func() { errCh <- runner.RunMetricsServer(ctx) }()
 
+	// Espera as duas goroutines terminarem antes de retornar — reporta o
+	// primeiro erro encontrado, mas não sai antes de ambas pararem (senão
+	// o defer deps.Close() em run() derrubaria as conexões debaixo de uma
+	// goroutine que ainda está usando o pool/canal AMQP).
 	var firstErr error
 	for i := 0; i < 2; i++ {
 		if err := <-errCh; err != nil && firstErr == nil {

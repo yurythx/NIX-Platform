@@ -17,14 +17,15 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
-// Consumer implements events.EventConsumer for a single queue. Retries are
-// application-controlled: on handler failure it sleeps for a backoff
-// interval, then republishes an updated copy of the message (with an
-// incremented attempt count) and acks the original — rather than relying
-// on RabbitMQ's native requeue, which cannot carry an updated attempt
-// count. Once RabbitMQConfig.MaxRetries is exhausted, the delivery is
-// nacked without requeue, which RabbitMQ routes natively to the queue's
-// configured DLQ (§11/§12/§13).
+// Consumer implementa events.EventConsumer para uma única fila. Os retries
+// são controlados pela aplicação: quando o handler falha, o consumer
+// espera um intervalo de backoff, depois republica uma cópia atualizada da
+// mensagem (com a contagem de tentativas incrementada) e faz ack da
+// original — em vez de depender do requeue nativo do RabbitMQ, que não
+// consegue carregar uma contagem de tentativas atualizada. Uma vez que
+// RabbitMQConfig.MaxRetries se esgota, a entrega é nackada sem requeue, o
+// que o RabbitMQ roteia nativamente para a DLQ configurada da fila
+// (§11/§12/§13).
 type Consumer struct {
 	conn        *Connection
 	queueName   string
@@ -37,7 +38,7 @@ type Consumer struct {
 
 var _ events.EventConsumer = (*Consumer)(nil)
 
-// NewConsumer builds a Consumer for queueName.
+// NewConsumer constrói um Consumer para queueName.
 func NewConsumer(conn *Connection, queueName string, prefetch, maxRetries int, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		conn:        conn,
@@ -50,11 +51,11 @@ func NewConsumer(conn *Connection, queueName string, prefetch, maxRetries int, l
 	}
 }
 
-// Consume subscribes to the queue and dispatches each delivery to handler
-// on its own goroutine (bounded by prefetch, so a slow handler or retry
-// backoff never blocks unrelated messages). It blocks until ctx is
-// cancelled, then waits for in-flight deliveries to finish before
-// returning.
+// Consume assina a fila e despacha cada entrega para handler em sua
+// própria goroutine (limitada por prefetch, para que um handler lento ou
+// um backoff de retry nunca bloqueie mensagens não relacionadas). Bloqueia
+// até ctx ser cancelado, e então espera as entregas em andamento
+// terminarem antes de retornar.
 func (c *Consumer) Consume(ctx context.Context, handler events.MessageHandler) error {
 	ch, err := c.conn.Channel()
 	if err != nil {
@@ -63,13 +64,13 @@ func (c *Consumer) Consume(ctx context.Context, handler events.MessageHandler) e
 
 	var (
 		wg    sync.WaitGroup
-		ackMu sync.Mutex // serializes every operation on the shared channel `ch`, including its Close
+		ackMu sync.Mutex // serializa toda operação no canal compartilhado `ch`, incluindo seu Close
 		sem   = make(chan struct{}, max(c.prefetch, 1))
 	)
-	// Closing `ch` must never race an in-flight Ack/Nack issued by a
-	// handler goroutine — both go through ackMu, and wg.Wait() below
-	// guarantees every such goroutine has already finished before this
-	// runs.
+	// Fechar `ch` nunca pode competir (race) com um Ack/Nack em andamento
+	// emitido por uma goroutine de handler — ambos passam por ackMu, e o
+	// wg.Wait() abaixo garante que toda goroutine desse tipo já terminou
+	// antes deste defer rodar.
 	defer func() {
 		ackMu.Lock()
 		_ = ch.Close()
@@ -80,11 +81,12 @@ func (c *Consumer) Consume(ctx context.Context, handler events.MessageHandler) e
 		return fmt.Errorf("messaging: set QoS for queue %s: %w", c.queueName, err)
 	}
 
-	// Deliberately Consume (not ConsumeWithContext): the context variant
-	// spawns an internal goroutine that calls ch.Cancel on ctx.Done(),
-	// racing our own Ack/Nack calls on the same channel outside ackMu's
-	// protection. We fully own shutdown ourselves below instead — once
-	// ctx is done we stop reading deliveries and close ch under ackMu.
+	// Deliberadamente Consume (não ConsumeWithContext): a variante com
+	// contexto cria uma goroutine interna que chama ch.Cancel quando
+	// ctx.Done() dispara, competindo com nossas próprias chamadas de
+	// Ack/Nack no mesmo canal fora da proteção de ackMu. Preferimos
+	// controlar o shutdown por conta própria abaixo — assim que ctx
+	// termina, paramos de ler entregas e fechamos ch sob ackMu.
 	deliveries, err := ch.Consume(c.queueName, "", false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("messaging: consume queue %s: %w", c.queueName, err)
@@ -114,6 +116,9 @@ func (c *Consumer) Consume(ctx context.Context, handler events.MessageHandler) e
 func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp.Delivery, handler events.MessageHandler) {
 	logger := c.logger.With(slog.String("queue", c.queueName), slog.String("routing_key", d.RoutingKey), slog.String("message_id", d.MessageId))
 
+	// Extrai o contexto de trace propagado nos headers AMQP (injetado pelo
+	// publisher) para que o span de consumo continue o mesmo trace da
+	// requisição HTTP que originou o evento (§51).
 	ctx = otel.GetTextMapPropagator().Extract(ctx, amqpHeaderCarrier(d.Headers))
 	ctx, span := tracer.Start(ctx, "consume "+d.RoutingKey,
 		trace.WithSpanKind(trace.SpanKindConsumer),
@@ -128,8 +133,9 @@ func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp
 
 	var event events.Event
 	if err := json.Unmarshal(d.Body, &event); err != nil {
-		// A malformed envelope can never succeed on retry — send it
-		// straight to the DLQ instead of burning retry attempts on it.
+		// Um envelope malformado nunca vai ter sucesso numa nova
+		// tentativa — manda direto para a DLQ em vez de queimar
+		// tentativas de retry nele.
 		logger.Error("dropping undecodable message to DLQ", slog.Any("error", err))
 		_ = traceErr(span, err)
 		metrics.RabbitMQDLQTotal.WithLabelValues(c.queueName).Inc()
@@ -169,23 +175,23 @@ func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp
 	select {
 	case <-time.After(backoff):
 	case <-ctx.Done():
-		// Shutting down: put it straight back on the queue for whichever
-		// consumer picks it up next, rather than blocking shutdown on a
-		// full backoff sleep.
+		// Processo entrando em shutdown: devolve a mensagem direto para a
+		// fila para o próximo consumer que a pegar, em vez de bloquear o
+		// shutdown esperando um backoff completo.
 		ackMu.Lock()
 		_ = d.Nack(false, true)
 		ackMu.Unlock()
 		return
 	}
 
-	// The republish-and-wait-for-confirm below deliberately does NOT
-	// inherit ctx's cancellation: once the retried copy has been
-	// published, a concurrent, unrelated event on this same consumer
-	// (another delivery succeeding and triggering shutdown, or shutdown
-	// itself) must not turn a publish that already reached the broker
-	// into a spurious "failure" that falls back to native requeue and
-	// double-delivers the message. A bounded timeout still protects
-	// against a genuinely stuck broker.
+	// O republish-e-espera-confirmação abaixo deliberadamente NÃO herda o
+	// cancelamento de ctx: uma vez que a cópia com retry já foi publicada,
+	// um evento concorrente e não relacionado neste mesmo consumer (outra
+	// entrega tendo sucesso e disparando o shutdown, ou o próprio
+	// shutdown) não pode transformar uma publicação que já chegou no
+	// broker numa "falha" espúria que cai de volta no requeue nativo e
+	// entrega a mensagem em duplicidade. Um timeout limitado ainda protege
+	// contra um broker genuinamente travado.
 	retryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	err := c.republish(retryCtx, d, event, attempt)
 	cancel()
@@ -202,9 +208,11 @@ func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp
 	ackMu.Unlock()
 }
 
-// republish sends an updated copy of the message (with an incremented
-// attempt header) back through the exchange, using a fresh channel and
-// publisher confirms — independent of the shared consume channel `ch`.
+// republish envia uma cópia atualizada da mensagem (com o header de
+// tentativa incrementado) de volta pelo exchange, usando um canal novo e
+// publisher confirms — independente do canal de consumo compartilhado `ch`,
+// para que o retry não dispute o mesmo canal usado para ack/nack das
+// entregas.
 func (c *Consumer) republish(ctx context.Context, d amqp.Delivery, event events.Event, attempt int) error {
 	ch, err := c.conn.Channel()
 	if err != nil {
@@ -246,6 +254,10 @@ func (c *Consumer) republish(ctx context.Context, d amqp.Delivery, event events.
 	return nil
 }
 
+// attemptFromHeaders lê o número da tentativa atual gravado em RetryHeader
+// (0 se a mensagem nunca foi republicada como retry, ou seja, é a primeira
+// entrega). O AMQP pode desserializar inteiros em tipos Go diferentes
+// dependendo do broker, por isso os vários casos abaixo.
 func attemptFromHeaders(headers amqp.Table) int {
 	v, ok := headers[RetryHeader]
 	if !ok {
@@ -265,6 +277,8 @@ func attemptFromHeaders(headers amqp.Table) int {
 	}
 }
 
+// computeBackoff calcula o atraso exponencial (base, 2×base, 4×base, ...)
+// para a tentativa informada, limitado por maxDur.
 func computeBackoff(attempt int, base, maxDur time.Duration) time.Duration {
 	d := base
 	for i := 1; i < attempt; i++ {

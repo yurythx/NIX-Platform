@@ -15,23 +15,27 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
-// Publisher implements events.EventPublisher over a topic-exchange
-// publish with Publisher Confirms (§14): every Publish call blocks until
-// RabbitMQ has confirmed the message was accepted, or returns an error.
+// Publisher implementa events.EventPublisher publicando num exchange topic
+// com Publisher Confirms (§14): toda chamada a Publish bloqueia até o
+// RabbitMQ confirmar que a mensagem foi aceita, ou retorna um erro — isso
+// é o que garante que "o outbox marcou como publicado" só acontece depois
+// que a mensagem realmente chegou no broker, não apenas foi escrita no
+// socket.
 type Publisher struct {
 	conn *Connection
 }
 
-// NewPublisher builds a Publisher over conn. Compile-time check that it
-// satisfies the domain-facing interface.
+// Checagem em tempo de compilação de que Publisher satisfaz a interface
+// voltada para o domínio.
 var _ events.EventPublisher = (*Publisher)(nil)
 
+// NewPublisher constrói um Publisher sobre conn.
 func NewPublisher(conn *Connection) *Publisher {
 	return &Publisher{conn: conn}
 }
 
-// Publish sends event to ExchangeEvents using event.Type as the routing
-// key, and waits for RabbitMQ's publisher confirm before returning.
+// Publish envia event para ExchangeEvents usando event.Type como routing
+// key, e espera a confirmação do publisher do RabbitMQ antes de retornar.
 func (p *Publisher) Publish(ctx context.Context, event events.Event) error {
 	ctx, span := tracer.Start(ctx, "publish "+event.Type,
 		trace.WithSpanKind(trace.SpanKindProducer),
@@ -59,6 +63,10 @@ func (p *Publisher) Publish(ctx context.Context, event events.Event) error {
 		return traceErr(span, fmt.Errorf("messaging: marshal event envelope: %w", err))
 	}
 
+	// Toda mensagem nasce com o contador de tentativa em zero — só o
+	// consumer o incrementa, ao republicar como retry (ver consumer.go).
+	// Também injeta o contexto de trace atual nos headers AMQP, para que
+	// o consumer do outro lado consiga continuar o mesmo trace (§51).
 	headers := amqp.Table{RetryHeader: int32(0)}
 	otel.GetTextMapPropagator().Inject(ctx, amqpHeaderCarrier(headers))
 
@@ -88,8 +96,10 @@ func (p *Publisher) Publish(ctx context.Context, event events.Event) error {
 	return nil
 }
 
-// traceErr records err on span and marks it as an error status, returning
-// err unchanged so callers can `return traceErr(span, err)` in one line.
+// traceErr registra err no span e marca seu status como erro, retornando
+// err sem alterá-lo — assim quem chama pode escrever
+// `return traceErr(span, err)` numa linha só, sem repetir a lógica de
+// registro de erro em cada ponto de retorno.
 func traceErr(span trace.Span, err error) error {
 	span.RecordError(err)
 	span.SetStatus(codes.Error, err.Error())

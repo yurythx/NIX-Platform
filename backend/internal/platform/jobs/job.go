@@ -1,8 +1,8 @@
-// Package jobs provides the shared asynchronous-job entity and repository
-// (§33) used by every module that runs work via RabbitMQ + a worker
-// (diario_oficial, integrations/secops today). It is platform
-// infrastructure, not a business module itself — modules depend on it,
-// not the other way around.
+// Package jobs fornece a entidade e o repositório compartilhados de job
+// assíncrono (§33), usados por todo módulo que executa trabalho via
+// RabbitMQ + um worker (hoje: diario_oficial, integrations/secops). É
+// infraestrutura de plataforma, não um módulo de negócio em si — os
+// módulos dependem dele, nunca o contrário.
 package jobs
 
 import (
@@ -13,8 +13,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// Status is a job's lifecycle state (§33/§73). Transitions are enforced by
-// CanTransition — a job can never jump between arbitrary states.
+// Status é o estado de ciclo de vida de um job (§33/§73). As transições
+// são impostas por CanTransition — um job nunca pode pular entre estados
+// arbitrários (ex.: ir direto de "queued" para "completed" sem passar por
+// "processing").
 type Status string
 
 const (
@@ -25,16 +27,18 @@ const (
 	StatusDeadLetter Status = "dead_letter"
 )
 
-// validTransitions enumerates every allowed Status -> Status edge.
+// validTransitions enumera toda aresta Status -> Status permitida. É o
+// mapa que codifica a regra de negócio "que mudanças de estado um job pode
+// sofrer" — qualquer transição fora daqui é rejeitada por CanTransition.
 var validTransitions = map[Status][]Status{
 	StatusQueued:     {StatusProcessing},
 	StatusProcessing: {StatusCompleted, StatusFailed},
-	StatusFailed:     {StatusProcessing, StatusDeadLetter}, // a retried redelivery re-processes; exhausted retries dead-letter it
+	StatusFailed:     {StatusProcessing, StatusDeadLetter}, // uma redelivery com retry volta a processar; retries esgotados vão para dead-letter
 	StatusCompleted:  {},
 	StatusDeadLetter: {},
 }
 
-// CanTransition reports whether moving from -> to is an allowed edge.
+// CanTransition reporta se mover de from para to é uma aresta permitida.
 func CanTransition(from, to Status) bool {
 	for _, s := range validTransitions[from] {
 		if s == to {
@@ -44,7 +48,10 @@ func CanTransition(from, to Status) bool {
 	return false
 }
 
-// Job is one unit of asynchronous work (§33).
+// Job é uma unidade de trabalho assíncrono (§33) — o registro persistido
+// que representa, por exemplo, "rodar o teste de conectividade do Diário
+// Oficial" desde o momento em que a API o cria até o worker terminar de
+// processá-lo (com sucesso, falha, ou esgotando os retries).
 type Job struct {
 	ID            uuid.UUID
 	Type          string
@@ -59,7 +66,11 @@ type Job struct {
 	FinishedAt    *time.Time
 }
 
-// New builds a job in the initial "queued" state.
+// New constrói um job no estado inicial "queued", serializando payload
+// como JSON. O correlationID recebido normalmente é o mesmo da requisição
+// HTTP que originou o job, para que toda a cadeia (requisição -> job ->
+// evento de outbox -> processamento no worker -> notificação via
+// WebSocket) possa ser correlacionada nos logs (§50).
 func New(jobType string, correlationID uuid.UUID, payload any) (*Job, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {

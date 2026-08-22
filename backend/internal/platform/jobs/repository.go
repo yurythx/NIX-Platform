@@ -15,10 +15,11 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
-// Repository persists Job rows. Every mutating method takes a pgx.Tx so
-// callers can keep the job update and its outbox event in the same
-// transaction (§16); GetByID/List read through the pool directly since
-// they never need transactional atomicity with anything else.
+// Repository persiste as linhas de Job. Todo método que altera dado recebe
+// um pgx.Tx, para que quem chama consiga manter a atualização do job e seu
+// evento de outbox na mesma transação (§16, padrão Transactional Outbox);
+// GetByID/List leem direto pelo pool, já que nunca precisam de atomicidade
+// transacional com mais nada.
 type Repository struct {
 	pool *pgxpool.Pool
 }
@@ -27,7 +28,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-// Create inserts a new job in the "queued" state.
+// Create insere um novo job no estado "queued".
 func (r *Repository) Create(ctx context.Context, tx pgx.Tx, j *Job) error {
 	const q = `
 		INSERT INTO jobs (id, type, status, attempts, payload, correlation_id, created_at)
@@ -40,10 +41,15 @@ func (r *Repository) Create(ctx context.Context, tx pgx.Tx, j *Job) error {
 	return nil
 }
 
-// transition applies a status change after validating it against
-// CanTransition, incrementing attempts and setting started/finished
-// timestamps as appropriate.
+// transition aplica uma mudança de status depois de validá-la contra
+// CanTransition, incrementando attempts e ajustando os timestamps de
+// início/fim conforme o caso.
 func (r *Repository) transition(ctx context.Context, tx pgx.Tx, id uuid.UUID, to Status, result any, jobErr *string) error {
+	// SELECT ... FOR UPDATE trava a linha até o fim da transação, para que
+	// duas goroutines/consumers concorrentes processando o mesmo job (ex.:
+	// uma redelivery do RabbitMQ chegando enquanto o processamento
+	// original ainda está em andamento) não apliquem transições
+	// conflitantes lendo o mesmo status "velho" ao mesmo tempo.
 	locked, err := r.getForUpdate(ctx, tx, id)
 	if err != nil {
 		return err
@@ -77,11 +83,12 @@ func (r *Repository) transition(ctx context.Context, tx pgx.Tx, id uuid.UUID, to
 		return fmt.Errorf("jobs: update status to %s: %w", to, err)
 	}
 
-	// §53: record every attempt that reaches a status worth counting —
-	// completed, a failed attempt (which may still retry), or the final
-	// dead-letter give-up. Duration is age-since-creation, so a failed
-	// attempt's observation reads as "how long this job had existed when
-	// this attempt concluded," not the attempt's own runtime.
+	// §53: registra toda tentativa que chega a um status que vale a pena
+	// contar — concluído, uma tentativa falha (que ainda pode ser
+	// reprocessada) ou a desistência final em dead-letter. A duração é a
+	// idade desde a criação, então a observação de uma tentativa falha se
+	// lê como "quanto tempo esse job já existia quando esta tentativa
+	// terminou", não o tempo de execução da tentativa em si.
 	switch to {
 	case StatusCompleted, StatusFailed, StatusDeadLetter:
 		metrics.JobsProcessedTotal.WithLabelValues(locked.Type, string(to)).Inc()
@@ -107,28 +114,34 @@ func (r *Repository) getForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) 
 	return j, nil
 }
 
-// MarkProcessing transitions a job to "processing".
+// MarkProcessing transiciona um job para "processing" — chamado pelo
+// worker no início do processamento de cada entrega/redelivery.
 func (r *Repository) MarkProcessing(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	return r.transition(ctx, tx, id, StatusProcessing, nil, nil)
 }
 
-// MarkCompleted transitions a job to "completed" and stores its result.
+// MarkCompleted transiciona um job para "completed" e grava o resultado.
 func (r *Repository) MarkCompleted(ctx context.Context, tx pgx.Tx, id uuid.UUID, result any) error {
 	return r.transition(ctx, tx, id, StatusCompleted, result, nil)
 }
 
-// MarkFailed transitions a job to "failed" and records the error.
+// MarkFailed transiciona um job para "failed" e registra o erro — usado
+// quando a tentativa atual falhou mas ainda pode ser reprocessada
+// (retry ainda dentro do limite configurado).
 func (r *Repository) MarkFailed(ctx context.Context, tx pgx.Tx, id uuid.UUID, errMsg string) error {
 	return r.transition(ctx, tx, id, StatusFailed, nil, &errMsg)
 }
 
-// MarkDeadLetter transitions a job to "dead_letter" — called once RabbitMQ
-// has exhausted its own retry policy for the message driving this job.
+// MarkDeadLetter transiciona um job para "dead_letter" — chamado quando o
+// RabbitMQ já esgotou sua própria política de retry para a mensagem que
+// impulsiona este job (RABBITMQ_MAX_RETRIES excedido). É um estado final:
+// a partir daqui, alguém precisa investigar manualmente a fila de dead
+// letter.
 func (r *Repository) MarkDeadLetter(ctx context.Context, tx pgx.Tx, id uuid.UUID, errMsg string) error {
 	return r.transition(ctx, tx, id, StatusDeadLetter, nil, &errMsg)
 }
 
-// GetByID fetches a single job.
+// GetByID busca um único job.
 func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (*Job, error) {
 	const q = `
 		SELECT id, type, status, attempts, payload, result, error, correlation_id, created_at, started_at, finished_at
@@ -145,8 +158,8 @@ func (r *Repository) GetByID(ctx context.Context, id uuid.UUID) (*Job, error) {
 	return j, nil
 }
 
-// List returns a page of jobs ordered by most recent first, optionally
-// filtered by type.
+// List retorna uma página de jobs ordenados do mais recente para o mais
+// antigo, opcionalmente filtrada por tipo.
 func (r *Repository) List(ctx context.Context, p pagination.Params, jobType string) ([]*Job, int64, error) {
 	var total int64
 	countQ := `SELECT count(*) FROM jobs WHERE ($1 = '' OR type = $1)`

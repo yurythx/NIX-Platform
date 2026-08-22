@@ -1,6 +1,6 @@
-// Package logging configures the application's structured logger (log/slog).
-// It never logs secrets: callers must not pass tokens, passwords or client
-// secrets as log attributes.
+// Package logging configura o logger estruturado da aplicação (log/slog).
+// Ele nunca deve logar segredos: quem chama não pode passar tokens, senhas
+// ou client secrets como atributos de log.
 package logging
 
 import (
@@ -18,7 +18,7 @@ const (
 	userIDKey        ctxKey = "user_id"
 )
 
-// Options configures the base logger.
+// Options configura o logger base.
 type Options struct {
 	Level       string // debug | info | warn | error
 	Format      string // json | text
@@ -26,8 +26,10 @@ type Options struct {
 	Environment string
 }
 
-// New builds a slog.Logger writing to stdout in the requested format and
-// level, with service/environment attributes attached to every record.
+// New constrói um *slog.Logger escrevendo em stdout no formato e nível
+// pedidos, com os atributos service/environment presos em todo registro —
+// assim toda linha de log já vem identificada com "de qual processo" e
+// "em qual ambiente" ela veio, sem cada chamador precisar repetir isso.
 func New(opts Options) *slog.Logger {
 	level := parseLevel(opts.Level)
 
@@ -37,6 +39,9 @@ func New(opts Options) *slog.Logger {
 
 	var handler slog.Handler
 	if strings.EqualFold(opts.Format, "text") {
+		// Formato texto é mais legível rodando localmente no terminal;
+		// json é o que se espera em produção, onde os logs são coletados
+		// por um agregador (ver APP_LOG_FORMAT no .env.example).
 		handler = slog.NewTextHandler(os.Stdout, handlerOpts)
 	} else {
 		handler = slog.NewJSONHandler(os.Stdout, handlerOpts)
@@ -63,46 +68,50 @@ func parseLevel(level string) slog.Level {
 	}
 }
 
-// WithRequestID returns a context carrying the given HTTP request id.
+// WithRequestID retorna um context carregando o id da requisição HTTP
+// informado (normalmente o valor do header X-Request-ID, gerado pelo
+// middleware RequestID se o cliente não mandar um).
 func WithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, requestIDKey, id)
 }
 
-// RequestID extracts the request id previously stored via WithRequestID.
+// RequestID extrai o id de requisição previamente guardado via WithRequestID.
 func RequestID(ctx context.Context) string {
 	v, _ := ctx.Value(requestIDKey).(string)
 	return v
 }
 
-// WithCorrelationID returns a context carrying the given correlation id,
-// used to trace a single business flow across HTTP, Postgres, RabbitMQ,
-// the worker and WebSocket notifications.
+// WithCorrelationID retorna um context carregando o correlation id
+// informado — usado para rastrear um único fluxo de negócio (ex.: "rodar
+// o teste do Diário Oficial") por HTTP, Postgres, RabbitMQ, o worker e as
+// notificações via WebSocket, mesmo cruzando processos (§50).
 func WithCorrelationID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, correlationIDKey, id)
 }
 
-// CorrelationID extracts the correlation id previously stored via
+// CorrelationID extrai o correlation id previamente guardado via
 // WithCorrelationID.
 func CorrelationID(ctx context.Context) string {
 	v, _ := ctx.Value(correlationIDKey).(string)
 	return v
 }
 
-// WithUserID returns a context carrying the authenticated user's id.
+// WithUserID retorna um context carregando o id do usuário autenticado.
 func WithUserID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, userIDKey, id)
 }
 
-// UserID extracts the user id previously stored via WithUserID.
+// UserID extrai o id de usuário previamente guardado via WithUserID.
 func UserID(ctx context.Context) string {
 	v, _ := ctx.Value(userIDKey).(string)
 	return v
 }
 
-// FromContext returns a logger enriched with request_id/correlation_id/
-// user_id attributes pulled from ctx, when present. Handlers and use cases
-// should call this instead of logging with the bare base logger so every
-// log line can be correlated to a single request/flow.
+// FromContext retorna um logger enriquecido com os atributos
+// request_id/correlation_id/user_id extraídos de ctx, quando presentes.
+// Handlers e casos de uso devem chamar esta função em vez de logar
+// diretamente com o logger base, para que toda linha de log possa ser
+// correlacionada a uma única requisição/fluxo de negócio.
 func FromContext(ctx context.Context, base *slog.Logger) *slog.Logger {
 	l := base
 	if id := RequestID(ctx); id != "" {

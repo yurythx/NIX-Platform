@@ -21,9 +21,11 @@ import (
 
 const RequestIDHeader = "X-Request-ID"
 
-// RequestID honors an inbound X-Request-ID header or generates one,
-// echoes it back on the response, and stores it in the request context so
-// every log line and downstream call (DB, outbox, RabbitMQ) can carry it.
+// RequestID respeita um header X-Request-ID de entrada ou gera um novo,
+// devolve o mesmo valor na resposta, e o guarda no contexto da requisição
+// para que toda linha de log e chamada subsequente (banco, outbox,
+// RabbitMQ) possa carregá-lo — é a base da correlação de logs entre
+// serviços descrita em §50.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
@@ -36,8 +38,8 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-// AccessLog logs one structured line per request with method, path,
-// status, duration and request id.
+// AccessLog loga uma linha estruturada por requisição, com método, path,
+// status, duração e o request id.
 func AccessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,10 @@ func AccessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
+// statusRecorder envolve um http.ResponseWriter só para capturar qual
+// status code foi de fato escrito — o ResponseWriter padrão não expõe
+// isso, e tanto AccessLog quanto Metrics precisam saber o status final
+// depois que o handler já rodou.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -65,10 +71,11 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-// Metrics records nix_http_requests_total and nix_http_request_duration_seconds
-// (§53). It labels by chi's matched route *pattern* (e.g. "/api/v1/users/{id}"),
-// read from the routing context after ServeHTTP returns — never the raw
-// path, which would blow up cardinality with one series per user id.
+// Metrics registra nix_http_requests_total e
+// nix_http_request_duration_seconds (§53). Rotula pelo *padrão* de rota
+// que o chi casou (ex.: "/api/v1/users/{id}"), lido do contexto de
+// roteamento depois que ServeHTTP retorna — nunca o path bruto, que
+// explodiria a cardinalidade das métricas com uma série por id de usuário.
 func Metrics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -87,8 +94,9 @@ func Metrics(next http.Handler) http.Handler {
 	})
 }
 
-// Recoverer converts a panic in any downstream handler into a structured
-// 500 response instead of crashing the process or leaking a stack trace.
+// Recoverer converte um panic em qualquer handler downstream numa resposta
+// 500 estruturada, em vez de derrubar o processo inteiro ou vazar um stack
+// trace para o cliente.
 func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +114,10 @@ func Recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// SecurityHeaders sets the baseline security headers on every response.
+// SecurityHeaders define os headers de segurança de base em toda resposta.
+// O CSP com nonce (política mais forte, por requisição) é gerado à parte
+// no proxy.ts do frontend — estes aqui são os headers estáticos que fazem
+// sentido em qualquer resposta da API, independente de rota.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -121,22 +132,23 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// Limiter decides whether a request identified by key is allowed right
-// now. RateLimit is deliberately decoupled from any specific
-// implementation: InMemoryLimiter below works for a single process, while
-// internal/platform/ratelimit.PostgresLimiter shares state across every
-// API replica — swapping one for the other doesn't touch this middleware.
+// Limiter decide se uma requisição identificada por key é permitida agora.
+// RateLimit é deliberadamente desacoplado de qualquer implementação
+// específica: o InMemoryLimiter abaixo funciona para um único processo,
+// enquanto internal/platform/ratelimit.PostgresLimiter compartilha o
+// estado entre todas as réplicas da API — trocar um pelo outro não exige
+// tocar neste middleware.
 type Limiter interface {
 	Allow(ctx context.Context, key string) (bool, error)
 }
 
-// InMemoryLimiter is a per-key token bucket limiter with lazy eviction of
-// stale entries. It is intentionally single-instance: with more than one
-// API replica, each gets its own independent bucket, so the *effective*
-// limit becomes N × the configured one. Fine for local development or a
-// single-replica deployment; production should use
-// internal/platform/ratelimit.PostgresLimiter instead, which every
-// replica shares (§ rate limiting distribuído — a plataforma não usa
+// InMemoryLimiter é um limitador de token bucket por chave, com remoção
+// preguiçosa de entradas obsoletas. É deliberadamente single-instance: com
+// mais de uma réplica da API, cada uma tem seu próprio balde independente,
+// então o limite *efetivo* vira N × o configurado. Serve bem para
+// desenvolvimento local ou um deployment de réplica única; produção deve
+// usar internal/platform/ratelimit.PostgresLimiter, que é compartilhado
+// por todas as réplicas (rate limiting distribuído — a plataforma não usa
 // Redis por design, §7, então o compartilhamento é feito via Postgres).
 type InMemoryLimiter struct {
 	mu       sync.Mutex
@@ -160,6 +172,9 @@ func NewInMemoryLimiter(rps float64, burst int) *InMemoryLimiter {
 	return cl
 }
 
+// evictLoop remove periodicamente os buckets de chaves que não aparecem
+// há mais de 10 minutos — sem isso, o mapa cresceria indefinidamente com
+// uma entrada por IP/usuário já visto, mesmo que nunca mais volte.
 func (cl *InMemoryLimiter) evictLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -188,12 +203,13 @@ func (cl *InMemoryLimiter) Allow(_ context.Context, key string) (bool, error) {
 	return limiter.Allow(), nil
 }
 
-// RateLimit returns a middleware limiting each client (identified by
-// keyFunc, typically the authenticated user id or remote IP) according to
-// limiter. A Limiter error (e.g. the database backing a PostgresLimiter is
-// briefly unreachable) fails OPEN — the request is allowed through and the
-// error logged — rather than turning a rate-limit outage into a full
-// outage of the endpoint it protects.
+// RateLimit retorna um middleware que limita cada cliente (identificado
+// por keyFunc, tipicamente o id do usuário autenticado ou o IP remoto) de
+// acordo com limiter. Um erro do Limiter (ex.: o banco por trás de um
+// PostgresLimiter fica brevemente inalcançável) falha ABERTO — a
+// requisição é deixada passar e o erro é apenas logado — em vez de deixar
+// uma instabilidade do rate limiter virar uma indisponibilidade completa
+// do endpoint que ele protege.
 func RateLimit(logger *slog.Logger, limiter Limiter, keyFunc func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -213,12 +229,13 @@ func RateLimit(logger *slog.Logger, limiter Limiter, keyFunc func(*http.Request)
 	}
 }
 
-// ClientIPKey is a default keyFunc for RateLimit using RemoteAddr.
+// ClientIPKey é um keyFunc padrão para RateLimit, usando o RemoteAddr da
+// requisição.
 func ClientIPKey(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// contextTimeout is a small helper used by readiness checks.
+// contextTimeout é um pequeno helper usado pelas verificações de readiness.
 func contextTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, d)
 }

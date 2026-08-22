@@ -1,9 +1,10 @@
-// Package messaging implements the RabbitMQ adapter for the platform's
-// events.EventPublisher/EventConsumer abstractions: a topic exchange
-// (nix.events), per-module durable queues with dead-letter routing,
-// publisher confirms, manual ack/nack, and backoff-based retry. Nothing in
-// internal/domain or internal/modules imports this package directly — they
-// depend only on the events interfaces (§25).
+// Package messaging implementa o adaptador RabbitMQ para as abstrações
+// events.EventPublisher/EventConsumer da plataforma: um exchange topic
+// (nix.events), filas duráveis por módulo com roteamento de dead-letter,
+// publisher confirms, ack/nack manual e retry baseado em backoff. Nada em
+// internal/domain nem em internal/modules importa este pacote diretamente
+// — eles dependem apenas das interfaces de events (§25), então trocar
+// RabbitMQ por outro broker no futuro não tocaria a camada de domínio.
 package messaging
 
 import (
@@ -16,9 +17,10 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Connection owns a single AMQP connection and transparently redials with
-// backoff if it drops, so publishers/consumers built on top don't each
-// need their own reconnect logic — they just call Channel() again.
+// Connection possui uma única conexão AMQP e a redisca automaticamente com
+// backoff caso ela caia, para que publishers/consumers construídos por
+// cima não precisem cada um da sua própria lógica de reconexão — eles só
+// chamam Channel() de novo.
 type Connection struct {
 	url    string
 	logger *slog.Logger
@@ -29,10 +31,11 @@ type Connection struct {
 	done chan struct{}
 }
 
-// Connect dials RabbitMQ once (failing fast if the initial dial doesn't
-// succeed — misconfigured RABBITMQ_URL should stop startup, not retry
-// silently forever) and starts a background supervisor that redials with
-// exponential backoff on any subsequent disconnect.
+// Connect disca o RabbitMQ uma vez (falhando rápido se a discagem inicial
+// não funcionar — uma RABBITMQ_URL mal configurada deve parar o startup,
+// não ficar tentando de novo silenciosamente para sempre) e inicia um
+// supervisor em background que redisca com backoff exponencial em
+// qualquer desconexão subsequente.
 func Connect(ctx context.Context, url string, logger *slog.Logger) (*Connection, error) {
 	conn, err := amqp.DialConfig(url, amqp.Config{
 		Heartbeat: 10 * time.Second,
@@ -52,6 +55,10 @@ func Connect(ctx context.Context, url string, logger *slog.Logger) (*Connection,
 	return c, nil
 }
 
+// superviseReconnect fica escutando o canal de fechamento da conexão AMQP
+// atual; quando ela cai (crash do broker, rede instável, etc.), aciona
+// reconnectWithBackoff e volta a escutar a nova conexão assim que ela for
+// restabelecida. Roda para sempre até Close() fechar o canal done.
 func (c *Connection) superviseReconnect() {
 	for {
 		c.mu.RLock()
@@ -73,6 +80,10 @@ func (c *Connection) superviseReconnect() {
 	}
 }
 
+// reconnectWithBackoff tenta redisial repetidamente, dobrando o intervalo
+// de espera a cada falha (1s, 2s, 4s, ... até um teto de 30s) em vez de
+// martelar o broker com tentativas imediatas enquanto ele está
+// reiniciando ou a rede está instável.
 func (c *Connection) reconnectWithBackoff() {
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
@@ -109,9 +120,9 @@ func (c *Connection) reconnectWithBackoff() {
 	}
 }
 
-// Channel opens a new AMQP channel on the current connection. Callers
-// should open one channel per publisher/consumer goroutine — channels are
-// not safe for concurrent use by multiple goroutines.
+// Channel abre um novo canal AMQP na conexão atual. Quem chama deve abrir
+// um canal por goroutine de publisher/consumer — canais não são seguros
+// para uso concorrente por múltiplas goroutines ao mesmo tempo.
 func (c *Connection) Channel() (*amqp.Channel, error) {
 	c.mu.RLock()
 	conn := c.conn
@@ -123,7 +134,9 @@ func (c *Connection) Channel() (*amqp.Channel, error) {
 	return conn.Channel()
 }
 
-// Ping is a readiness Check function suitable for httpserver.Check.
+// Ping é uma função de verificação (Check) de readiness, compatível com
+// httpserver.Check — usada pelo endpoint /ready para reportar se o
+// RabbitMQ está conectado.
 func (c *Connection) Ping(ctx context.Context) error {
 	c.mu.RLock()
 	conn := c.conn
@@ -135,8 +148,8 @@ func (c *Connection) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Close stops the reconnect supervisor and closes the underlying
-// connection. Safe to call once during graceful shutdown.
+// Close para o supervisor de reconexão e fecha a conexão subjacente.
+// Seguro de chamar uma vez durante o graceful shutdown.
 func (c *Connection) Close() error {
 	close(c.done)
 	c.mu.Lock()
