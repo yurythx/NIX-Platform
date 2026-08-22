@@ -110,7 +110,12 @@ Once containers are healthy:
 ## Migrations
 
 Migrations are plain SQL, managed by [Goose](https://github.com/pressly/goose), and are **never**
-run automatically at startup — run them explicitly:
+run automatically at startup — run them explicitly. `make migrate-*` shells out to the `goose`
+binary, so install it once:
+
+```bash
+go install github.com/pressly/goose/v3/cmd/goose@latest
+```
 
 ```bash
 make migrate-up
