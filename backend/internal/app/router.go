@@ -6,6 +6,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	diarioTransport "github.com/yurythx/nix-platform/internal/modules/diario_oficial/transport"
+	integrationsTransport "github.com/yurythx/nix-platform/internal/modules/integrations/transport"
+	secopsTransport "github.com/yurythx/nix-platform/internal/modules/secops/transport"
+	usersTransport "github.com/yurythx/nix-platform/internal/modules/users/transport"
+
 	"github.com/yurythx/nix-platform/internal/platform/auth"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
@@ -40,8 +45,10 @@ func NewRouter(deps *Dependencies) chi.Router {
 		api.With(httpserver.RateLimit(deps.Logger, 1, 5, wsTicketRateLimitKey)).
 			Post("/ws/ticket", ws.TicketHandler(deps.Tickets, deps.Logger))
 
-		// users/integrations/diario_oficial/secops routes are mounted
-		// here as each module is wired in.
+		usersTransport.RegisterRoutes(api, deps.Modules.Users.Handlers, deps.Logger)
+		integrationsTransport.RegisterRoutes(api, deps.Modules.Integrations.Handlers)
+		diarioTransport.RegisterRoutes(api, deps.Modules.DiarioOficial.Handlers, deps.Logger)
+		secopsTransport.RegisterRoutes(api, deps.Modules.SecOps.Handlers, deps.Logger)
 	})
 
 	return r

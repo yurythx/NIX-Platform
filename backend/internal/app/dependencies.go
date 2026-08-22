@@ -40,6 +40,7 @@ type Dependencies struct {
 	Outbox    *outbox.Writer
 	Hub       *ws.Hub
 	Tickets   *ws.TicketStore
+	Modules   *Modules
 }
 
 // NewDependencies builds and validates every platform dependency. It
@@ -91,7 +92,7 @@ func NewDependencies(ctx context.Context) (*Dependencies, error) {
 
 	publisher := messaging.NewPublisher(mqConn)
 
-	return &Dependencies{
+	deps := &Dependencies{
 		Config:    cfg,
 		Logger:    logger,
 		DB:        pool,
@@ -101,7 +102,10 @@ func NewDependencies(ctx context.Context) (*Dependencies, error) {
 		Outbox:    outbox.NewWriter(OutboxSource),
 		Hub:       ws.NewHub(logger),
 		Tickets:   ws.NewTicketStore(ws.TicketTTL),
-	}, nil
+	}
+	deps.Modules = buildModules(deps)
+
+	return deps, nil
 }
 
 // Close releases every resource opened by NewDependencies. Safe to call

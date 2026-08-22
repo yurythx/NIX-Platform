@@ -86,6 +86,21 @@ func (c WorkerConfig) MetricsAddr() string {
 	return fmt.Sprintf("%s:%d", c.MetricsHost, c.MetricsPort)
 }
 
+// DiarioOficialConfig holds settings for the Diário Oficial integration.
+// BaseURL is intentionally allowed to be empty — an unconfigured
+// environment should report the integration as unavailable, not crash.
+type DiarioOficialConfig struct {
+	BaseURL string
+	Timeout time.Duration
+}
+
+// VirusTotalConfig holds settings for the VirusTotal SecOps integration.
+type VirusTotalConfig struct {
+	APIKey  string
+	BaseURL string
+	Timeout time.Duration
+}
+
 // Config is the fully validated application configuration.
 type Config struct {
 	App      AppConfig
@@ -95,6 +110,9 @@ type Config struct {
 	Keycloak KeycloakConfig
 	Jobs     JobsConfig
 	Worker   WorkerConfig
+
+	DiarioOficial DiarioOficialConfig
+	VirusTotal    VirusTotalConfig
 
 	FrontendURL         string
 	APIPublicURL        string
@@ -199,6 +217,15 @@ func Load() (*Config, error) {
 		Worker: WorkerConfig{
 			MetricsHost: l.str("WORKER_METRICS_HOST", false, "0.0.0.0"),
 			MetricsPort: l.intVal("WORKER_METRICS_PORT", false, 9100),
+		},
+		DiarioOficial: DiarioOficialConfig{
+			BaseURL: l.str("DIARIO_OFICIAL_BASE_URL", false, ""),
+			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
+		},
+		VirusTotal: VirusTotalConfig{
+			APIKey:  l.str("VIRUSTOTAL_API_KEY", false, ""),
+			BaseURL: l.str("VIRUSTOTAL_BASE_URL", false, "https://www.virustotal.com/api/v3"),
+			Timeout: l.durationVal("VIRUSTOTAL_TIMEOUT", false, 10*time.Second),
 		},
 		FrontendURL:         l.str("FRONTEND_URL", false, "http://localhost:3000"),
 		APIPublicURL:        l.str("API_PUBLIC_URL", false, "http://localhost:8000"),

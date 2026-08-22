@@ -2,13 +2,18 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	diarioWorker "github.com/yurythx/nix-platform/internal/modules/diario_oficial/worker"
+	secopsWorker "github.com/yurythx/nix-platform/internal/modules/secops/worker"
+
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
+	"github.com/yurythx/nix-platform/internal/platform/messaging"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
 )
 
@@ -27,18 +32,76 @@ type Worker struct {
 // is cancelled.
 type processor func(ctx context.Context) error
 
-// NewWorker builds the worker runner. As later phases add RabbitMQ queue
-// consumers for each module, they are registered here alongside the
-// outbox publisher.
+// NewWorker builds the worker runner: the outbox publisher plus every
+// module's RabbitMQ queue + DLQ consumers. Each is wrapped by supervised so
+// one processor's transient failure (a connection blip mid-consume, for
+// instance) restarts just that processor instead of taking the whole
+// worker process down.
 func NewWorker(deps *Dependencies) (*Worker, error) {
 	outboxPublisher := outbox.NewPublisher(deps.DB, deps.Publisher, deps.Logger)
+
+	newConsumer := func(queue string) *messaging.Consumer {
+		return messaging.NewConsumer(deps.Messaging, queue, deps.Config.RabbitMQ.PrefetchCount, deps.Config.RabbitMQ.MaxRetries, deps.Logger)
+	}
+
+	diarioConsumer := newConsumer(messaging.QueueDiarioOficialWorker.Name)
+	diarioDLQConsumer := newConsumer(messaging.QueueDiarioOficialWorker.DLQName)
+	secopsConsumer := newConsumer(messaging.QueueIntegrationWorker.Name)
+	secopsDLQConsumer := newConsumer(messaging.QueueIntegrationWorker.DLQName)
 
 	return &Worker{
 		deps: deps,
 		processors: []processor{
-			outboxPublisher.Run,
+			supervised("outbox_publisher", deps.Logger, outboxPublisher.Run),
+			supervised("diario_oficial.worker", deps.Logger, func(ctx context.Context) error {
+				return diarioConsumer.Consume(ctx, diarioWorker.JobCreatedHandler(deps.Modules.DiarioOficial.Service))
+			}),
+			supervised("diario_oficial.dlq", deps.Logger, func(ctx context.Context) error {
+				return diarioDLQConsumer.Consume(ctx, diarioWorker.DeadLetterHandler(deps.Modules.DiarioOficial.Service, deps.Logger))
+			}),
+			supervised("integration.worker", deps.Logger, func(ctx context.Context) error {
+				return secopsConsumer.Consume(ctx, secopsWorker.JobCreatedHandler(deps.Modules.SecOps.Service))
+			}),
+			supervised("integration.dlq", deps.Logger, func(ctx context.Context) error {
+				return secopsDLQConsumer.Consume(ctx, secopsWorker.DeadLetterHandler(deps.Modules.SecOps.Service, deps.Logger))
+			}),
 		},
 	}, nil
+}
+
+// supervised wraps a processor so that if it returns before ctx is
+// cancelled (an unexpected error, or — for a queue consumer — simply
+// losing its channel when the underlying connection reconnects), it is
+// restarted with backoff instead of taking the rest of the worker down.
+func supervised(name string, logger *slog.Logger, fn processor) processor {
+	return func(ctx context.Context) error {
+		backoff := time.Second
+		const maxBackoff = 30 * time.Second
+
+		for {
+			err := fn(ctx)
+			if ctx.Err() != nil {
+				return nil
+			}
+			if err != nil {
+				logger.Error("processor exited unexpectedly, restarting", slog.String("processor", name), slog.Any("error", err), slog.Duration("retry_in", backoff))
+			} else {
+				logger.Warn("processor returned without error before shutdown, restarting", slog.String("processor", name))
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+		}
+	}
 }
 
 // Run starts every registered processor and blocks until ctx is cancelled
