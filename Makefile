@@ -51,7 +51,12 @@ frontend-build:
 test: backend-test frontend-test ## Run backend and frontend test suites
 
 backend-test:
-	cd backend && go test ./...
+	# -p 1: several packages' tests exercise a real, shared PostgreSQL/
+	# RabbitMQ (TEST_DATABASE_URL/TEST_RABBITMQ_URL) rather than mocks.
+	# Running package test binaries in parallel (go test's default) lets
+	# one package's live rows/messages leak into another's assertions —
+	# serialize them instead.
+	cd backend && go test ./... -p 1
 
 frontend-test:
 	cd frontend && npm test

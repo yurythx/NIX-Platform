@@ -8,6 +8,8 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
 // Hub tracks every connected client and fans out broadcast messages to
@@ -58,6 +60,7 @@ func (h *Hub) Run(ctx context.Context) error {
 			h.clients[c] = struct{}{}
 			count := len(h.clients)
 			h.mu.Unlock()
+			metrics.WebSocketConnections.Set(float64(count))
 			h.logger.Info("websocket client connected", slog.String("user_id", c.userID), slog.Int("total_clients", count))
 
 		case c := <-h.unregister:
@@ -68,6 +71,7 @@ func (h *Hub) Run(ctx context.Context) error {
 			}
 			count := len(h.clients)
 			h.mu.Unlock()
+			metrics.WebSocketConnections.Set(float64(count))
 			h.logger.Info("websocket client disconnected", slog.String("user_id", c.userID), slog.Int("total_clients", count))
 
 		case msg := <-h.broadcast:
@@ -79,6 +83,7 @@ func (h *Hub) Run(ctx context.Context) error {
 					// Slow/stuck client: drop it rather than let one
 					// laggard block delivery to everyone else.
 					h.logger.Warn("dropping slow websocket client", slog.String("user_id", c.userID))
+					metrics.WebSocketErrorsTotal.Inc()
 					go h.Unregister(c)
 				}
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -11,6 +12,7 @@ import (
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/domain/pagination"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
 // Repository persists Job rows. Every mutating method takes a pgx.Tx so
@@ -42,12 +44,12 @@ func (r *Repository) Create(ctx context.Context, tx pgx.Tx, j *Job) error {
 // CanTransition, incrementing attempts and setting started/finished
 // timestamps as appropriate.
 func (r *Repository) transition(ctx context.Context, tx pgx.Tx, id uuid.UUID, to Status, result any, jobErr *string) error {
-	current, err := r.getForUpdate(ctx, tx, id)
+	locked, err := r.getForUpdate(ctx, tx, id)
 	if err != nil {
 		return err
 	}
-	if !CanTransition(current, to) {
-		return fmt.Errorf("jobs: invalid transition %s -> %s for job %s", current, to, id)
+	if !CanTransition(locked.Status, to) {
+		return fmt.Errorf("jobs: invalid transition %s -> %s for job %s", locked.Status, to, id)
 	}
 
 	var resultJSON []byte
@@ -74,16 +76,35 @@ func (r *Repository) transition(ctx context.Context, tx pgx.Tx, id uuid.UUID, to
 	if err != nil {
 		return fmt.Errorf("jobs: update status to %s: %w", to, err)
 	}
+
+	// §53: record every attempt that reaches a status worth counting —
+	// completed, a failed attempt (which may still retry), or the final
+	// dead-letter give-up. Duration is age-since-creation, so a failed
+	// attempt's observation reads as "how long this job had existed when
+	// this attempt concluded," not the attempt's own runtime.
+	switch to {
+	case StatusCompleted, StatusFailed, StatusDeadLetter:
+		metrics.JobsProcessedTotal.WithLabelValues(locked.Type, string(to)).Inc()
+		metrics.JobsDuration.WithLabelValues(locked.Type).Observe(time.Since(locked.CreatedAt).Seconds())
+	}
+
 	return nil
 }
 
-func (r *Repository) getForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Status, error) {
-	var status Status
-	err := tx.QueryRow(ctx, `SELECT status FROM jobs WHERE id = $1 FOR UPDATE`, id).Scan(&status)
+type lockedJob struct {
+	Status    Status
+	Type      string
+	CreatedAt time.Time
+}
+
+func (r *Repository) getForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (lockedJob, error) {
+	var j lockedJob
+	err := tx.QueryRow(ctx, `SELECT status, type, created_at FROM jobs WHERE id = $1 FOR UPDATE`, id).
+		Scan(&j.Status, &j.Type, &j.CreatedAt)
 	if err != nil {
-		return "", fmt.Errorf("jobs: lock job %s: %w", id, err)
+		return lockedJob{}, fmt.Errorf("jobs: lock job %s: %w", id, err)
 	}
-	return status, nil
+	return j, nil
 }
 
 // MarkProcessing transitions a job to "processing".

@@ -43,6 +43,12 @@ func testLogger() *slog.Logger {
 // call only ever sees rows it wrote itself — publishPendingBatch
 // deliberately scans every pending row regardless of aggregate, exactly
 // like the real worker would, so tests must not leak state into each other.
+//
+// This only works against leaks from tests within THIS package/binary.
+// Other packages (diario_oficial, secops) write real outbox_events rows
+// via the same live database too and don't publish/clean them up — run
+// with `go test ./... -p 1` (see Makefile/README) so package test
+// binaries never run concurrently against the shared table.
 func truncateOutbox(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `DELETE FROM outbox_events`); err != nil {

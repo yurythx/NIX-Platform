@@ -19,6 +19,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/logging"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
 	"github.com/yurythx/nix-platform/internal/platform/telemetry"
 	"github.com/yurythx/nix-platform/internal/platform/ws"
@@ -76,6 +77,7 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 	if err != nil {
 		return nil, fmt.Errorf("app: connect database: %w", err)
 	}
+	metrics.RegisterPostgresPoolMetrics(pool)
 
 	verifier, err := auth.NewVerifier(ctx, cfg.Keycloak)
 	if err != nil {

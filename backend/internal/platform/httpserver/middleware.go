@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/platform/logging"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 	"github.com/yurythx/nix-platform/pkg/httputil"
 )
 
@@ -60,6 +63,28 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// Metrics records nix_http_requests_total and nix_http_request_duration_seconds
+// (§53). It labels by chi's matched route *pattern* (e.g. "/api/v1/users/{id}"),
+// read from the routing context after ServeHTTP returns — never the raw
+// path, which would blow up cardinality with one series per user id.
+func Metrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(ww, r)
+
+		route := "unmatched"
+		if rctx := chi.RouteContext(r.Context()); rctx != nil {
+			if pattern := rctx.RoutePattern(); pattern != "" {
+				route = pattern
+			}
+		}
+
+		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(ww.status)).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+	})
 }
 
 // Recoverer converts a panic in any downstream handler into a structured

@@ -12,9 +12,14 @@ import (
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/secops/domain"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
 const defaultBaseURL = "https://www.virustotal.com/api/v3"
+
+// providerLabel is this client's value for the "provider" label on every
+// nix_integration_* metric (§53).
+const providerLabel = "virustotal"
 
 // Client calls the VirusTotal v3 API. It never blocks longer than the
 // configured timeout (§48) and never panics on a missing API key or an
@@ -54,7 +59,11 @@ func (c *Client) TestConnection(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	return statusToError(resp.StatusCode)
+	if err := statusToError(resp.StatusCode); err != nil {
+		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
+		return err
+	}
+	return nil
 }
 
 // AnalyzeTarget looks up an IP address's reputation. Extending this to
@@ -73,6 +82,7 @@ func (c *Client) AnalyzeTarget(ctx context.Context, target string) (*domain.SecC
 	defer resp.Body.Close()
 
 	if err := statusToError(resp.StatusCode); err != nil {
+		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
 		return nil, err
 	}
 
@@ -105,8 +115,12 @@ func (c *Client) do(ctx context.Context, path string) (*http.Response, error) {
 	req.Header.Set("x-apikey", c.apiKey)
 	req.Header.Set("Accept", "application/json")
 
+	metrics.IntegrationRequestsTotal.WithLabelValues(providerLabel).Inc()
+	start := time.Now()
 	resp, err := c.client.Do(req)
+	metrics.IntegrationDuration.WithLabelValues(providerLabel).Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("virustotal request failed: %v", err)).WithCode("INTEGRATION_UNAVAILABLE")
 	}
 	return resp, nil

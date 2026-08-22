@@ -18,10 +18,9 @@ import (
 
 // Options configures the base router.
 type Options struct {
-	Logger            *slog.Logger
-	AllowedOrigins    []string
-	RequestTimeout    time.Duration
-	MetricsMiddleware func(http.Handler) http.Handler // records HTTP metrics; optional
+	Logger         *slog.Logger
+	AllowedOrigins []string
+	RequestTimeout time.Duration
 }
 
 // New builds a chi.Router with the platform's standard middleware stack
@@ -43,9 +42,7 @@ func New(opts Options) chi.Router {
 	}))
 	r.Use(SecurityHeaders)
 	r.Use(chimiddleware.Timeout(opts.RequestTimeout))
-	if opts.MetricsMiddleware != nil {
-		r.Use(opts.MetricsMiddleware)
-	}
+	r.Use(Metrics)
 
 	r.Get("/health", HealthHandler())
 	r.Handle("/metrics", promhttp.Handler())

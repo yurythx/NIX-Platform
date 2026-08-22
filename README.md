@@ -136,8 +136,12 @@ Backend tests fall into two groups:
   ```bash
   TEST_DATABASE_URL="postgres://nix:change-me@localhost:5432/nix?sslmode=disable" \
   TEST_RABBITMQ_URL="amqp://nix:nix_password@localhost:5672/nix" \
-  go test ./... -timeout 120s
+  go test ./... -timeout 120s -p 1
   ```
+
+  `-p 1` matters here: several packages exercise the *same* live database rather than mocking it,
+  and `go test`'s default cross-package parallelism lets one package's rows leak into another's
+  assertions. `make test` already passes it.
 
   (Point these at the containers from `docker-compose.dev.yml`, which publishes 5432/5672.)
 

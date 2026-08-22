@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yurythx/nix-platform/internal/domain/events"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
 // Publisher implements events.EventPublisher over a topic-exchange
@@ -82,6 +83,8 @@ func (p *Publisher) Publish(ctx context.Context, event events.Event) error {
 	if !ok {
 		return traceErr(span, fmt.Errorf("messaging: broker nacked publish of %s (id=%s)", event.Type, event.ID))
 	}
+
+	metrics.RabbitMQPublishedTotal.WithLabelValues(event.Type).Inc()
 	return nil
 }
 

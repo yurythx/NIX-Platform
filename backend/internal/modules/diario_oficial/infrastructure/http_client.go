@@ -11,7 +11,12 @@ import (
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/domain"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
+
+// providerLabel is this client's value for the "provider" label on every
+// nix_integration_* metric (§53).
+const providerLabel = "diario-oficial"
 
 // HTTPClient calls the external Diário Oficial system over HTTP. It never
 // blocks longer than the configured timeout (§48) and never panics on a
@@ -41,13 +46,18 @@ func (c *HTTPClient) Check(ctx context.Context) (*domain.CheckResult, error) {
 		return nil, fmt.Errorf("diario_oficial: build request: %w", err)
 	}
 
+	metrics.IntegrationRequestsTotal.WithLabelValues(providerLabel).Inc()
+	start := time.Now()
 	resp, err := c.client.Do(req)
+	metrics.IntegrationDuration.WithLabelValues(providerLabel).Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("diario oficial request failed: %v", err)).WithCode("INTEGRATION_UNAVAILABLE")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusInternalServerError {
+		metrics.IntegrationFailuresTotal.WithLabelValues(providerLabel).Inc()
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("diario oficial responded with status %d", resp.StatusCode)).WithCode("INTEGRATION_UNAVAILABLE")
 	}
 

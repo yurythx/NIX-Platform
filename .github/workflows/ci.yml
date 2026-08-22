@@ -80,7 +80,11 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://nix:nix@localhost:5432/nix?sslmode=disable
           TEST_RABBITMQ_URL: amqp://nix:nix_password@localhost:5672/nix
-        run: go test ./... -timeout 180s
+        # -p 1: several packages share the same live Postgres/RabbitMQ
+        # service containers above rather than mocking them — serialize
+        # package test binaries so one package's rows/messages can't leak
+        # into another's assertions (see Makefile's backend-test).
+        run: go test ./... -timeout 180s -p 1
 
       - name: govulncheck
         run: |

@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/yurythx/nix-platform/internal/domain/events"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
 // Consumer implements events.EventConsumer for a single queue. Retries are
@@ -131,6 +132,7 @@ func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp
 		// straight to the DLQ instead of burning retry attempts on it.
 		logger.Error("dropping undecodable message to DLQ", slog.Any("error", err))
 		_ = traceErr(span, err)
+		metrics.RabbitMQDLQTotal.WithLabelValues(c.queueName).Inc()
 		ackMu.Lock()
 		_ = d.Nack(false, false)
 		ackMu.Unlock()
@@ -139,18 +141,21 @@ func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp
 
 	handlerErr := handler(ctx, event)
 	if handlerErr == nil {
+		metrics.RabbitMQConsumedTotal.WithLabelValues(c.queueName).Inc()
 		ackMu.Lock()
 		_ = d.Ack(false)
 		ackMu.Unlock()
 		return
 	}
 	_ = traceErr(span, handlerErr)
+	metrics.RabbitMQFailedTotal.WithLabelValues(c.queueName).Inc()
 
 	attempt := attemptFromHeaders(d.Headers) + 1
 	logger = logger.With(slog.Int("attempt", attempt), slog.Any("handler_error", handlerErr))
 
 	if attempt > c.maxRetries {
 		logger.Error("handler failed, max retries exhausted, routing to DLQ")
+		metrics.RabbitMQDLQTotal.WithLabelValues(c.queueName).Inc()
 		ackMu.Lock()
 		_ = d.Nack(false, false)
 		ackMu.Unlock()
@@ -159,6 +164,7 @@ func (c *Consumer) handleDelivery(ctx context.Context, ackMu *sync.Mutex, d amqp
 
 	backoff := computeBackoff(attempt, c.baseBackoff, c.maxBackoff)
 	logger.Warn("handler failed, retrying after backoff", slog.Duration("backoff", backoff))
+	metrics.RabbitMQRetryTotal.WithLabelValues(c.queueName).Inc()
 
 	select {
 	case <-time.After(backoff):

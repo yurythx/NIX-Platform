@@ -9,6 +9,7 @@ import (
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/platform/auth"
+	"github.com/yurythx/nix-platform/internal/platform/metrics"
 	"github.com/yurythx/nix-platform/pkg/httputil"
 )
 
@@ -76,6 +77,7 @@ func UpgradeHandler(hub *Hub, store *TicketStore, allowedOrigin string, logger *
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			logger.Error("websocket upgrade failed", slog.Any("error", err))
+			metrics.WebSocketErrorsTotal.Inc()
 			return
 		}
 
