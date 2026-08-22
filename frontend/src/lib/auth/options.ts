@@ -2,16 +2,17 @@ import type { NextAuthOptions, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import KeycloakProvider from "next-auth/providers/keycloak";
 
-// Server-side only env — never prefixed NEXT_PUBLIC_, never sent to the
-// browser (§30: secrets never in NEXT_PUBLIC_*).
+// Env somente de servidor — nunca com prefixo NEXT_PUBLIC_, nunca enviada
+// ao navegador (§30: segredos nunca em NEXT_PUBLIC_*).
 const issuer = process.env.KEYCLOAK_ISSUER_URL;
 const clientId = process.env.KEYCLOAK_FRONTEND_CLIENT_ID;
 const clientSecret = process.env.KEYCLOAK_FRONTEND_CLIENT_SECRET;
 
 if (!issuer || !clientId || !clientSecret) {
-  // Fail fast (§62's principle applied to the frontend): a missing OIDC
-  // client config should break startup, not silently serve an app no one
-  // can log into.
+  // Fail fast (o mesmo princípio do §62 do backend, aplicado ao
+  // frontend): uma configuração de cliente OIDC ausente deve quebrar o
+  // startup, não servir silenciosamente uma aplicação em que ninguém
+  // consegue logar.
   throw new Error(
     "Missing Keycloak frontend OIDC configuration: KEYCLOAK_ISSUER_URL, " +
       "KEYCLOAK_FRONTEND_CLIENT_ID and KEYCLOAK_FRONTEND_CLIENT_SECRET are all required.",
@@ -26,7 +27,8 @@ interface KeycloakTokenResponse {
   error?: string;
 }
 
-/** Refreshes an expired access token via Keycloak's token endpoint. */
+/** Renova um access token expirado através do endpoint de token do
+ * Keycloak, usando o refresh_token guardado na sessão. */
 async function refreshAccessToken(token: JWT): Promise<JWT> {
   try {
     const response = await fetch(`${issuer}/protocol/openid-connect/token`, {
@@ -53,6 +55,10 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       error: undefined,
     };
   } catch (err) {
+    // Marca o erro na sessão em vez de lançar — o chamador (callback jwt)
+    // segue com um token expirado + error="RefreshAccessTokenError", e é
+    // esse campo que o middleware/proxy.ts usa para decidir redirecionar
+    // para /login.
     console.error("Failed to refresh Keycloak access token", err);
     return { ...token, error: "RefreshAccessTokenError" };
   }
@@ -64,29 +70,30 @@ export const authOptions: NextAuthOptions = {
       issuer,
       clientId,
       clientSecret,
-      // KeycloakProvider's default checks already include "pkce" and
-      // "state" — Authorization Code + PKCE per §30, no extra config
-      // needed.
+      // As checks padrão do KeycloakProvider já incluem "pkce" e "state"
+      // — Authorization Code + PKCE conforme §30, sem configuração extra
+      // necessária.
     }),
   ],
 
-  // JWT session strategy: the session is an encrypted, HttpOnly,
-  // SameSite=Lax cookie, marked Secure automatically whenever NEXTAUTH_URL
-  // is https:// (next-auth's default — §30) — never localStorage or
-  // sessionStorage. The raw access token lives only in this
-  // server-side-encrypted token, never in the `session` object exposed to
-  // client components — see the session callback below.
+  // Estratégia de sessão em JWT: a sessão é um cookie criptografado,
+  // HttpOnly, SameSite=Lax, marcado Secure automaticamente sempre que
+  // NEXTAUTH_URL é https:// (padrão do next-auth — §30) — nunca
+  // localStorage ou sessionStorage. O access token bruto vive só dentro
+  // deste token criptografado no lado do servidor, nunca no objeto
+  // `session` exposto a Client Components — ver o callback session abaixo.
   //
-  // Deliberately using next-auth's default cookie name/options here
-  // rather than a custom one: every server-side getToken() call (proxy.ts,
-  // the backend BFF proxy) must agree on the exact cookie name it reads,
-  // and a custom name is one more place that can silently drift out of
-  // sync and break auth.
+  // Usando deliberadamente o nome/opções de cookie padrão do next-auth
+  // aqui, em vez de um nome customizado: toda chamada de getToken() do
+  // lado do servidor (proxy.ts, o proxy BFF do backend) precisa concordar
+  // exatamente sobre qual nome de cookie ler, e um nome customizado é mais
+  // um lugar onde as coisas podem silenciosamente sair de sincronia e
+  // quebrar a autenticação.
   session: { strategy: "jwt" },
 
   callbacks: {
     async jwt({ token, account }) {
-      // Initial sign-in: persist the tokens Keycloak just issued.
+      // Primeiro login: persiste os tokens que o Keycloak acabou de emitir.
       if (account) {
         return {
           ...token,
@@ -97,12 +104,12 @@ export const authOptions: NextAuthOptions = {
         };
       }
 
-      // Still valid.
+      // Ainda válido.
       if (token.accessTokenExpires && Date.now() < (token.accessTokenExpires as number)) {
         return token;
       }
 
-      // Expired: refresh it.
+      // Expirado: renova.
       if (token.refreshToken) {
         return refreshAccessToken(token);
       }
@@ -111,11 +118,12 @@ export const authOptions: NextAuthOptions = {
     },
 
     async session({ session, token }): Promise<Session> {
-      // Deliberately NOT copying accessToken onto the session object:
-      // client components never see the raw bearer token. Server
-      // Components / Route Handlers that need it read it via
-      // next-auth/jwt's getToken() (see lib/api/backend.ts) — the token
-      // never crosses into browser-executed JavaScript.
+      // Deliberadamente NÃO copia accessToken para o objeto session:
+      // Client Components nunca veem o bearer token bruto. Server
+      // Components / Route Handlers que precisam dele o leem via
+      // next-auth/jwt's getToken() (ver o proxy BFF em
+      // app/api/backend/[...path]/route.ts) — o token nunca cruza para o
+      // JavaScript executado no navegador.
       session.user = session.user ?? {};
       session.error = token.error as string | undefined;
       return session;

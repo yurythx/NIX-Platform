@@ -10,8 +10,9 @@ import { IntegrationCard } from "@/components/integrations/IntegrationCard";
 import { apiClient, ApiError } from "@/lib/api/client";
 import type { Integration } from "@/types/api";
 
-// Maps an integration's key to the test endpoint and/or a dedicated
-// detail page, without hardcoding business logic into the card itself.
+// Mapeia a chave de uma integração para o endpoint de teste e/ou uma
+// página de detalhe dedicada, sem embutir regra de negócio no próprio
+// card genérico (IntegrationCard).
 const testPathByKey: Record<string, string> = {
   virustotal: "v1/integrations/secops/virustotal/test",
 };

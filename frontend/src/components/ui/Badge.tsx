@@ -1,5 +1,8 @@
 import type { HTMLAttributes } from "react";
 
+// Selo (badge) genérico do kit de UI — sem regra de negócio própria, só
+// aplica a cor de acordo com o "tone" recebido. Usado, por exemplo, para
+// destacar status curtos em tabelas/cards.
 type Tone = "neutral" | "success" | "danger" | "warning" | "info";
 
 const toneClasses: Record<Tone, string> = {

@@ -3,13 +3,13 @@ import { parseEventEnvelope, type EventEnvelope } from "@/lib/validation/schemas
 export type ConnectionState = "idle" | "connecting" | "open" | "closed";
 
 interface NotificationClientOptions {
-  /** Fetches a fresh short-lived ticket (§38) — called on connect and on
-   * every reconnect, since tickets are single-use. */
+  /** Busca um ticket novo de curta duração (§38) — chamado ao conectar e
+   * em toda reconexão, já que tickets são de uso único. */
   getTicket: () => Promise<string>;
   wsBaseUrl: string;
   onMessage: (event: EventEnvelope) => void;
   onStateChange?: (state: ConnectionState) => void;
-  /** Overridable for tests; defaults to real exponential backoff. */
+  /** Sobrescrevível nos testes; usa o backoff exponencial real por padrão. */
   backoffMs?: (attempt: number) => number;
 }
 
@@ -20,10 +20,11 @@ function defaultBackoff(attempt: number): number {
 }
 
 /**
- * Manages one logical WebSocket connection to the platform's notification
- * endpoint: fetches a fresh ticket on every (re)connect, and reconnects
- * with bounded exponential backoff on any close/error — never an
- * aggressive tight retry loop (§39).
+ * Gerencia uma conexão WebSocket lógica com o endpoint de notificações da
+ * plataforma: busca um ticket novo a cada (re)conexão, e reconecta com
+ * backoff exponencial limitado em qualquer close/error — nunca um loop de
+ * retry agressivo e sem limite (§39), o que sobrecarregaria o backend numa
+ * instabilidade prolongada.
  */
 export class NotificationClient {
   private socket: WebSocket | null = null;
@@ -85,8 +86,9 @@ export class NotificationClient {
     };
 
     socket.onerror = () => {
-      // onclose fires right after onerror for browser WebSockets; the
-      // reconnect is scheduled there to avoid double-scheduling.
+      // onclose dispara logo depois de onerror em WebSockets de
+      // navegador; a reconexão é agendada lá para evitar agendar duas
+      // vezes.
       socket.close();
     };
   }

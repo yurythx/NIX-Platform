@@ -1,5 +1,9 @@
 import type { HTMLAttributes, TdHTMLAttributes, ThHTMLAttributes } from "react";
 
+// Família de componentes de tabela do kit de UI — encapsula o `<table>`
+// num container com `overflow-x-auto` (para tabelas largas não quebrarem
+// o layout da página) e aplica a tipografia/espaçamento padrão; nenhuma
+// peça aqui sabe o que está sendo listado.
 export function Table({ className = "", ...rest }: HTMLAttributes<HTMLTableElement>) {
   return (
     <div className="overflow-x-auto rounded-lg border border-surface-border">

@@ -1,5 +1,8 @@
 import { type InputHTMLAttributes, forwardRef } from "react";
 
+// Campo de texto do kit de UI, com label e mensagem de erro acessíveis
+// (aria-invalid/aria-describedby ligados ao id do erro) — sem regra de
+// negócio; validação de fato acontece nos schemas Zod em lib/validation.
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;

@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
 
+// Estado "sem dados" do kit de UI — usado quando uma listagem carregou
+// com sucesso mas não tem itens (distinto de ErrorState, para quando a
+// carga falhou). title/description/action são sempre fornecidos por
+// quem chama; este componente não tem texto padrão embutido.
 export interface EmptyStateProps {
   title: string;
   description?: string;

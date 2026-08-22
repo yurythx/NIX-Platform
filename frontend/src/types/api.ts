@@ -1,4 +1,7 @@
-// Shared shapes mirroring the backend's DTOs (§27/§32/§33/§74).
+// Formatos compartilhados que espelham os DTOs do backend (§27/§32/§33/§74).
+// Mantidos manualmente em sincronia com docs/openapi.yaml — qualquer novo
+// campo exposto pela API precisa ser refletido aqui para o frontend
+// enxergá-lo com tipagem.
 
 export interface User {
   id: string;

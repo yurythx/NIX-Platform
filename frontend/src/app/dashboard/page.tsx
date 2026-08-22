@@ -15,9 +15,10 @@ export default function DashboardOverviewPage() {
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Deliberately no synchronous setState before the request starts: the
-  // initial null state already renders the loading skeleton, and a retry
-  // simply replaces the old result/error once the new one arrives.
+  // Deliberadamente nenhum setState síncrono antes de a requisição
+  // começar: o estado inicial null já renderiza o skeleton de
+  // carregamento, e uma nova tentativa simplesmente substitui o
+  // resultado/erro antigo assim que o novo chega.
   const load = () => {
     apiClient
       .get<Integration[]>("v1/integrations")

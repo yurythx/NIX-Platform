@@ -11,9 +11,9 @@ export interface DialogProps {
 }
 
 /**
- * Built on the native <dialog> element: focus trapping, Escape-to-close
- * and a backdrop all come from the browser instead of being
- * reimplemented — fewer accessibility bugs to get wrong.
+ * Construído sobre o elemento nativo <dialog>: captura de foco,
+ * fechar-com-Escape e o backdrop vêm todos do navegador em vez de serem
+ * reimplementados — menos bugs de acessibilidade para errar.
  */
 export function Dialog({ open, onClose, title, description, children }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);

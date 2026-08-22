@@ -1,5 +1,8 @@
 import { type ButtonHTMLAttributes, forwardRef } from "react";
 
+// Botão do kit de UI: variantes visuais + estado de loading embutido
+// (desabilita o clique e mostra um spinner, sem o consumidor precisar
+// reimplementar isso a cada tela que dispara uma ação assíncrona).
 type Variant = "primary" | "secondary" | "danger" | "ghost";
 type Size = "sm" | "md";
 

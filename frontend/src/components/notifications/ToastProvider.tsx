@@ -10,8 +10,16 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
+// Toda notificação some sozinha depois de 6s, além de poder ser fechada
+// manualmente pelo botão "X" do Toast (ver dismiss abaixo).
 const AUTO_DISMISS_MS = 6000;
 
+// Provedor da pilha de toasts, montado uma vez no DashboardShell. Guarda
+// a lista de toasts ativos em memória (não em Zustand/Redux — o estado é
+// puramente local a esta árvore de componentes) e expõe showToast() via
+// contexto para qualquer componente descendente disparar uma notificação
+// visual, seja a partir de uma ação do usuário (IntegrationCard) ou de um
+// evento de WebSocket (NotificationCenter).
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastData[]>([]);
   const idRef = useRef(0);

@@ -25,9 +25,9 @@ export default function UsersPage() {
   const [meta, setMeta] = useState<PaginationMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // No synchronous reset before the request: the previous page's table
-  // stays on screen (stale-while-revalidate) until the new page loads,
-  // rather than flashing back to a skeleton on every click.
+  // Nenhum reset síncrono antes da requisição: a tabela da página
+  // anterior continua na tela (stale-while-revalidate) até a nova página
+  // carregar, em vez de piscar de volta para um skeleton a cada clique.
   const load = useCallback(() => {
     apiClient
       .get<User[]>(`v1/users?page=${page}&page_size=${PAGE_SIZE}`)

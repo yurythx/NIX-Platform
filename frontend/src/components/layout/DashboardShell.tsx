@@ -8,6 +8,10 @@ import { NotificationCenter } from "@/components/notifications/NotificationCente
 import { ToastProvider } from "@/components/notifications/ToastProvider";
 import type { ConnectionState } from "@/lib/websocket/client";
 
+// Layout raiz do dashboard: Sidebar + Header fixos, conteúdo da rota no
+// meio, e o NotificationCenter (invisível, só lógica) montado uma vez
+// aqui para alimentar tanto o indicador de conexão do Header quanto a
+// pilha de toasts do ToastProvider.
 export function DashboardShell({
   userLabel,
   children,

@@ -1,5 +1,9 @@
 import type { HTMLAttributes } from "react";
 
+// Família de componentes de cartão do kit de UI — puramente estrutural
+// (layout/tipografia), sem regra de negócio; cada peça (Header/Title/
+// Description/Content) é opcional e composta pelo consumidor conforme a
+// necessidade de cada tela.
 export function Card({ className = "", ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
