@@ -1,19 +1,22 @@
-// Package domain holds the diario_oficial module's contract with the
-// external Diário Oficial system. The real HTTP implementation lives in
-// infrastructure/ — this package knows nothing about HTTP, RabbitMQ, or
+// Package domain guarda o contrato do módulo diario_oficial com o sistema
+// externo do Diário Oficial. A implementação HTTP real fica em
+// infrastructure/ — este pacote não sabe nada sobre HTTP, RabbitMQ ou
 // PostgreSQL.
 package domain
 
 import "context"
 
-// CheckResult is the outcome of a successful Diário Oficial check.
+// CheckResult é o resultado de uma verificação bem-sucedida no Diário
+// Oficial.
 type CheckResult struct {
 	StatusCode int
 	Summary    string
 }
 
-// Client abstracts the external Diário Oficial system so the module's
-// application logic is testable without a live endpoint.
+// Client abstrai o sistema externo do Diário Oficial, para que a lógica de
+// aplicação do módulo seja testável sem depender de um endpoint real —
+// nos testes, uma implementação falsa (fake) desta interface substitui a
+// chamada HTTP de verdade.
 type Client interface {
 	Check(ctx context.Context) (*CheckResult, error)
 }

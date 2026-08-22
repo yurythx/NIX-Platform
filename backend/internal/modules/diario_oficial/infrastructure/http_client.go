@@ -1,6 +1,6 @@
-// Package infrastructure implements the diario_oficial module's external
-// dependencies: a real HTTP client against the configured Diário Oficial
-// endpoint.
+// Package infrastructure implementa as dependências externas do módulo
+// diario_oficial: um cliente HTTP real contra o endpoint configurado do
+// Diário Oficial.
 package infrastructure
 
 import (
@@ -14,14 +14,15 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/metrics"
 )
 
-// providerLabel is this client's value for the "provider" label on every
-// nix_integration_* metric (§53).
+// providerLabel é o valor deste cliente para o rótulo "provider" em toda
+// métrica nix_integration_* (§53).
 const providerLabel = "diario-oficial"
 
-// HTTPClient calls the external Diário Oficial system over HTTP. It never
-// blocks longer than the configured timeout (§48) and never panics on a
-// missing/unreachable endpoint — both surface as a client-safe
-// DependencyUnavailable error instead.
+// HTTPClient chama o sistema externo do Diário Oficial via HTTP. Nunca
+// bloqueia por mais tempo que o timeout configurado (§48) e nunca entra em
+// panic por um endpoint ausente/inalcançável — ambos os casos aparecem
+// como um erro DependencyUnavailable seguro de mostrar ao cliente, em vez
+// disso.
 type HTTPClient struct {
 	baseURL string
 	client  *http.Client
@@ -37,6 +38,9 @@ func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
 var _ domain.Client = (*HTTPClient)(nil)
 
 func (c *HTTPClient) Check(ctx context.Context) (*domain.CheckResult, error) {
+	// Um ambiente sem DIARIO_OFICIAL_BASE_URL configurada deve reportar a
+	// integração como indisponível de forma previsível, não tentar uma
+	// requisição HTTP para uma URL vazia e falhar de um jeito confuso.
 	if c.baseURL == "" {
 		return nil, apperrors.DependencyUnavailable("Diário Oficial integration is not configured").WithCode("INTEGRATION_UNAVAILABLE")
 	}

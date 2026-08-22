@@ -1,6 +1,6 @@
-// Package application implements the diario_oficial module's use cases
-// (§22/§34/§35): CreateDiarioOficialJob (the HTTP-triggered flow) and
-// ProcessJob/HandleDeadLetter (the worker-side execution).
+// Package application implementa os casos de uso do módulo diario_oficial
+// (§22/§34/§35): CreateDiarioOficialJob (o fluxo disparado via HTTP) e
+// ProcessJob/HandleDeadLetter (a execução do lado do worker).
 package application
 
 import (
@@ -33,8 +33,10 @@ const (
 	integrationKey = "diario-oficial"
 )
 
-// jobPayload is the body of every diario_oficial job-lifecycle event —
-// just enough for the worker/DLQ consumers to look the job back up.
+// jobPayload é o corpo de todo evento do ciclo de vida de um job do
+// diario_oficial — só o necessário para os consumers do worker/DLQ
+// localizarem o job de novo (o resto do estado vive na tabela jobs, não
+// no evento).
 type jobPayload struct {
 	JobID uuid.UUID `json:"job_id"`
 }
@@ -69,10 +71,12 @@ func NewService(
 	}
 }
 
-// CreateTestJob implements the §34/§72 flow up through "Commit": it
-// creates the job and its triggering outbox event atomically, then
-// returns — the caller (transport) is responsible for the 202 response.
-// It never calls the external Diário Oficial system itself.
+// CreateTestJob implementa o fluxo do §34/§72 até o "Commit": cria o job e
+// seu evento de outbox disparador atomicamente, e então retorna — quem
+// chama (o transport) é responsável pela resposta 202. Nunca chama o
+// sistema externo do Diário Oficial diretamente — essa é a
+// responsabilidade do worker, acionado de forma assíncrona pelo evento
+// que acabou de ser gravado no outbox.
 func (s *Service) CreateTestJob(ctx context.Context, correlationID uuid.UUID, requestedBy *uuid.UUID) (*jobs.Job, error) {
 	job, err := jobs.New(JobType, correlationID, struct{}{})
 	if err != nil {
@@ -103,19 +107,22 @@ func (s *Service) CreateTestJob(ctx context.Context, correlationID uuid.UUID, re
 	return job, nil
 }
 
-// ProcessJob implements the worker-side execution (§35). On failure it
-// records the attempt's outcome and returns the error so the caller (the
-// messaging consumer) retries per §12 — it deliberately does NOT publish a
-// job.failed notification yet, since the job may still succeed on retry.
-// Only HandleDeadLetter, called once RabbitMQ gives up, does that.
+// ProcessJob implementa a execução do lado do worker (§35). Em caso de
+// falha, registra o resultado da tentativa e retorna o erro para que quem
+// chama (o consumer de mensageria) tente de novo conforme §12 —
+// deliberadamente NÃO publica ainda uma notificação job.failed, já que o
+// job ainda pode ter sucesso numa nova tentativa. Só HandleDeadLetter,
+// chamado quando o RabbitMQ desiste, faz isso.
 //
-// Idempotency (§18): RabbitMQ's at-least-once delivery means the same
-// diario_oficial.job.created event can arrive more than once (a redelivery
-// racing an ack, a retry republish crossing with the original, ...). If
-// this job has already reached a terminal state, re-running the check
-// would be redundant at best and, since MarkProcessing/MarkCompleted
-// enforce valid status transitions, would error at worst — so terminal
-// jobs are a no-op here instead of being reprocessed.
+// Idempotência (§18): a entrega "pelo menos uma vez" (at-least-once) do
+// RabbitMQ significa que o mesmo evento diario_oficial.job.created pode
+// chegar mais de uma vez (uma redelivery competindo com um ack, um
+// republish de retry cruzando com o original, ...). Se este job já
+// alcançou um estado terminal, rodar a verificação de novo seria na
+// melhor das hipóteses redundante e, como MarkProcessing/MarkCompleted
+// impõem transições de status válidas, na pior das hipóteses daria erro —
+// por isso jobs em estado terminal viram um no-op aqui, em vez de serem
+// reprocessados.
 func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, correlationID uuid.UUID) error {
 	current, err := s.jobsRepo.GetByID(ctx, jobID)
 	if err != nil {
@@ -148,8 +155,10 @@ func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, correlationID
 		return checkErr
 	}
 
-	// Success: publish job.completed and update integration status in one
-	// transaction — same guarantee as job creation (§16).
+	// Sucesso: publica job.completed e atualiza o status da integração
+	// numa única transação — a mesma garantia usada na criação do job
+	// (§16), para que "o job terminou" e "o status da integração
+	// mudou" nunca fiquem inconsistentes entre si.
 	err = database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		if err := s.outboxWriter.Write(ctx, tx, EventJobCompleted, "job", jobID.String(), correlationID, jobPayload{JobID: jobID}); err != nil {
 			return err
@@ -169,10 +178,12 @@ func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, correlationID
 	return nil
 }
 
-// HandleDeadLetter is called once RabbitMQ has exhausted RABBITMQ_MAX_RETRIES
-// for this job's message: it's the terminal outcome, so this is where the
-// job transitions to dead_letter and the user-facing job.failed
-// notification is finally published.
+// HandleDeadLetter é chamado quando o RabbitMQ já esgotou
+// RABBITMQ_MAX_RETRIES para a mensagem deste job: é o desfecho terminal,
+// então é aqui que o job transiciona para dead_letter e a notificação
+// job.failed voltada para o usuário é finalmente publicada — antes disso,
+// toda falha era tratada como "ainda pode ter sucesso numa nova
+// tentativa" (ver ProcessJob) e não gerava notificação nenhuma.
 func (s *Service) HandleDeadLetter(ctx context.Context, jobID uuid.UUID, correlationID uuid.UUID, reason string) error {
 	err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		if err := s.jobsRepo.MarkDeadLetter(ctx, tx, jobID, reason); err != nil {

@@ -1,6 +1,7 @@
-// Package worker adapts the diario_oficial module's application service
-// to the platform's generic events.MessageHandler shape, for the two
-// queues this module owns: the job trigger and its dead-letter sink.
+// Package worker adapta o serviço de aplicação do módulo diario_oficial
+// para o formato genérico events.MessageHandler da plataforma, para as
+// duas filas que este módulo possui: o gatilho do job e seu sink de dead
+// letter.
 package worker
 
 import (
@@ -19,8 +20,11 @@ type jobPayload struct {
 	JobID string `json:"job_id"`
 }
 
-// JobCreatedHandler processes diario_oficial.job.created events —
-// consumed from nix.diario_oficial.worker.
+// JobCreatedHandler processa eventos diario_oficial.job.created —
+// consumidos de nix.diario_oficial.worker. Um erro retornado aqui aciona
+// o retry com backoff do consumer (ver internal/platform/messaging); só
+// depois de esgotados os retries é que a mensagem cai na DLQ e chega ao
+// DeadLetterHandler abaixo.
 func JobCreatedHandler(svc *application.Service) events.MessageHandler {
 	return func(ctx context.Context, event events.Event) error {
 		var payload jobPayload
@@ -35,10 +39,11 @@ func JobCreatedHandler(svc *application.Service) events.MessageHandler {
 	}
 }
 
-// DeadLetterHandler processes messages RabbitMQ has given up retrying —
-// consumed from nix.diario_oficial.dlq. It's the terminal outcome for a
-// job, so failures here are logged loudly but always acked: there is
-// nowhere further for the message to go.
+// DeadLetterHandler processa mensagens que o RabbitMQ já desistiu de
+// tentar de novo — consumidas de nix.diario_oficial.dlq. É o desfecho
+// terminal para um job, então falhas aqui são logadas de forma bem visível
+// mas sempre confirmadas (ack): não há mais para onde a mensagem ir, então
+// retornar erro e reprocessá-la de novo não ajudaria em nada.
 func DeadLetterHandler(svc *application.Service, logger *slog.Logger) events.MessageHandler {
 	return func(ctx context.Context, event events.Event) error {
 		var payload jobPayload
