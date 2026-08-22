@@ -1,5 +1,5 @@
-// Package virustotal implements domain.SecurityProvider against the real
-// VirusTotal v3 REST API.
+// Package virustotal implementa domain.SecurityProvider contra a API REST
+// v3 real do VirusTotal.
 package virustotal
 
 import (
@@ -17,14 +17,14 @@ import (
 
 const defaultBaseURL = "https://www.virustotal.com/api/v3"
 
-// providerLabel is this client's value for the "provider" label on every
-// nix_integration_* metric (§53).
+// providerLabel é o valor deste cliente para o rótulo "provider" em toda
+// métrica nix_integration_* (§53).
 const providerLabel = "virustotal"
 
-// Client calls the VirusTotal v3 API. It never blocks longer than the
-// configured timeout (§48) and never panics on a missing API key or an
-// unreachable/erroring API — both surface as a client-safe
-// DependencyUnavailable error.
+// Client chama a API v3 do VirusTotal. Nunca bloqueia por mais tempo que o
+// timeout configurado (§48) e nunca entra em panic por uma API key
+// ausente ou uma API inalcançável/com erro — ambos os casos aparecem como
+// um erro DependencyUnavailable seguro de mostrar ao cliente.
 type Client struct {
 	apiKey  string
 	baseURL string
@@ -46,8 +46,10 @@ var _ domain.SecurityProvider = (*Client)(nil)
 
 func (c *Client) Name() string { return "virustotal" }
 
-// TestConnection validates connectivity and API key by requesting a
-// known-stable, harmless resource (Google's public DNS IP).
+// TestConnection valida conectividade e a API key requisitando um recurso
+// conhecido, estável e inofensivo (o IP do DNS público do Google) — não
+// custa cota de análise nem gera nenhum efeito colateral no VirusTotal,
+// só confirma que a chave é aceita e a API responde.
 func (c *Client) TestConnection(ctx context.Context) error {
 	if c.apiKey == "" {
 		return apperrors.DependencyUnavailable("VirusTotal API key is not configured").WithCode("INTEGRATION_UNAVAILABLE")
@@ -66,10 +68,11 @@ func (c *Client) TestConnection(ctx context.Context) error {
 	return nil
 }
 
-// AnalyzeTarget looks up an IP address's reputation. Extending this to
-// domains/file-hashes/URLs is a matter of routing to VirusTotal's other
-// v3 endpoints based on the target's shape — left as the module's next
-// increment rather than guessed at here.
+// AnalyzeTarget consulta a reputação de um endereço IP. Estender isto
+// para domínios/hashes de arquivo/URLs é uma questão de rotear para os
+// outros endpoints v3 do VirusTotal de acordo com o formato do target —
+// deixado como o próximo incremento natural deste módulo, em vez de
+// adivinhado aqui sem um caso de uso concreto que o justifique.
 func (c *Client) AnalyzeTarget(ctx context.Context, target string) (*domain.SecCheckResult, error) {
 	if c.apiKey == "" {
 		return nil, apperrors.DependencyUnavailable("VirusTotal API key is not configured").WithCode("INTEGRATION_UNAVAILABLE")
@@ -126,6 +129,10 @@ func (c *Client) do(ctx context.Context, path string) (*http.Response, error) {
 	return resp, nil
 }
 
+// statusToError mapeia um status HTTP da resposta do VirusTotal para um
+// erro de domínio: 401/403 indicam API key rejeitada (mensagem
+// específica, para facilitar o diagnóstico); qualquer outro erro
+// (4xx/5xx) vira uma indisponibilidade genérica da dependência.
 func statusToError(status int) error {
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
@@ -138,6 +145,9 @@ func statusToError(status int) error {
 	return nil
 }
 
+// vtIPResponse é o subconjunto da resposta v3 do VirusTotal para
+// GET /ip_addresses/{ip} que este cliente de fato usa — o payload real da
+// API tem muito mais campos, ignorados aqui deliberadamente.
 type vtIPResponse struct {
 	Data struct {
 		Attributes struct {

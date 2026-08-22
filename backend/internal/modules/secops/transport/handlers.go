@@ -1,4 +1,4 @@
-// Package transport implements the secops module's HTTP handlers.
+// Package transport implementa os handlers HTTP do módulo secops.
 package transport
 
 import (
@@ -28,7 +28,12 @@ type testJobResponse struct {
 	Status string `json:"status"`
 }
 
-// TestVirusTotal handles POST /api/v1/integrations/secops/virustotal/test.
+// TestVirusTotal trata POST /api/v1/integrations/secops/virustotal/test.
+// Um endpoint dedicado por provedor (em vez de um genérico
+// /secops/{provider}/test) porque cada provedor tende a ganhar validações
+// e permissões próprias com o tempo — mas todos delegam para o mesmo
+// createTestJob, que por sua vez chama o Service genérico sobre
+// domain.SecurityProvider.
 func (h *Handlers) TestVirusTotal(w http.ResponseWriter, r *http.Request) {
 	h.createTestJob(w, r, "virustotal")
 }
@@ -52,6 +57,8 @@ func (h *Handlers) createTestJob(w http.ResponseWriter, r *http.Request, provide
 	httputil.WriteAccepted(w, testJobResponse{JobID: job.ID.String(), Status: string(job.Status)})
 }
 
+// correlationIDFromRequest reaproveita o request id (§50) como o
+// correlation id do fluxo de negócio quando ele já é um UUID.
 func correlationIDFromRequest(r *http.Request) uuid.UUID {
 	if id, err := uuid.Parse(logging.RequestID(r.Context())); err == nil {
 		return id
@@ -59,7 +66,7 @@ func correlationIDFromRequest(r *http.Request) uuid.UUID {
 	return uuid.New()
 }
 
-// RateLimitKey rate-limits job creation per authenticated user (§56).
+// RateLimitKey limita a criação de jobs por usuário autenticado (§56).
 func RateLimitKey(r *http.Request) string {
 	if identity, ok := auth.IdentityFromContext(r.Context()); ok && identity.Subject != "" {
 		return identity.Subject

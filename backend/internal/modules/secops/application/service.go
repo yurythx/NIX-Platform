@@ -1,6 +1,7 @@
-// Package application implements the secops module's use cases: creating
-// an async "test this provider's connection" job (§34-style flow reused
-// for any SecurityProvider) and processing it on the worker side.
+// Package application implementa os casos de uso do módulo secops: criar
+// um job assíncrono de "testar a conexão deste provedor" (o mesmo estilo
+// de fluxo do §34, reaproveitado para qualquer SecurityProvider) e
+// processá-lo do lado do worker.
 package application
 
 import (
@@ -38,9 +39,11 @@ type eventPayload struct {
 	ProviderKey string    `json:"provider_key"`
 }
 
-// Service is generic over every registered SecurityProvider — adding a
-// new one (Shodan, AbuseIPDB, ...) means registering it in the providers
-// map, never touching this file (§36/§76).
+// Service é genérico sobre todo SecurityProvider registrado — adicionar
+// um novo (Shodan, AbuseIPDB, ...) significa registrá-lo no mapa
+// providers, nunca tocar neste arquivo (§36/§76). É esse desacoplamento
+// que permite plugar um provedor novo sem reescrever o fluxo de job
+// assíncrono.
 type Service struct {
 	db           *pgxpool.Pool
 	jobsRepo     *jobs.Repository
@@ -71,8 +74,8 @@ func NewService(
 	}
 }
 
-// CreateTestJob validates the requested provider exists, then creates the
-// job and its triggering outbox event atomically (§34).
+// CreateTestJob valida que o provedor requisitado existe, e então cria o
+// job e seu evento de outbox disparador atomicamente (§34).
 func (s *Service) CreateTestJob(ctx context.Context, providerKey string, correlationID uuid.UUID, requestedBy *uuid.UUID) (*jobs.Job, error) {
 	if _, ok := s.providers[providerKey]; !ok {
 		return nil, apperrors.BadRequest(fmt.Sprintf("unknown security provider %q", providerKey))
@@ -107,14 +110,14 @@ func (s *Service) CreateTestJob(ctx context.Context, providerKey string, correla
 	return job, nil
 }
 
-// ProcessJob runs the provider's connectivity test (§35). Like
-// diario_oficial, a failure is recorded but returned as an error so the
-// messaging consumer retries — only HandleDeadLetter publishes the
-// user-facing failure notification.
+// ProcessJob roda o teste de conectividade do provedor (§35). Assim como
+// em diario_oficial, uma falha é registrada mas retornada como erro para
+// que o consumer de mensageria tente de novo — só HandleDeadLetter publica
+// a notificação de falha voltada para o usuário.
 //
-// Idempotency (§18): see the identical guard in diario_oficial's
-// ProcessJob — a redelivered event for an already-terminal job is a
-// no-op rather than an error-triggering reprocess attempt.
+// Idempotência (§18): ver a mesma proteção em diario_oficial.ProcessJob —
+// um evento redelivered para um job já em estado terminal vira um no-op
+// em vez de uma tentativa de reprocessamento que geraria erro.
 func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, providerKey string, correlationID uuid.UUID) error {
 	current, err := s.jobsRepo.GetByID(ctx, jobID)
 	if err != nil {
@@ -170,8 +173,8 @@ func (s *Service) ProcessJob(ctx context.Context, jobID uuid.UUID, providerKey s
 	return nil
 }
 
-// HandleDeadLetter is the terminal outcome once RabbitMQ gives up on a
-// provider test job.
+// HandleDeadLetter é o desfecho terminal quando o RabbitMQ desiste de um
+// job de teste de provedor.
 func (s *Service) HandleDeadLetter(ctx context.Context, jobID uuid.UUID, providerKey string, correlationID uuid.UUID, reason string) error {
 	err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		if err := s.jobsRepo.MarkDeadLetter(ctx, tx, jobID, reason); err != nil {

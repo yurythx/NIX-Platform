@@ -1,5 +1,5 @@
-// Package worker adapts the secops module's application service to the
-// platform's generic events.MessageHandler shape.
+// Package worker adapta o serviço de aplicação do módulo secops para o
+// formato genérico events.MessageHandler da plataforma.
 package worker
 
 import (
@@ -19,9 +19,10 @@ type jobPayload struct {
 	ProviderKey string `json:"provider_key"`
 }
 
-// JobCreatedHandler processes integration.test.requested events —
-// consumed from nix.integration.worker. This queue is shared by every
-// SecOps provider (§36), dispatched here by the payload's provider_key.
+// JobCreatedHandler processa eventos integration.test.requested —
+// consumidos de nix.integration.worker. Esta fila é compartilhada por todo
+// provedor SecOps (§36), e o despacho para o provedor certo é feito aqui
+// através do provider_key do payload — não existe uma fila por provedor.
 func JobCreatedHandler(svc *application.Service) events.MessageHandler {
 	return func(ctx context.Context, event events.Event) error {
 		var payload jobPayload
@@ -36,8 +37,8 @@ func JobCreatedHandler(svc *application.Service) events.MessageHandler {
 	}
 }
 
-// DeadLetterHandler processes messages RabbitMQ has given up retrying —
-// consumed from nix.integration.dlq.
+// DeadLetterHandler processa mensagens que o RabbitMQ já desistiu de
+// tentar de novo — consumidas de nix.integration.dlq.
 func DeadLetterHandler(svc *application.Service, logger *slog.Logger) events.MessageHandler {
 	return func(ctx context.Context, event events.Event) error {
 		var payload jobPayload

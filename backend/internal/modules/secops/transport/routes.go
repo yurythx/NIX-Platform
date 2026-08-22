@@ -9,11 +9,12 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
 )
 
-// RegisterRoutes mounts the secops module's routes onto an already
-// auth.RequireAuthentication-protected router. limiter is built once in
-// internal/app (backed by Postgres, shared across every API replica —
-// §rate limiting distribuído) and passed in rather than constructed
-// here, so every module doesn't stand up its own store.
+// RegisterRoutes monta as rotas do módulo secops num router já protegido
+// por auth.RequireAuthentication. limiter é construído uma única vez em
+// internal/app (baseado em Postgres, compartilhado por toda réplica da
+// API — rate limiting distribuído) e passado por parâmetro em vez de
+// construído aqui, para que cada módulo não crie seu próprio
+// armazenamento de rate limit.
 func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter httpserver.Limiter) {
 	r.With(
 		auth.RequirePermission(logger, auth.PermIntegrationsTest),
