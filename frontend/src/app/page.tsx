@@ -12,6 +12,7 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { Logo } from "@/components/ui/Logo";
 
 // §auditoria 2026-08: sem metadados públicos antes disto — só a página
 // inicial e /sobre ganham (as únicas duas rotas públicas com algo que
@@ -77,9 +78,7 @@ export default async function LandingPage() {
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between px-6 py-5">
         <span className="flex items-center gap-2 text-lg font-semibold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-            N
-          </span>
+          <Logo size={32} />
           NIX Platform
         </span>
         <nav className="flex items-center gap-4 text-sm">

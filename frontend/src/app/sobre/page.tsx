@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { Logo } from "@/components/ui/Logo";
 
 const description =
   "Princípios de arquitetura do NIX Platform: monólito modular, resiliência, segurança por padrão e observabilidade — e como a plataforma é construída.";
@@ -54,9 +55,7 @@ export default async function AboutPage() {
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between px-6 py-5">
         <Link href="/" className="flex items-center gap-2 text-lg font-semibold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-            N
-          </span>
+          <Logo size={32} />
           NIX Platform
         </Link>
         <nav className="flex items-center gap-4 text-sm">

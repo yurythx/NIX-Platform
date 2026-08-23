@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { LoginCard } from "@/components/auth/LoginCard";
+import { Logo } from "@/components/ui/Logo";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
 // O que este painel de marca promete é literalmente o que a plataforma
@@ -48,9 +49,7 @@ export default async function LoginPage() {
         />
 
         <div className="relative flex items-center gap-2 text-lg font-semibold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/15 text-sm font-bold">
-            N
-          </span>
+          <Logo size={32} />
           NIX Platform
         </div>
 
@@ -90,9 +89,7 @@ export default async function LoginPage() {
         </div>
 
         <Link href="/" className="mb-10 flex items-center gap-2 text-lg font-semibold lg:hidden">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-            N
-          </span>
+          <Logo size={32} />
           NIX Platform
         </Link>
 

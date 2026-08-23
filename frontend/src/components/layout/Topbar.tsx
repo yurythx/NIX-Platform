@@ -3,6 +3,7 @@
 import { Menu } from "lucide-react";
 
 import { NotificationBell } from "@/components/notifications/NotificationBell";
+import { Logo } from "@/components/ui/Logo";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { UserMenu } from "@/components/layout/UserMenu";
 import type { ConnectionState } from "@/lib/websocket/client";
@@ -50,9 +51,7 @@ export function Topbar({
         </button>
 
         <span className="flex items-center gap-2 text-sm font-semibold">
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
-            N
-          </span>
+          <Logo size={24} />
           <span className="hidden sm:inline">NIX Platform</span>
         </span>
 
