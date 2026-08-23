@@ -191,17 +191,18 @@ Com os containers saudáveis:
 | `/sobre` | pública | Sobre a plataforma: princípios de arquitetura e como é construída. |
 | `/login` | pública | Login (usuário/senha local ou SSO via Keycloak — ver [Login local](#login-local-adicional-ao-keycloak)). |
 | `/dashboard` | autenticada | Visão geral — só isso: status das integrações e atalhos. |
+| `/integracoes` | autenticada | Lista toda integração configurada — cada uma leva pra sua página de detalhe. |
+| `/integracoes/{key}` | autenticada | Página de detalhe genérica (rota dinâmica) de uma integração — status e teste de conectividade. `{key}` é o mesmo valor que a integração tem no backend (`diario-oficial`, `virustotal`, ...). |
 | `/configuracao` | autenticada | Aba "Sistema" — configuração dinâmica (feature flags, `nix-admin`). |
-| `/configuracao/integracoes` | autenticada | Aba "Integrações" — integrações externas configuradas. |
-| `/configuracao/integracoes/diario` | autenticada | Detalhe/teste da integração com o Diário Oficial. |
 | `/configuracao/usuarios` | autenticada | Aba "Usuários" — diretório de usuários. |
 
-`/dashboard` e `/configuracao` compartilham um único grupo de rotas autenticado
+`/dashboard`, `/integracoes` e `/configuracao` compartilham um único grupo de rotas autenticado
 (`app/(protected)/`, sem segmento próprio na URL) — a checagem de sessão e o shell visual
-(Sidebar/Topbar) são definidos uma única vez ali. Todo nome usado por essas páginas antes da
-reestruturação (`/dashboard/users`, `/dashboard/settings[/integrations/diario]`,
-`/dashboard/integrations[/diario]`) redireciona permanentemente para os caminhos acima
-(`frontend/next.config.ts`).
+(Sidebar/Topbar) são definidos uma única vez ali. Todo nome usado por essas páginas em qualquer
+momento anterior da reestruturação (`/dashboard/users`, `/dashboard/settings[/integrations/diario]`,
+`/dashboard/integrations[/diario]`, `/configuracao/integracoes[/diario]`) redireciona
+permanentemente para os caminhos acima (`frontend/next.config.ts`) — nenhum é removido dali quando
+o destino muda de novo, só atualizado para o caminho canônico atual.
 
 ## Migrations
 
