@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, Plug, Users, X } from "lucide-react";
+import { LayoutDashboard, Settings, Users, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
@@ -8,7 +8,7 @@ import { useEffect } from "react";
 const links = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
   { href: "/dashboard/users", label: "Usuários", icon: Users },
-  { href: "/dashboard/integrations", label: "Integrações", icon: Plug },
+  { href: "/dashboard/settings", label: "Configurações", icon: Settings },
 ];
 
 interface SidebarProps {
@@ -80,7 +80,13 @@ export function Sidebar({ collapsed, mobileOpen, onCloseMobile }: SidebarProps) 
         <ul className="flex flex-col gap-1 px-2">
           {links.map((link) => {
             const Icon = link.icon;
-            const active = pathname === link.href;
+            // startsWith cobre sub-rotas (ex.: /dashboard/settings/integrations/diario
+            // ainda deve marcar "Configurações" como ativa) — só para
+            // /dashboard, que "contém" toda rota do dashboard, é preciso o
+            // match exato pra não marcar todo item como ativo ao mesmo tempo.
+            const active =
+              pathname === link.href ||
+              (link.href !== "/dashboard" && pathname.startsWith(link.href + "/"));
             return (
               <li key={link.href}>
                 <Link

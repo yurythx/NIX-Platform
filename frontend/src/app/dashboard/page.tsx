@@ -1,5 +1,6 @@
 "use client";
 
+import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -12,6 +13,7 @@ import { apiClient, ApiError } from "@/lib/api/client";
 import type { Integration } from "@/types/api";
 
 export default function DashboardOverviewPage() {
+  const { data: session } = useSession();
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,20 +33,24 @@ export default function DashboardOverviewPage() {
 
   useEffect(load, []);
 
+  const firstName = (session?.user?.name ?? session?.user?.email ?? "").split(/[@\s]/)[0];
+
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-semibold">Visão geral</h1>
+        <h1 className="text-xl font-semibold">
+          {firstName ? `Olá, ${firstName}` : "Visão geral"}
+        </h1>
         <p className="text-sm text-muted">Status do sistema e ações rápidas.</p>
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Link href="/dashboard/integrations">
+        <Link href="/dashboard/settings">
           <Button variant="secondary" size="sm">
-            Ver integrações
+            Ver configurações
           </Button>
         </Link>
-        <Link href="/dashboard/integrations/diario">
+        <Link href="/dashboard/settings/integrations/diario">
           <Button variant="secondary" size="sm">
             Testar Diário Oficial
           </Button>

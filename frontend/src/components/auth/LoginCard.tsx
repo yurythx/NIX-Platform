@@ -6,7 +6,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/Button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 
 // Extraído de app/login/page.tsx como Client Component separado porque
@@ -23,6 +22,11 @@ import { Input } from "@/components/ui/Input";
 // secundária abaixo do divisor. Os dois produzem o mesmo tipo de sessão
 // NextAuth no final; o resto da aplicação não precisa saber qual caminho
 // o usuário usou.
+//
+// Sem um Card com borda/sombra em volta (ao contrário da versão
+// anterior): o painel direito de app/login/page.tsx já é o "container"
+// visual (§ Redesenho do login, inspirado em papermoon.cloud) — outra
+// caixa por dentro dele ficaria redundante.
 export function LoginCard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -52,68 +56,63 @@ export function LoginCard() {
   }
 
   return (
-    <Card className="w-full max-w-sm">
-      <CardHeader>
-        <CardTitle>Entrar no NIX Platform</CardTitle>
-        <CardDescription>Informe seu usuário e senha para continuar.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5">
-        {oauthError && (
-          <p role="alert" className="text-sm text-danger">
-            Falha ao entrar. Tente novamente.
-          </p>
-        )}
+    <div className="flex w-full max-w-sm flex-col gap-6">
+      <div>
+        <h1 className="text-2xl font-bold text-foreground">Bem-vindo de volta</h1>
+        <p className="mt-1 text-sm text-muted">Informe seu usuário e senha para continuar.</p>
+      </div>
 
-        <form className="flex flex-col gap-3" onSubmit={handleLogin}>
+      {oauthError && (
+        <p role="alert" className="text-sm text-danger">
+          Falha ao entrar. Tente novamente.
+        </p>
+      )}
+
+      <form className="flex flex-col gap-3" onSubmit={handleLogin}>
+        <Input
+          label="Usuário"
+          name="username"
+          autoComplete="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
+        />
+        <div className="relative">
           <Input
-            label="Usuário"
-            name="username"
-            autoComplete="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            label="Senha"
+            name="password"
+            type={showPassword ? "text" : "password"}
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
             required
+            error={localError ?? undefined}
+            className="pr-10"
           />
-          <div className="relative">
-            <Input
-              label="Senha"
-              name="password"
-              type={showPassword ? "text" : "password"}
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              error={localError ?? undefined}
-              className="pr-10"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword((v) => !v)}
-              aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
-              aria-pressed={showPassword}
-              className="absolute right-2.5 top-8 text-muted hover:text-foreground"
-            >
-              {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
-            </button>
-          </div>
-          <Button type="submit" className="w-full" loading={submitting}>
-            Entrar
-          </Button>
-        </form>
-
-        <div className="flex items-center gap-3 text-xs text-muted" aria-hidden="true">
-          <div className="h-px flex-1 bg-surface-border" />
-          ou
-          <div className="h-px flex-1 bg-surface-border" />
+          <button
+            type="button"
+            onClick={() => setShowPassword((v) => !v)}
+            aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+            aria-pressed={showPassword}
+            className="absolute right-2.5 top-8 text-muted hover:text-foreground"
+          >
+            {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+          </button>
         </div>
-
-        <Button
-          variant="secondary"
-          className="w-full"
-          onClick={() => signIn("keycloak", { callbackUrl })}
-        >
-          Entrar com SSO corporativo
+        <Button type="submit" className="w-full" loading={submitting}>
+          Entrar
         </Button>
-      </CardContent>
-    </Card>
+      </form>
+
+      <div className="flex items-center gap-3 text-xs text-muted" aria-hidden="true">
+        <div className="h-px flex-1 bg-surface-border" />
+        ou
+        <div className="h-px flex-1 bg-surface-border" />
+      </div>
+
+      <Button variant="secondary" className="w-full" onClick={() => signIn("keycloak", { callbackUrl })}>
+        Entrar com SSO corporativo
+      </Button>
+    </div>
   );
 }

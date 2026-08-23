@@ -77,3 +77,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pat
   const { path } = await params;
   return proxy(req, path);
 }
+
+// PATCH: usado hoje só por Configurações > Feature flags
+// (PATCH /api/v1/admin/feature-flags/{key}) — mesmo encaminhamento dos
+// outros métodos, sem lógica própria.
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  return proxy(req, path);
+}

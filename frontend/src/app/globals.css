@@ -1,12 +1,20 @@
 @import "tailwindcss";
 
+/* Paleta NIX (§ Identidade visual): roxo escuro como cor de marca — troca
+   deliberada em relação ao azul/cinza genérico anterior. Os NOMES dos
+   tokens não mudam (--background, --primary, etc.), só os valores — todo
+   componente que já usa bg-primary/text-foreground/border-surface-border
+   herda a nova paleta automaticamente, sem precisar tocar em nenhum
+   componente. Cores de status (--status-*) ficam de fora de propósito:
+   verde/vermelho/âmbar continuam semânticos, tingir de roxo prejudicaria
+   a leitura, não reforçaria a marca. */
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f7f5fb;
+  --foreground: #1e1033;
   --surface: #ffffff;
-  --surface-border: #e2e8f0;
-  --muted: #64748b;
-  --primary: #2563eb;
+  --surface-border: #e4defa;
+  --muted: #6b5b8f;
+  --primary: #7c3aed;
   --primary-foreground: #ffffff;
   --danger: #dc2626;
 
@@ -53,28 +61,31 @@
    3) data-theme="light" — mesma ideia, força claro mesmo com o SO escuro. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --background: #0b1120;
-    --foreground: #e2e8f0;
-    --surface: #111827;
-    --surface-border: #1f2937;
-    --muted: #94a3b8;
+    --background: #120a24;
+    --foreground: #ede9fe;
+    --surface: #1c1033;
+    --surface-border: #2e1b52;
+    --muted: #a78bca;
+    --primary: #a855f7;
   }
 }
 
 :root[data-theme="dark"] {
-  --background: #0b1120;
-  --foreground: #e2e8f0;
-  --surface: #111827;
-  --surface-border: #1f2937;
-  --muted: #94a3b8;
+  --background: #120a24;
+  --foreground: #ede9fe;
+  --surface: #1c1033;
+  --surface-border: #2e1b52;
+  --muted: #a78bca;
+  --primary: #a855f7;
 }
 
 :root[data-theme="light"] {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f7f5fb;
+  --foreground: #1e1033;
   --surface: #ffffff;
-  --surface-border: #e2e8f0;
-  --muted: #64748b;
+  --surface-border: #e4defa;
+  --muted: #6b5b8f;
+  --primary: #7c3aed;
 }
 
 body {

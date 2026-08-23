@@ -40,3 +40,10 @@ export interface PaginationMeta {
   total_items: number;
   total_pages: number;
 }
+
+// GET /api/v1/admin/feature-flags (restrito a nix-admin) — ver docs/openapi.yaml.
+export interface FeatureFlag {
+  key: string;
+  enabled: boolean;
+  description?: string;
+}
