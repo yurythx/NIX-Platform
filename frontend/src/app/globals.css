@@ -39,14 +39,42 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Tema claro/escuro (§ Redesenho de layout): três estados possíveis.
+   1) Nenhuma escolha explícita ainda — segue prefers-color-scheme do SO
+      via este media query puro (guardado por :not([data-theme="light"])
+      para que uma escolha explícita de claro sempre vença mesmo com o SO
+      em modo escuro).
+   2) data-theme="dark" — carimbado em <html> por app/layout.tsx a partir
+      do cookie "nix-theme" (ver components/ui/ThemeToggle.tsx), lido
+      server-side a cada request: sem flash, sem <script> inline (a CSP
+      com nonce deste app não permite 'unsafe-inline' — ver src/proxy.ts,
+      por isso não usamos next-themes, cuja técnica de anti-flash depende
+      de um script inline no <head>).
+   3) data-theme="light" — mesma ideia, força claro mesmo com o SO escuro. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --background: #0b1120;
     --foreground: #e2e8f0;
     --surface: #111827;
     --surface-border: #1f2937;
     --muted: #94a3b8;
   }
+}
+
+:root[data-theme="dark"] {
+  --background: #0b1120;
+  --foreground: #e2e8f0;
+  --surface: #111827;
+  --surface-border: #1f2937;
+  --muted: #94a3b8;
+}
+
+:root[data-theme="light"] {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --surface: #ffffff;
+  --surface-border: #e2e8f0;
+  --muted: #64748b;
 }
 
 body {

@@ -3,7 +3,9 @@
 import { useCallback, useEffect } from "react";
 
 import { useNotifications } from "@/hooks/useNotifications";
+import { useNotificationHistory } from "@/components/notifications/NotificationHistoryProvider";
 import { useToast } from "@/components/notifications/ToastProvider";
+import type { ToastTone } from "@/components/ui/Toast";
 import {
   integrationStatusPayloadSchema,
   jobEventPayloadSchema,
@@ -27,16 +29,20 @@ export function NotificationCenter({
   onConnectionStateChange?: (state: ConnectionState) => void;
 }) {
   const { showToast } = useToast();
+  const { push: pushHistory } = useNotificationHistory();
 
   const handleEvent = useCallback(
     (event: EventEnvelope) => {
       if (event.type === "integration.status.changed") {
         const result = integrationStatusPayloadSchema.safeParse(event.payload);
         if (result.success) {
-          showToast({
+          const tone: ToastTone = result.data.status === "online" ? "success" : "danger";
+          const notification = {
             title: `Integração ${result.data.key} agora está ${result.data.status}`,
-            tone: result.data.status === "online" ? "success" : "danger",
-          });
+            tone,
+          };
+          showToast(notification);
+          pushHistory(notification);
         }
         return;
       }
@@ -45,13 +51,15 @@ export function NotificationCenter({
       if (!copy) return; // tipo de evento não reconhecido — ignora em vez de adivinhar
 
       const job = jobEventPayloadSchema.safeParse(event.payload);
-      showToast({
+      const notification = {
         title: copy.title,
         description: job.success ? `Job ${job.data.job_id.slice(0, 8)}` : undefined,
         tone: copy.tone,
-      });
+      };
+      showToast(notification);
+      pushHistory(notification);
     },
-    [showToast],
+    [showToast, pushHistory],
   );
 
   const state = useNotifications(handleEvent);

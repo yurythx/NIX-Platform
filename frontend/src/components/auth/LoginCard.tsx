@@ -1,5 +1,6 @@
 "use client";
 
+import { Eye, EyeOff } from "lucide-react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
@@ -15,12 +16,13 @@ import { Input } from "@/components/ui/Input";
 // nonce do CSP gerado em proxy.ts nunca bateria com o nonce embutido no
 // HTML estático (ver a nota de bug em proxy.ts/app/login/page.tsx).
 //
-// Dois caminhos de login lado a lado (§ Sistema de Login Local): o botão
-// do Keycloak (o principal, Authorization Code + PKCE via NextAuth) e um
-// formulário de usuário/senha que autentica contra o provider
-// "local" — ver lib/auth/options.ts. Os dois produzem o mesmo tipo de
-// sessão NextAuth no final; o resto da aplicação não precisa saber qual
-// caminho o usuário usou.
+// Dois caminhos de login (§ Sistema de Login Local): o formulário
+// usuário/senha, tratado aqui como o caminho PRINCIPAL — o padrão mais
+// familiar, sem nenhuma rotulagem de "conta local" — e o SSO corporativo
+// (Keycloak, Authorization Code + PKCE via NextAuth) como alternativa
+// secundária abaixo do divisor. Os dois produzem o mesmo tipo de sessão
+// NextAuth no final; o resto da aplicação não precisa saber qual caminho
+// o usuário usou.
 export function LoginCard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -29,10 +31,11 @@ export function LoginCard() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleLocalLogin(e: FormEvent) {
+  async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setLocalError(null);
     setSubmitting(true);
@@ -52,7 +55,7 @@ export function LoginCard() {
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle>Entrar no NIX Platform</CardTitle>
-        <CardDescription>Use o Keycloak da sua organização ou um usuário local.</CardDescription>
+        <CardDescription>Informe seu usuário e senha para continuar.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         {oauthError && (
@@ -61,17 +64,7 @@ export function LoginCard() {
           </p>
         )}
 
-        <Button className="w-full" onClick={() => signIn("keycloak", { callbackUrl })}>
-          Entrar com Keycloak
-        </Button>
-
-        <div className="flex items-center gap-3 text-xs text-muted" aria-hidden="true">
-          <div className="h-px flex-1 bg-surface-border" />
-          ou
-          <div className="h-px flex-1 bg-surface-border" />
-        </div>
-
-        <form className="flex flex-col gap-3" onSubmit={handleLocalLogin}>
+        <form className="flex flex-col gap-3" onSubmit={handleLogin}>
           <Input
             label="Usuário"
             name="username"
@@ -80,20 +73,46 @@ export function LoginCard() {
             onChange={(e) => setUsername(e.target.value)}
             required
           />
-          <Input
-            label="Senha"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            error={localError ?? undefined}
-          />
-          <Button type="submit" variant="secondary" className="w-full" loading={submitting}>
-            Entrar com usuário local
+          <div className="relative">
+            <Input
+              label="Senha"
+              name="password"
+              type={showPassword ? "text" : "password"}
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              error={localError ?? undefined}
+              className="pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+              aria-pressed={showPassword}
+              className="absolute right-2.5 top-8 text-muted hover:text-foreground"
+            >
+              {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+            </button>
+          </div>
+          <Button type="submit" className="w-full" loading={submitting}>
+            Entrar
           </Button>
         </form>
+
+        <div className="flex items-center gap-3 text-xs text-muted" aria-hidden="true">
+          <div className="h-px flex-1 bg-surface-border" />
+          ou
+          <div className="h-px flex-1 bg-surface-border" />
+        </div>
+
+        <Button
+          variant="secondary"
+          className="w-full"
+          onClick={() => signIn("keycloak", { callbackUrl })}
+        >
+          Entrar com SSO corporativo
+        </Button>
       </CardContent>
     </Card>
   );

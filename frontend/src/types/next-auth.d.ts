@@ -32,7 +32,7 @@ declare module "next-auth/jwt" {
     // app/api/auth/keycloak-logout-url/route.ts) — é o id_token_hint que
     // o Keycloak exige para encerrar a sessão dele também. Ausente para
     // sessões do login local, que não têm um id_token do Keycloak — ver
-    // fullSignOut() em components/layout/Header.tsx.
+    // fullSignOut() em components/layout/UserMenu.tsx.
     idToken?: string;
     error?: string;
   }

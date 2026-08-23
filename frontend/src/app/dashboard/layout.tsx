@@ -1,4 +1,5 @@
 import { getServerSession } from "next-auth/next";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -18,5 +19,18 @@ export default async function DashboardLayout({ children }: { children: ReactNod
 
   const userLabel = session.user?.email ?? session.user?.name ?? "Autenticado";
 
-  return <DashboardShell userLabel={userLabel}>{children}</DashboardShell>;
+  // Mesmo cookie "nix-theme" que ThemeToggle.tsx escreve — lido aqui (não
+  // só no layout raiz) porque ThemeToggle só existe dentro do dashboard;
+  // ver o comentário em ThemeToggle.tsx sobre por que isto evita o flash
+  // de tema errado sem precisar de um <script> inline (bloqueado pela CSP
+  // com nonce — src/proxy.ts).
+  const cookieStore = await cookies();
+  const themeCookie = cookieStore.get("nix-theme")?.value;
+  const initialTheme = themeCookie === "dark" || themeCookie === "light" ? themeCookie : undefined;
+
+  return (
+    <DashboardShell userLabel={userLabel} initialTheme={initialTheme}>
+      {children}
+    </DashboardShell>
+  );
 }
