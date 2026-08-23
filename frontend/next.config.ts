@@ -5,29 +5,32 @@ const nextConfig: NextConfig = {
   // (backend/../frontend/Dockerfile copies .next/standalone) — §58.
   output: "standalone",
 
-  // § Reestruturação de rotas: /dashboard passou a servir só a visão
-  // geral; Usuários, Integrações e Configuração dinâmica se mudaram para
-  // /configuracao/**. Redireciona todo caminho antigo (inclusive o nome
-  // intermediário /dashboard/settings, que essas mesmas páginas usaram
-  // por uma sessão antes deste nome final) em vez de devolver 404 pra
-  // qualquer link/favorito existente.
+  // § Reestruturação de rotas: histórico completo dos nomes que estas
+  // páginas já tiveram, cada um redirecionando pro caminho canônico
+  // ATUAL (nunca removido daqui, só atualizado quando o destino final
+  // muda de novo — assim nenhum link/favorito antigo, de nenhuma época,
+  // devolve 404). Estado atual: /dashboard só a visão geral; Usuários e
+  // Configuração dinâmica em /configuracao/**; Integrações tem menu
+  // próprio em /integracoes/** (não é mais uma aba de /configuracao).
   async redirects() {
     return [
       { source: "/dashboard/users", destination: "/configuracao/usuarios", permanent: true },
       { source: "/dashboard/settings", destination: "/configuracao", permanent: true },
       {
         source: "/dashboard/settings/integrations/diario",
-        destination: "/configuracao/integracoes/diario",
+        destination: "/integracoes/diario-oficial",
         permanent: true,
       },
-      {
-        source: "/dashboard/integrations",
-        destination: "/configuracao/integracoes",
-        permanent: true,
-      },
+      { source: "/dashboard/integrations", destination: "/integracoes", permanent: true },
       {
         source: "/dashboard/integrations/diario",
-        destination: "/configuracao/integracoes/diario",
+        destination: "/integracoes/diario-oficial",
+        permanent: true,
+      },
+      { source: "/configuracao/integracoes", destination: "/integracoes", permanent: true },
+      {
+        source: "/configuracao/integracoes/diario",
+        destination: "/integracoes/diario-oficial",
         permanent: true,
       },
     ];

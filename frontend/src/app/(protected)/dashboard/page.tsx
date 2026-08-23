@@ -44,12 +44,12 @@ export default async function DashboardOverviewPage() {
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Link href="/configuracao">
+        <Link href="/integracoes">
           <Button variant="secondary" size="sm">
-            Ver configurações
+            Ver integrações
           </Button>
         </Link>
-        <Link href="/configuracao/integracoes/diario">
+        <Link href="/integracoes/diario-oficial">
           <Button variant="secondary" size="sm">
             Testar Diário Oficial
           </Button>
@@ -57,6 +57,11 @@ export default async function DashboardOverviewPage() {
         <Link href="/configuracao/usuarios">
           <Button variant="secondary" size="sm">
             Ver usuários
+          </Button>
+        </Link>
+        <Link href="/configuracao">
+          <Button variant="secondary" size="sm">
+            Ver configurações
           </Button>
         </Link>
       </div>

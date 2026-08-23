@@ -22,7 +22,7 @@ import { getToken } from "next-auth/jwt";
 // um único grupo de rotas no App Router (app/(protected)/), mas esse
 // grupo não aparece na URL — proxy.ts só enxerga o caminho real, então
 // precisa saber sobre as duas independentemente.
-const PROTECTED_PREFIXES = ["/dashboard", "/configuracao"];
+const PROTECTED_PREFIXES = ["/dashboard", "/integracoes", "/configuracao"];
 
 export async function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");

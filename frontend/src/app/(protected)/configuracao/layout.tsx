@@ -4,14 +4,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
-// Sub-navegação de /configuracao (§ Reestruturação de rotas): três
-// seções — Sistema (index, feature flags), Integrações, Usuários — que
-// antes viviam soltas sob /dashboard/*. Mesmo padrão de estado ativo por
+// Sub-navegação de /configuracao: Sistema (index, feature flags) e
+// Usuários. Integrações teve um menu próprio na barra lateral (§
+// Integrações como menu próprio) — deixou de ser uma aba daqui porque
+// virou grande o bastante pra merecer navegação de primeiro nível (lista
+// + página de detalhe por integração). Mesmo padrão de estado ativo por
 // pathname já usado em Sidebar.tsx, só que como uma tira de abas
 // horizontal em vez de itens verticais.
 const tabs = [
   { href: "/configuracao", label: "Sistema" },
-  { href: "/configuracao/integracoes", label: "Integrações" },
   { href: "/configuracao/usuarios", label: "Usuários" },
 ];
 
@@ -22,9 +23,7 @@ export default function ConfiguracaoLayout({ children }: { children: ReactNode }
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-xl font-semibold">Configurações</h1>
-        <p className="text-sm text-muted">
-          Integrações externas, usuários e configuração dinâmica do sistema.
-        </p>
+        <p className="text-sm text-muted">Usuários e configuração dinâmica do sistema.</p>
       </div>
 
       <nav aria-label="Configurações" className="border-b border-surface-border">
