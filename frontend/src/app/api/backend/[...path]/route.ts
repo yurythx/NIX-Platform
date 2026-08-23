@@ -9,10 +9,17 @@ import { getToken } from "next-auth/jwt";
 const BACKEND_URL =
   process.env.BACKEND_INTERNAL_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// proxy encaminha a requisição para GET /api/v1/{path} ou POST /api/v1/{path}
-// na API Go, injetando o Authorization: Bearer e propagando/gerando o
+// proxy encaminha a requisição para GET /api/{path} ou POST /api/{path} na
+// API Go, injetando o Authorization: Bearer e propagando/gerando o
 // X-Request-ID (§50) para que a chamada seja correlacionável nos logs do
 // backend mesmo tendo passado por este proxy intermediário.
+//
+// {path} já vem com o prefixo de versão incluído (ex.: chamadas do
+// frontend usam apiClient.get("v1/integrations")) — este proxy NÃO deve
+// prepender "v1/" de novo, senão o alvo vira /api/v1/v1/integrations e
+// toda chamada volta 404 (bug real encontrado em produção: o dashboard
+// inteiro ficava sem dados porque cada requisição batia nesse path
+// duplicado).
 async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
   const token = await getToken({ req });
   if (!token || !token.accessToken || token.error) {
@@ -22,7 +29,7 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
     );
   }
 
-  const targetUrl = new URL(`/api/v1/${path.join("/")}`, BACKEND_URL);
+  const targetUrl = new URL(`/api/${path.join("/")}`, BACKEND_URL);
   targetUrl.search = req.nextUrl.search;
 
   const requestId = req.headers.get("x-request-id") ?? crypto.randomUUID();
