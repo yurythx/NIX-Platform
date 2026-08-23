@@ -1,7 +1,8 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
-- **Status:** proposto — nenhuma fase abaixo está implementada ainda. Este documento é o
-  planejamento; a decisão de qual fase atacar primeiro é do usuário.
+- **Status:** Fase 1 (Fundação) implementada — ver detalhes na seção "Fases" abaixo. Fases 2+
+  (as ferramentas externas de verdade: TruffleHog, Trivy, Semgrep, SonarQube, OWASP ZAP) seguem
+  propostas; a decisão de qual atacar primeiro é do usuário.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -21,10 +22,10 @@ em volta continua real e reaproveitável:
 
 | Padrão pedido na proposta | Onde já existe no NIX Platform hoje |
 |---|---|
-| Strategy Pattern (interface comum por ferramenta) | Sem exemplo vivo no momento (era `secops.domain.SecurityProvider`, removido). O contrato é simples de recriar do zero — é exatamente o que a Fase 1 propõe (`CodeScanner`) — mas vale registrar: não há mais nenhuma abstração desse tipo herdada, a Fase 1 parte de uma folha em branco. |
-| Adapter Pattern (normalizar o output de cada ferramenta) | `diario_oficial/infrastructure/http_client.go` traduz a resposta HTTP do endpoint configurado pro modelo próprio do módulo — mesmo princípio (isolar o formato de terceiros do resto do sistema), aplicado a um único parceiro em vez de vários. |
-| Observer / Event-Driven | Outbox transacional + RabbitMQ (`internal/platform/outbox`, `internal/domain/events`) já publicam `integration.status.changed`, `diario_oficial.job.completed/failed` — o frontend já reage a isso via WebSocket (`NotificationCenter`), sem acoplamento direto. |
-| Microkernel / plug-in registry | Sem exemplo vivo hoje (era um `map[string]domain.SecurityProvider` no `secops.application.Service`). Um `map[string]CodeScanner` no `scanning.Service` novo (Fase 1) recria exatamente esse registro — é só um `map` em Go, não uma peça de infraestrutura que precise já existir de antemão. |
+| Strategy Pattern (interface comum por ferramenta) | ✅ Implementado na Fase 1: `scanning/domain/scanner.go` define `CodeScanner`; nenhuma implementação real ainda registrada (só o `fakeScanner` de teste) até a Fase 2 trazer a primeira ferramenta de verdade. |
+| Adapter Pattern (normalizar o output de cada ferramenta) | `diario_oficial/infrastructure/http_client.go` traduz a resposta HTTP do endpoint configurado pro modelo próprio do módulo — mesmo princípio (isolar o formato de terceiros do resto do sistema), aplicado a um único parceiro em vez de vários. Cada scanner real (Fase 2+) ganha seu próprio adapter em `scanning/infrastructure/`. |
+| Observer / Event-Driven | Outbox transacional + RabbitMQ (`internal/platform/outbox`, `internal/domain/events`) já publicam `integration.status.changed`, `diario_oficial.job.completed/failed` e, desde a Fase 1, `scanning.scan.completed` — ainda sem nenhum consumer real deste último. |
+| Microkernel / plug-in registry | ✅ Implementado na Fase 1: `scanning.Service` recebe `...domain.CodeScanner` no construtor e monta um `map[string]CodeScanner` internamente — registrar uma ferramenta nova (Fase 2+) é só passar mais um argumento no wiring de `internal/app`, sem tocar em `RunScan`. |
 | Resiliência (timeout, circuit breaker) | `internal/platform/resilience` (circuit breaker) e `context.Context` com timeout já protegem toda chamada externa — o mesmo mecanismo cobre um scanner novo sem código extra. |
 | Interruptor de emergência por ferramenta | `internal/platform/configflags` (feature flags em runtime) já desliga uma integração inteira sem reimplantar — `diario_oficial_scraping_enabled` é o exemplo vivo hoje; cada scanner novo ganha sua própria flag do mesmo jeito. |
 | Auditoria de cada execução | `internal/platform/audit` (log imutável) já registra toda ação sensível — cada scan vira uma entrada de auditoria como qualquer outra. |
@@ -103,17 +104,38 @@ type CodeScanner interface {
 Cada fase entrega algo testável e revertível por conta própria — nenhuma depende de todas as
 ferramentas estarem prontas para gerar valor.
 
-**Fase 1 — Fundação (sem ferramenta externa nenhuma ainda)**
+**Fase 1 — Fundação (sem ferramenta externa nenhuma ainda) — ✅ implementada**
 - Migration `scan_findings` (id, scanner, target, owasp_category, severity, description, file,
-  line, created_at) — mesmo padrão das tabelas já existentes.
-- Interface `CodeScanner` + modelo `Finding` (acima).
-- `scanning.Service` (Strategy + Microkernel): recebe `map[string]CodeScanner`, roda um scan,
-  grava achados numa transação + evento de outbox `scanning.scan.completed` — mesmo desenho do
-  `diario_oficial.Service.CreateTestJob`.
+  line, created_at) — mesmo padrão das tabelas já existentes
+  (`migrations/000014_scan_findings.sql`).
+- Interface `CodeScanner` + modelo `Finding` (acima) — `scanning/domain/scanner.go`, junto com
+  `Repository` (persistência dos achados).
+- `scanning.Service` (Strategy + Microkernel): recebe `map[string]CodeScanner` (registrado no
+  construtor, um `panic` em nome duplicado — erro de wiring, não condição de runtime), roda um
+  scan e grava achados + evento de outbox `scanning.scan.completed` numa única transação
+  (`scanning/application/service.go`).
+  - **Desvio deliberado do texto acima**: `RunScan` é **síncrono**, não o mesmo desenho
+    assíncrono job+outbox+worker de `diario_oficial.Service.CreateTestJob`. O padrão assíncrono
+    existe para desacoplar uma requisição HTTP de uma operação lenta via fila — mas esta fase não
+    cria nenhum endpoint HTTP nem consumer de fila (ver abaixo), então um job/worker aqui seria
+    infraestrutura morta: mensagens publicadas que nada consome. `RunScan` grava achados + evento
+    de outbox atomicamente e retorna direto, sem fila no meio. A Fase 2, ao introduzir o primeiro
+    scanner real chamado a partir de um endpoint HTTP de verdade, é o momento certo de revisitar
+    essa escolha.
 - Testado inteiramente com um `fakeScanner`, do mesmo jeito que
   `diario_oficial/application/service_test.go` já testa contra Postgres real com um `fakeClient`
-  — nenhuma ferramenta externa precisa estar instalada para esta fase passar no CI.
-- RBAC: `scanning:read`/`scanning:manage` adicionadas a `rbac.go`.
+  — nenhuma ferramenta externa precisa estar instalada para esta fase passar no CI
+  (`scanning/application/service_test.go`, pulado sem `TEST_DATABASE_URL`).
+- RBAC: `scanning:read`/`scanning:manage` adicionadas a `rbac.go`, concedidas a
+  `nix-integration-manager` (leitura+gestão) e `nix-auditor` (só leitura) — o mesmo par de roles
+  que já cobre integrações, em vez de um role novo só para isto.
+- Auditoria: `audit.ActionScanCompleted` (`"scan.completed"`) registrado a cada `RunScan`.
+- **Deliberadamente fora desta fase** (chega com o primeiro scanner real, Fase 2+): nenhum
+  endpoint HTTP/transport, nenhuma fila/worker RabbitMQ, nenhuma UI no frontend, e o módulo
+  `scanning` ainda **não está conectado** em `internal/app/modules.go` — não há nenhum
+  `CodeScanner` real para registrar nele ainda, e conectar um `Service` sem nenhum scanner nem
+  chamador seria abstração morta (o mesmo raciocínio que levou à remoção completa do módulo
+  `secops`/VirusTotal).
 
 **Fase 2 — TruffleHog (secret scanning)**
 - ⚠️ **Observação de engenharia antes de implementar**: o CI deste projeto já roda

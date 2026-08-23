@@ -28,6 +28,14 @@ const (
 	PermIntegrationsTest   Permission = "integrations:test"
 	PermIntegrationsManage Permission = "integrations:manage"
 	PermAuditRead          Permission = "audit:read"
+	// PermScanningRead/PermScanningManage controlam o módulo scanning
+	// (Fase 1 do roadmap de segurança — docs/roadmap-secops-orchestrator.md):
+	// ler achados de scan vs. disparar um novo scan. Concedidas ao mesmo
+	// role que já lida com integrações (um scanner é, na prática, mais
+	// uma integração externa a gerenciar/testar) em vez de criar um role
+	// novo só para isto.
+	PermScanningRead   Permission = "scanning:read"
+	PermScanningManage Permission = "scanning:manage"
 	// PermFeatureFlagsManage não é concedida a nenhum role em
 	// rolePermissions abaixo — só o nix-admin a possui, através do atalho
 	// em HasPermission. Alternar feature flags em produção afeta todo
@@ -48,11 +56,14 @@ var rolePermissions = map[RoleName][]Permission{
 		PermIntegrationsRead,
 		PermIntegrationsTest,
 		PermIntegrationsManage,
+		PermScanningRead,
+		PermScanningManage,
 	},
 	RoleAuditor: {
 		PermAuditRead,
 		PermUsersRead,
 		PermIntegrationsRead,
+		PermScanningRead,
 	},
 }
 
