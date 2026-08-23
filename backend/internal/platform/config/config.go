@@ -123,14 +123,18 @@ type DiarioOficialConfig struct {
 	Timeout time.Duration
 }
 
-// ScanningConfig guarda as configurações do módulo scanning. TrivyPath é
-// só "trivy" por padrão (resolvido via PATH da imagem do worker);
-// CloneTimeout limita quanto tempo TrivyScanner espera o `git clone` de
-// um alvo terminar antes de desistir, para que um repositório gigante ou
-// um host lento nunca prenda um worker indefinidamente.
+// ScanningConfig guarda as configurações do módulo scanning. TrivyPath e
+// SemgrepPath são só "trivy"/"semgrep" por padrão (resolvidos via PATH da
+// imagem do worker); CloneTimeout limita quanto tempo cada scanner espera
+// o `git clone` de um alvo terminar antes de desistir, para que um
+// repositório gigante ou um host lento nunca prenda um worker
+// indefinidamente. SemgrepConfig é o ruleset do Semgrep Registry
+// (default: infrastructure.DefaultSemgrepConfig, "p/owasp-top-ten").
 type ScanningConfig struct {
-	TrivyPath    string
-	CloneTimeout time.Duration
+	TrivyPath     string
+	SemgrepPath   string
+	SemgrepConfig string
+	CloneTimeout  time.Duration
 }
 
 // Config é a configuração da aplicação já totalmente validada.
@@ -305,8 +309,10 @@ func Load() (*Config, error) {
 			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
 		},
 		Scanning: ScanningConfig{
-			TrivyPath:    l.str("SCANNING_TRIVY_PATH", false, "trivy"),
-			CloneTimeout: l.durationVal("SCANNING_GIT_CLONE_TIMEOUT", false, 3*time.Minute),
+			TrivyPath:     l.str("SCANNING_TRIVY_PATH", false, "trivy"),
+			SemgrepPath:   l.str("SCANNING_SEMGREP_PATH", false, "semgrep"),
+			SemgrepConfig: l.str("SCANNING_SEMGREP_CONFIG", false, ""),
+			CloneTimeout:  l.durationVal("SCANNING_GIT_CLONE_TIMEOUT", false, 3*time.Minute),
 		},
 		FrontendURL:         l.str("FRONTEND_URL", false, "http://localhost:3000"),
 		APIPublicURL:        l.str("API_PUBLIC_URL", false, "http://localhost:8000"),

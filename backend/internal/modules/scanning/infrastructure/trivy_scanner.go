@@ -6,11 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/url"
-	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
@@ -34,9 +30,10 @@ const TrivyScannerName = "trivy"
 // execução sem primeiro obter o código de algum lugar. A escolha desta
 // fase (decisão explícita do usuário, registrada em
 // docs/roadmap-secops-orchestrator.md) foi clonar o repositório via git
-// para um diretório temporário e rodar `trivy fs` nele — sem exigir
-// montar o socket do Docker (superfície de ataque equivalente a root no
-// host) nem depender de um registry que ainda não existe.
+// para um diretório temporário (ver git_clone.go, compartilhado com
+// SemgrepScanner) e rodar `trivy fs` nele — sem exigir montar o socket do
+// Docker (superfície de ataque equivalente a root no host) nem depender
+// de um registry que ainda não existe.
 //
 // Deliberadamente NÃO roda o scanner "secret" do Trivy: o CI já roda
 // gitleaks para a mesma categoria (secret scanning) — rodar os dois seria
@@ -58,125 +55,17 @@ var _ domain.CodeScanner = (*TrivyScanner)(nil)
 
 func (t *TrivyScanner) Name() string { return TrivyScannerName }
 
-// refPattern restringe o que aceitamos depois de "#" no alvo a algo que
-// só pode ser um nome de branch/tag git — nunca uma flag (não pode
-// começar com "-") nem conter espaço/metacaractere.
-var refPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
-
-// parseTarget separa "<url-git-https>[#branch-ou-tag]" e valida os dois
-// pedaços. Só aceita https:// deliberadamente: file:// permitiria ler
-// qualquer caminho local acessível ao processo do worker (leitura
-// arbitrária de arquivo disfarçada de "clonar um repositório"), e
-// ssh://.../git@... exigiria gerenciar uma chave privada dentro do
-// worker — nenhum dos dois vale o risco/complexidade extra para esta
-// fase. Exigir o prefixo "https://" também garante, por construção, que o
-// valor nunca começa com "-": mesmo passado como argv separado (nunca via
-// shell), um valor começando com "-" poderia ser interpretado pelo git
-// como uma flag em vez de uma URL — injeção de argumento, não de shell,
-// mas real do mesmo jeito com os/exec.
-func parseTarget(target string) (repoURL, ref string, err error) {
-	repoURL, ref, _ = strings.Cut(target, "#")
-	if !strings.HasPrefix(repoURL, "https://") {
-		return "", "", fmt.Errorf("scanning: trivy target must be an https:// git URL, got %q", target)
-	}
-	if ref != "" && !refPattern.MatchString(ref) {
-		return "", "", fmt.Errorf("scanning: trivy target ref %q is not a valid branch/tag name", ref)
-	}
-	return repoURL, ref, nil
-}
-
-// lookupIP é indireção de teste sobre net.LookupIP — permite que
-// TestValidateHost_RejectsPrivateTargets controle a resposta de DNS sem
-// depender de rede real nem de um hostname específico continuar
-// resolvendo pra um IP privado para sempre.
-var lookupIP = net.LookupIP
-
-// validateHost resolve o host de repoURL e rejeita se qualquer IP
-// resolvido for privado/loopback/link-local/não especificado/multicast —
-// defesa em profundidade contra SSRF via uma URL controlada pelo
-// chamador (quem tem scanning:manage poderia, de outra forma, apontar o
-// `git clone` do worker pra um host só alcançável internamente).
-//
-// É uma checagem de melhor esforço, não uma proteção completa: o próprio
-// `git` (um processo separado, cuja pilha de rede este código não
-// controla) resolve o hostname de novo quando de fato conecta — uma
-// resposta de DNS que muda entre esta checagem e a conexão do git (DNS
-// rebinding) passaria por aqui. Aceito por ora dado que quem chama já
-// precisa ter scanning:manage, o mesmo nível de confiança de qualquer
-// outra ação administrativa de integração nesta plataforma.
-func validateHost(repoURL string) error {
-	u, err := url.Parse(repoURL)
-	if err != nil {
-		return fmt.Errorf("scanning: trivy: parse target URL: %w", err)
-	}
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("scanning: trivy: target URL has no host")
-	}
-
-	ips, err := lookupIP(host)
-	if err != nil {
-		return fmt.Errorf("scanning: trivy: resolve target host %q: %w", host, err)
-	}
-	for _, ip := range ips {
-		if isPrivateOrReserved(ip) {
-			return fmt.Errorf("scanning: trivy: target host %q resolves to a private/internal address, refusing to clone", host)
-		}
-	}
-	return nil
-}
-
-func isPrivateOrReserved(ip net.IP) bool {
-	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
-}
-
-// Execute clona repoURL (raso, um branch só) para um diretório temporário
-// e roda `trivy fs` nele. O diretório é sempre removido ao final,
-// sucesso ou erro — nunca deixa código de terceiros no disco do worker
-// depois de um scan.
+// Execute clona o alvo (raso, um branch só) via cloneShallow e roda
+// `trivy fs` no diretório resultante — sempre removido ao final, sucesso
+// ou erro.
 func (t *TrivyScanner) Execute(ctx context.Context, target string) ([]domain.Finding, error) {
-	repoURL, ref, err := parseTarget(target)
+	dir, cleanup, err := cloneShallow(ctx, target, t.cloneTimeout, t.logger)
 	if err != nil {
-		return nil, apperrors.Validation(err.Error())
-	}
-	if err := validateHost(repoURL); err != nil {
-		return nil, apperrors.Validation(err.Error())
-	}
-
-	dir, err := os.MkdirTemp("", "nix-trivy-*")
-	if err != nil {
-		return nil, fmt.Errorf("scanning: trivy: create temp dir: %w", err)
-	}
-	defer func() {
-		if rmErr := os.RemoveAll(dir); rmErr != nil {
-			t.logger.Warn("scanning: trivy: failed to clean up temp dir", slog.String("dir", dir), slog.Any("error", rmErr))
-		}
-	}()
-
-	cloneCtx, cancel := context.WithTimeout(ctx, t.cloneTimeout)
-	defer cancel()
-	if err := t.cloneRepo(cloneCtx, repoURL, ref, dir); err != nil {
 		return nil, err
 	}
+	defer cleanup()
 
 	return t.scanFS(ctx, dir)
-}
-
-func (t *TrivyScanner) cloneRepo(ctx context.Context, repoURL, ref, dir string) error {
-	args := []string{"clone", "--depth", "1", "--single-branch"}
-	if ref != "" {
-		args = append(args, "--branch", ref)
-	}
-	args = append(args, repoURL, dir)
-
-	cmd := exec.CommandContext(ctx, "git", args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return apperrors.DependencyUnavailable(fmt.Sprintf("scanning: trivy: git clone failed: %s", firstLine(stderr.String())))
-	}
-	return nil
 }
 
 func (t *TrivyScanner) scanFS(ctx context.Context, dir string) ([]domain.Finding, error) {
@@ -190,20 +79,6 @@ func (t *TrivyScanner) scanFS(ctx context.Context, dir string) ([]domain.Finding
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("scanning: trivy: scan failed: %s", firstLine(stderr.String())))
 	}
 	return parseTrivyReport(stdout.Bytes())
-}
-
-// firstLine evita despejar um stderr de várias linhas (potencialmente com
-// detalhe interno do binário) inteiro numa mensagem de erro voltada ao
-// cliente HTTP — só a primeira linha, o resto fica só no log.
-func firstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	if s == "" {
-		return "unknown error"
-	}
-	return s
 }
 
 // trivyReport é o subconjunto do JSON de saída do `trivy` (formato
@@ -244,7 +119,7 @@ func parseTrivyReport(raw []byte) ([]domain.Finding, error) {
 			findings = append(findings, domain.Finding{
 				ID:            v.VulnerabilityID,
 				OWASPCategory: "A06:2021-Vulnerable and Outdated Components",
-				Severity:      normalizeSeverity(v.Severity),
+				Severity:      normalizeTrivySeverity(v.Severity),
 				Description:   fmt.Sprintf("%s (pacote %s@%s, corrigido em %s)", v.Title, v.PkgName, v.InstalledVersion, orDash(v.FixedVersion)),
 				File:          result.Target,
 			})
@@ -253,7 +128,7 @@ func parseTrivyReport(raw []byte) ([]domain.Finding, error) {
 			findings = append(findings, domain.Finding{
 				ID:            m.ID,
 				OWASPCategory: "A05:2021-Security Misconfiguration",
-				Severity:      normalizeSeverity(m.Severity),
+				Severity:      normalizeTrivySeverity(m.Severity),
 				Description:   fmt.Sprintf("%s: %s", m.Title, m.Message),
 				File:          result.Target,
 				Line:          m.CauseMetadata.StartLine,
@@ -263,13 +138,13 @@ func parseTrivyReport(raw []byte) ([]domain.Finding, error) {
 	return findings, nil
 }
 
-// normalizeSeverity traduz a escala do Trivy pra domain.Severity — as
-// quatro que importam já batem 1:1 com o vocabulário do Trivy (por
+// normalizeTrivySeverity traduz a escala do Trivy pra domain.Severity —
+// as quatro que importam já batem 1:1 com o vocabulário do Trivy (por
 // desenho, ver o comentário de domain.Severity). "UNKNOWN" (Trivy não
 // conseguiu classificar) vira LOW por segurança: nunca descartar
 // silenciosamente um achado só porque a gravidade não pôde ser
 // determinada.
-func normalizeSeverity(s string) domain.Severity {
+func normalizeTrivySeverity(s string) domain.Severity {
 	switch strings.ToUpper(s) {
 	case "CRITICAL":
 		return domain.SeverityCritical

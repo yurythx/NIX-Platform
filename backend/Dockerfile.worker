@@ -39,7 +39,23 @@ RUN apk add --no-cache ca-certificates git curl && \
     mv trivy /usr/local/bin/trivy && \
     chmod +x /usr/local/bin/trivy && \
     rm -f /tmp/trivy_${TRIVY_VERSION}_* && \
-    apk del curl && \
+    apk del curl
+
+# SemgrepScanner (Fase 4 — SAST) precisa do binário semgrep, também só na
+# imagem do worker. Ao contrário do trivy, o Semgrep não publica um
+# tarball standalone com checksum próprio — é distribuído via PyPI (wheel
+# manylinux/musllinux) — então a garantia de integridade aqui é a cadeia
+# de confiança padrão do pip contra o índice do PyPI (TLS + hash por
+# arquivo verificado pelo próprio pip), não uma verificação de checksum
+# explícita como a do trivy acima; documentado aqui como uma diferença
+# real, não uma omissão. Instalado numa venv isolada (o Python do sistema
+# Alpine é "externally managed" desde a 3.11 — apio pip direto falharia)
+# e exposto via symlink no PATH, igual ao trivy.
+ARG SEMGREP_VERSION=1.174.0
+RUN apk add --no-cache python3 py3-pip && \
+    python3 -m venv /opt/semgrep-venv && \
+    /opt/semgrep-venv/bin/pip install --no-cache-dir --disable-pip-version-check "semgrep==${SEMGREP_VERSION}" && \
+    ln -s /opt/semgrep-venv/bin/semgrep /usr/local/bin/semgrep && \
     addgroup -S nix && adduser -S nix -G nix
 USER nix
 WORKDIR /app

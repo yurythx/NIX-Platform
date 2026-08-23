@@ -83,7 +83,8 @@ func buildModules(deps *Dependencies) *Modules {
 
 	scanningRepo := scanningInfra.NewPostgresRepository(deps.DB)
 	trivyScanner := scanningInfra.NewTrivyScanner(deps.Config.Scanning.TrivyPath, deps.Config.Scanning.CloneTimeout, deps.Logger)
-	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner)
+	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
+	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner, semgrepScanner)
 	m.Scanning.Service = scanningSvc
 	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger)
 

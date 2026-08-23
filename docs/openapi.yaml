@@ -397,14 +397,19 @@ paths:
                 scanner:
                   type: string
                   description: Nome de um CodeScanner registrado.
+                  enum: ["trivy", "semgrep"]
                   example: "trivy"
                 target:
                   type: string
                   description: >
-                    Para o scanner "trivy": uma URL git https://, com um
-                    branch/tag opcional após "#" (ex.:
+                    Para "trivy" (dependências, Dockerfiles) e "semgrep"
+                    (SAST) — os dois clonam o alvo via git antes de
+                    escanear: uma URL git https://, com um branch/tag
+                    opcional após "#" (ex.:
                     "https://github.com/org/repo.git#main"). Só https://
-                    é aceito.
+                    é aceito; o host é resolvido e rejeitado se apontar
+                    para um IP privado/loopback/link-local (defesa de
+                    SSRF, ver docs/roadmap-secops-orchestrator.md).
                   example: "https://github.com/org/repo.git#main"
       responses:
         "202":
