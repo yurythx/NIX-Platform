@@ -12,6 +12,16 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
 
+# SonarScanner (Fase 5 — SonarQube) é distribuído como um JAR Java
+# portável, mas a imagem oficial da SonarSource é baseada em Amazon Linux
+# (glibc) — copiar os binários nativos dela pra cima de um runtime Alpine
+# (musl) quebraria. Em vez disso, este estágio só serve pra extrair
+# lib/bin/conf (JAR + script de shell, nenhum binário nativo) da imagem
+# oficial pinada por tag; o runtime final instala sua PRÓPRIA JRE nativa
+# do Alpine (musl) pra rodar esse JAR — verificado que a combinação
+# funciona (ver docs/roadmap-secops-orchestrator.md, Fase 5).
+FROM sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1 AS sonar-scanner-cli
+
 # ---- runtime ----
 FROM alpine:3.20 AS runtime
 
@@ -55,8 +65,19 @@ ARG SEMGREP_VERSION=1.174.0
 RUN apk add --no-cache python3 py3-pip && \
     python3 -m venv /opt/semgrep-venv && \
     /opt/semgrep-venv/bin/pip install --no-cache-dir --disable-pip-version-check "semgrep==${SEMGREP_VERSION}" && \
-    ln -s /opt/semgrep-venv/bin/semgrep /usr/local/bin/semgrep && \
+    ln -s /opt/semgrep-venv/bin/semgrep /usr/local/bin/semgrep
+
+# SonarScanner (Fase 5 — qualidade de código/bugs via um servidor
+# SonarQube self-hosted, ver docker-compose.yml) precisa do sonar-scanner
+# CLI + uma JRE — os dois só na imagem do worker. openjdk21-jre-headless
+# é a JRE nativa musl do Alpine (não a glibc empacotada na imagem oficial
+# do estágio sonar-scanner-cli acima); só os arquivos portáveis dessa
+# imagem (JAR + script de shell) são copiados.
+RUN apk add --no-cache openjdk21-jre-headless && \
     addgroup -S nix && adduser -S nix -G nix
+COPY --from=sonar-scanner-cli /opt/sonar-scanner /opt/sonar-scanner
+RUN ln -s /opt/sonar-scanner/bin/sonar-scanner /usr/local/bin/sonar-scanner
+
 USER nix
 WORKDIR /app
 COPY --from=builder --chown=nix:nix /out/worker ./worker

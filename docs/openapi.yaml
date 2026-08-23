@@ -397,19 +397,24 @@ paths:
                 scanner:
                   type: string
                   description: Nome de um CodeScanner registrado.
-                  enum: ["trivy", "semgrep"]
+                  enum: ["trivy", "semgrep", "sonarqube"]
                   example: "trivy"
                 target:
                   type: string
                   description: >
-                    Para "trivy" (dependências, Dockerfiles) e "semgrep"
-                    (SAST) — os dois clonam o alvo via git antes de
-                    escanear: uma URL git https://, com um branch/tag
-                    opcional após "#" (ex.:
-                    "https://github.com/org/repo.git#main"). Só https://
-                    é aceito; o host é resolvido e rejeitado se apontar
-                    para um IP privado/loopback/link-local (defesa de
-                    SSRF, ver docs/roadmap-secops-orchestrator.md).
+                    Para "trivy" (dependências, Dockerfiles), "semgrep"
+                    (SAST) e "sonarqube" (qualidade de código/bugs) — os
+                    três clonam o alvo via git antes de escanear: uma URL
+                    git https://, com um branch/tag opcional após "#"
+                    (ex.: "https://github.com/org/repo.git#main"). Só
+                    https:// é aceito; o host é resolvido e rejeitado se
+                    apontar para um IP privado/loopback/link-local (defesa
+                    de SSRF, ver docs/roadmap-secops-orchestrator.md). O
+                    scanner "sonarqube" exige SCANNING_SONARQUBE_URL
+                    configurada no worker (503 DEPENDENCY_UNAVAILABLE caso
+                    contrário) e leva mais tempo — além do scan em si, o
+                    worker espera a Compute Engine do servidor terminar de
+                    processar o relatório enviado.
                   example: "https://github.com/org/repo.git#main"
       responses:
         "202":

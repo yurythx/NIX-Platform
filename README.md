@@ -332,14 +332,21 @@ Os testes do backend se dividem em dois grupos:
   extra sem um requisito concreto.
 
 **Roadmap de segurança**: [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md)
-mapeia o que já está implementado (tabela acima) contra o OWASP Top 10 e propõe fases futuras —
-scanners de SAST/DAST/dependências/segredos (Semgrep, TruffleHog, SonarQube, OWASP ZAP)
-orquestrados pelo mesmo padrão Strategy/Adapter/Observer que o resto da plataforma já usa para
-integrações externas (ver `diario_oficial`). O módulo `scanning` (`POST /api/v1/scanning/scans`,
-`GET /api/v1/scanning/scans/{scanID}/findings`) já está implementado com o primeiro scanner real
-registrado — **Trivy**: clona um alvo via git e escaneia dependências/Dockerfiles sob demanda,
-mesmo padrão job → outbox → fila → worker → notificação de `diario_oficial`. As demais fases
-seguem como planejamento.
+mapeia o que já está implementado (tabela acima) contra o OWASP Top 10. O módulo `scanning`
+(`POST /api/v1/scanning/scans`, `GET /api/v1/scanning/scans/{scanID}/findings`) orquestra três
+scanners reais, todos seguindo o mesmo padrão Strategy/Adapter e o mesmo pipeline
+job → outbox → fila → worker → notificação de `diario_oficial`:
+
+- **Trivy** — clona o alvo via git e escaneia dependências/Dockerfiles.
+- **Semgrep** — SAST (`p/owasp-top-ten`), mesmo mecanismo de clone.
+- **SonarQube** — qualidade de código/bugs/vulnerabilidades via um servidor self-hosted
+  (`docker-compose.yml`, serviços `sonarqube`/`sonarqube-db`); assíncrono em dois níveis (upload +
+  processamento pela Compute Engine do servidor), o único dos três que não é só "rodar um
+  binário".
+
+TruffleHog (Fase 2) foi pulado por redundância com o gitleaks já no CI. OWASP ZAP (DAST, Fase 6,
+a de maior risco de todas — dispara ataques ativos contra um alvo rodando de verdade) segue como
+planejamento.
 
 ## Observabilidade
 

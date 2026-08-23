@@ -14,6 +14,14 @@ services:
       - "5672:5672"   # AMQP, for connecting a local client/debugger
       - "15672:15672" # management UI — http://localhost:15672
 
+  sonarqube:
+    ports:
+      # 9001, não 9000: a porta 9000 já é usada por um serviço não
+      # relacionado a este projeto neste host (portainer) — o container
+      # continua escutando em 9000 internamente, só o mapeamento externo
+      # muda.
+      - "9001:9000" # web console — http://localhost:9001
+
   backend-api:
     environment:
       APP_ENV: development
