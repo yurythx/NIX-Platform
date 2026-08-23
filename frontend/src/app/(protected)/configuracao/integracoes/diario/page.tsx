@@ -1,61 +1,25 @@
-"use client";
-
-import { useEffect, useState } from "react";
-
-import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
-import { useToast } from "@/components/notifications/ToastProvider";
-import { apiClient, ApiError } from "@/lib/api/client";
-import type { Integration, TestJobResponse } from "@/types/api";
+import { DiarioTestButton } from "@/components/integrations/DiarioTestButton";
+import { ApiError } from "@/lib/api/client";
+import { serverApiGet } from "@/lib/api/server";
+import type { Integration } from "@/types/api";
 
 // Detalhe da integração com o Diário Oficial, dentro da aba
-// "Integrações" de /configuracao (§ Reestruturação de rotas —
-// /dashboard/settings/integrations/diario e /dashboard/integrations/diario,
-// os dois nomes que esta página já teve, redirecionam pra cá — ver
-// next.config.ts).
-export default function DiarioOficialPage() {
-  const { showToast } = useToast();
-  const [integration, setIntegration] = useState<Integration | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [testing, setTesting] = useState(false);
-  const [lastJobId, setLastJobId] = useState<string | null>(null);
-
-  const load = () => {
-    apiClient
-      .get<Integration[]>("v1/integrations")
-      .then(({ data }) => {
-        const found = data.find((i) => i.key === "diario-oficial");
-        setError(null);
-        setIntegration(found ?? null);
-      })
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Falha ao carregar"));
-  };
-
-  useEffect(load, []);
-
-  const runTest = async () => {
-    setTesting(true);
-    try {
-      const { data } = await apiClient.post<TestJobResponse>("v1/integrations/diario-oficial/test");
-      setLastJobId(data.job_id);
-      showToast({
-        title: "Verificação do Diário Oficial enfileirada",
-        description: `Job ${data.job_id.slice(0, 8)} — você será notificado quando terminar.`,
-        tone: "info",
-      });
-    } catch (err) {
-      showToast({
-        title: "Não foi possível iniciar a verificação",
-        description: err instanceof ApiError ? err.message : "Erro inesperado",
-        tone: "danger",
-      });
-    } finally {
-      setTesting(false);
-    }
-  };
+// "Integrações" de /configuracao. Server Component (§ Migração pra
+// Server Components) — busca o status no servidor; só o botão "Rodar
+// teste agora" (DiarioTestButton) continua client, por ser genuinamente
+// interativo.
+export default async function DiarioOficialPage() {
+  let integration: Integration | undefined;
+  let errorMessage: string | null = null;
+  try {
+    const { data } = await serverApiGet<Integration[]>("v1/integrations");
+    integration = data.find((i) => i.key === "diario-oficial");
+  } catch (err) {
+    errorMessage = err instanceof ApiError ? err.message : "Falha ao carregar";
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -67,9 +31,7 @@ export default function DiarioOficialPage() {
         </p>
       </div>
 
-      {error && <ErrorState message={error} onRetry={load} />}
-
-      {!error && !integration && <Skeleton className="h-40 w-full" />}
+      {errorMessage && <ErrorState message={errorMessage} />}
 
       {integration && (
         <Card>
@@ -96,17 +58,7 @@ export default function DiarioOficialPage() {
               <p className="text-sm text-danger">{integration.last_error}</p>
             )}
 
-            <div>
-              <Button loading={testing} onClick={runTest}>
-                Rodar teste agora
-              </Button>
-              {lastJobId && (
-                <p className="mt-2 text-xs text-muted">
-                  Último job disparado: <code>{lastJobId}</code> — o resultado chega como
-                  notificação.
-                </p>
-              )}
-            </div>
+            <DiarioTestButton />
           </CardContent>
         </Card>
       )}

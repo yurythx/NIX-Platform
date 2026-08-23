@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
+import { BACKEND_INTERNAL_URL as BACKEND_URL } from "@/lib/api/backendUrl";
+
 // Proxy BFF (Backend For Frontend): toda chamada de Client Component à
 // API Go passa por aqui, em vez de carregar um bearer token no JavaScript
 // executado no navegador. O access token real é lido no lado do servidor
 // a partir do cookie de sessão criptografado e anexado aqui — ele nunca
-// chega ao cliente (§30/§57).
-const BACKEND_URL =
-  process.env.BACKEND_INTERNAL_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// chega ao cliente (§30/§57). Páginas que buscam dados em Server
+// Component (§ Migração pra Server Components) não passam por aqui — ver
+// lib/api/server.ts, que fala com o backend direto, sem o hop de rede
+// extra que uma chamada vinda do navegador precisa.
 
 // proxy encaminha a requisição para GET /api/{path} ou POST /api/{path} na
 // API Go, injetando o Authorization: Bearer e propagando/gerando o

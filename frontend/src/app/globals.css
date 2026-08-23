@@ -75,7 +75,12 @@
     --surface: #1c1033;
     --surface-border: #2e1b52;
     --muted: #a78bca;
-    --primary: #a855f7;
+    /* #9333ea, não #a855f7 (o tom usado no resto da UI escura): texto
+       branco sobre #a855f7 mede 3.96:1 (abaixo do mínimo WCAG AA de
+       4.5:1 pra texto normal — achado real da auditoria de 2026-08, ver
+       docs/audit-2026-08.md). #9333ea mede 5.38:1 — mesma família de cor,
+       só escura o suficiente pra rótulo de botão continuar legível. */
+    --primary: #9333ea;
   }
 }
 
@@ -85,7 +90,7 @@
   --surface: #1c1033;
   --surface-border: #2e1b52;
   --muted: #a78bca;
-  --primary: #a855f7;
+  --primary: #9333ea;
 }
 
 :root[data-theme="light"] {

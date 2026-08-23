@@ -6,11 +6,24 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
+import type { Metadata } from "next";
 import { connection } from "next/server";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+
+// §auditoria 2026-08: sem metadados públicos antes disto — só a página
+// inicial e /sobre ganham (as únicas duas rotas públicas com algo que
+// vale compartilhar; rotas autenticadas não têm por quê ser indexadas).
+const description =
+  "Plataforma modular que centraliza integrações, automações e notificações corporativas — construída como um monólito modular, com resiliência e segurança por padrão.";
+
+export const metadata: Metadata = {
+  title: "NIX Platform — integrações, automação e notificações",
+  description,
+  openGraph: { title: "NIX Platform", description, type: "website" },
+};
 
 // Serviços/módulos reais da plataforma — nada aqui é aspiracional, cada
 // item corresponde a um módulo que já existe em backend/internal/modules

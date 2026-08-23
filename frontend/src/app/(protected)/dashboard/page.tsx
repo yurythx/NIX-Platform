@@ -1,43 +1,38 @@
-"use client";
-
-import { useSession } from "next-auth/react";
+import { getServerSession } from "next-auth/next";
 import Link from "next/link";
-import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { Skeleton } from "@/components/ui/Skeleton";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
-import { apiClient, ApiError } from "@/lib/api/client";
+import { authOptions } from "@/lib/auth/options";
+import { ApiError } from "@/lib/api/client";
+import { serverApiGet } from "@/lib/api/server";
 import type { Integration } from "@/types/api";
 
 // Visão geral (§ Reestruturação de rotas): a partir de agora /dashboard
 // serve SÓ isto — status do sistema e atalhos. Usuários, integrações e
-// configuração dinâmica vivem em /configuracao (ver
-// app/(protected)/configuracao/).
-export default function DashboardOverviewPage() {
-  const { data: session } = useSession();
-  const [integrations, setIntegrations] = useState<Integration[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // Deliberadamente nenhum setState síncrono antes de a requisição
-  // começar: o estado inicial null já renderiza o skeleton de
-  // carregamento, e uma nova tentativa simplesmente substitui o
-  // resultado/erro antigo assim que o novo chega.
-  const load = () => {
-    apiClient
-      .get<Integration[]>("v1/integrations")
-      .then(({ data }) => {
-        setError(null);
-        setIntegrations(data);
-      })
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Falha ao carregar"));
-  };
-
-  useEffect(load, []);
-
+// configuração dinâmica vivem em /configuracao.
+//
+// Server Component (§ Migração pra Server Components — auditoria
+// 2026-08): busca a sessão e a lista de integrações no servidor, antes de
+// qualquer HTML sair — nada de useEffect/skeleton manual aqui. Não há
+// nada nesta página que precise reagir a estado do navegador; os
+// "atalhos" abaixo são só <Link>, e loading.tsx (nesta mesma pasta) cobre
+// o estado de carregamento via Suspense em vez de um skeleton escrito à
+// mão.
+export default async function DashboardOverviewPage() {
+  const session = await getServerSession(authOptions);
   const firstName = (session?.user?.name ?? session?.user?.email ?? "").split(/[@\s]/)[0];
+
+  let integrations: Integration[] | null = null;
+  let errorMessage: string | null = null;
+  try {
+    const { data } = await serverApiGet<Integration[]>("v1/integrations");
+    integrations = data;
+  } catch (err) {
+    errorMessage = err instanceof ApiError ? err.message : "Falha ao carregar";
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -71,13 +66,7 @@ export default function DashboardOverviewPage() {
           <CardTitle>Status das integrações</CardTitle>
         </CardHeader>
         <CardContent>
-          {error && <ErrorState message={error} onRetry={load} />}
-          {!error && !integrations && (
-            <div className="flex flex-col gap-2">
-              <Skeleton className="h-6 w-full" />
-              <Skeleton className="h-6 w-full" />
-            </div>
-          )}
+          {errorMessage && <ErrorState message={errorMessage} />}
           {integrations && (
             <ul className="flex flex-col gap-3">
               {integrations.map((integration) => (

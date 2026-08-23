@@ -1,9 +1,19 @@
 import { Layers, Lock, Radar, RefreshCw } from "lucide-react";
+import type { Metadata } from "next";
 import { connection } from "next/server";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+
+const description =
+  "Princípios de arquitetura do NIX Platform: monólito modular, resiliência, segurança por padrão e observabilidade — e como a plataforma é construída.";
+
+export const metadata: Metadata = {
+  title: "Sobre — NIX Platform",
+  description,
+  openGraph: { title: "Sobre o NIX Platform", description, type: "website" },
+};
 
 // Princípios como o README/os ADRs deste repositório já os descrevem —
 // não duplicando o texto deles, só resumindo pro visitante da página

@@ -57,6 +57,19 @@ export function DashboardShell({
   return (
     <ToastProvider>
       <NotificationHistoryProvider>
+        {/* Pular para o conteúdo (§ auditoria 2026-08): invisível até
+            receber foco por teclado — sem ele, quem navega por teclado/
+            leitor de tela precisa tabular pela Sidebar inteira em toda
+            página só pra chegar no conteúdo principal. z-[60]: acima da
+            Topbar (z-50) e da Sidebar (z-40), únicos outros elementos
+            fixos nesta árvore. */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
+        >
+          Pular para o conteúdo
+        </a>
+
         <Topbar
           userLabel={userLabel}
           connectionState={connectionState}
@@ -72,6 +85,7 @@ export function DashboardShell({
             desktop (md:), já que no mobile ela fica off-canvas e não
             ocupa espaço nenhum na página. */}
         <main
+          id="main-content"
           className={`min-h-screen overflow-x-auto pt-14 px-4 pb-4 transition-[padding] duration-200 sm:px-6 sm:pb-6
             ${collapsed ? "md:pl-16" : "md:pl-60"}`}
         >
