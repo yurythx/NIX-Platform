@@ -5,20 +5,29 @@ const nextConfig: NextConfig = {
   // (backend/../frontend/Dockerfile copies .next/standalone) — §58.
   output: "standalone",
 
-  // § Reestruturação de páginas: /dashboard/integrations foi consolidada
-  // em /dashboard/settings (integrações + feature flags no mesmo lugar).
-  // Redireciona qualquer link/favorito antigo em vez de simplesmente
-  // devolver 404.
+  // § Reestruturação de rotas: /dashboard passou a servir só a visão
+  // geral; Usuários, Integrações e Configuração dinâmica se mudaram para
+  // /configuracao/**. Redireciona todo caminho antigo (inclusive o nome
+  // intermediário /dashboard/settings, que essas mesmas páginas usaram
+  // por uma sessão antes deste nome final) em vez de devolver 404 pra
+  // qualquer link/favorito existente.
   async redirects() {
     return [
+      { source: "/dashboard/users", destination: "/configuracao/usuarios", permanent: true },
+      { source: "/dashboard/settings", destination: "/configuracao", permanent: true },
+      {
+        source: "/dashboard/settings/integrations/diario",
+        destination: "/configuracao/integracoes/diario",
+        permanent: true,
+      },
       {
         source: "/dashboard/integrations",
-        destination: "/dashboard/settings",
+        destination: "/configuracao/integracoes",
         permanent: true,
       },
       {
         source: "/dashboard/integrations/diario",
-        destination: "/dashboard/settings/integrations/diario",
+        destination: "/configuracao/integracoes/diario",
         permanent: true,
       },
     ];

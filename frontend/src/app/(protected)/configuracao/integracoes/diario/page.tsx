@@ -11,9 +11,10 @@ import { useToast } from "@/components/notifications/ToastProvider";
 import { apiClient, ApiError } from "@/lib/api/client";
 import type { Integration, TestJobResponse } from "@/types/api";
 
-// Movida de app/dashboard/integrations/diario (§ Reestruturação de
-// páginas) para dentro de Configurações, junto com o resto de
-// integrações — /dashboard/integrations/diario redireciona pra cá (ver
+// Detalhe da integração com o Diário Oficial, dentro da aba
+// "Integrações" de /configuracao (§ Reestruturação de rotas —
+// /dashboard/settings/integrations/diario e /dashboard/integrations/diario,
+// os dois nomes que esta página já teve, redirecionam pra cá — ver
 // next.config.ts).
 export default function DiarioOficialPage() {
   const { showToast } = useToast();

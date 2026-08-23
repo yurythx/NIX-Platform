@@ -12,6 +12,10 @@ import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { apiClient, ApiError } from "@/lib/api/client";
 import type { Integration } from "@/types/api";
 
+// Visão geral (§ Reestruturação de rotas): a partir de agora /dashboard
+// serve SÓ isto — status do sistema e atalhos. Usuários, integrações e
+// configuração dinâmica vivem em /configuracao (ver
+// app/(protected)/configuracao/).
 export default function DashboardOverviewPage() {
   const { data: session } = useSession();
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
@@ -45,17 +49,17 @@ export default function DashboardOverviewPage() {
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Link href="/dashboard/settings">
+        <Link href="/configuracao">
           <Button variant="secondary" size="sm">
             Ver configurações
           </Button>
         </Link>
-        <Link href="/dashboard/settings/integrations/diario">
+        <Link href="/configuracao/integracoes/diario">
           <Button variant="secondary" size="sm">
             Testar Diário Oficial
           </Button>
         </Link>
-        <Link href="/dashboard/users">
+        <Link href="/configuracao/usuarios">
           <Button variant="secondary" size="sm">
             Ver usuários
           </Button>

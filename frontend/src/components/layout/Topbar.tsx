@@ -17,11 +17,13 @@ const connectionCopy: Record<ConnectionState, { label: string; dotClass: string 
   closed: { label: "Reconectando…", dotClass: "bg-status-degraded" },
 };
 
-// Barra superior (§ Redesenho de layout, inspirado em papermoon.cloud):
-// alterna a Sidebar (recolher no desktop, abrir/fechar no mobile — a
-// mesma ação, resolvida por onToggleSidebar em DashboardShell conforme o
-// breakpoint), mostra o indicador de conexão do WebSocket, e agrupa
-// tema/notificações/usuário no canto superior direito.
+// Barra superior (§ Sidebar/Topbar no layout do papermoon.cloud): fixa,
+// ocupando a largura inteira da viewport, sempre acima de tudo — a
+// Sidebar (fixa também) começa ABAIXO dela (top-14, ver Sidebar.tsx), não
+// ao lado. DashboardShell.tsx compensa isso dando ao <main> um
+// padding-top do tamanho desta barra (h-14) e um padding-left do tamanho
+// da Sidebar, já que os dois elementos fixos saem do fluxo normal do
+// layout.
 export function Topbar({
   userLabel,
   connectionState,
@@ -36,7 +38,7 @@ export function Topbar({
   const status = connectionCopy[connectionState];
 
   return (
-    <header className="flex items-center justify-between border-b border-surface-border px-4 py-3">
+    <header className="fixed inset-x-0 top-0 z-50 flex h-14 items-center justify-between border-b border-surface-border bg-surface px-4">
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -47,10 +49,15 @@ export function Topbar({
           <Menu size={18} aria-hidden="true" />
         </button>
 
-        <span className="text-sm font-semibold md:hidden">NIX Platform</span>
+        <span className="flex items-center gap-2 text-sm font-semibold">
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
+            N
+          </span>
+          <span className="hidden sm:inline">NIX Platform</span>
+        </span>
 
         <div
-          className="hidden items-center gap-2 text-xs text-muted sm:flex"
+          className="hidden items-center gap-2 text-xs text-muted md:flex"
           title="Conexão de notificações em tempo real"
         >
           <span

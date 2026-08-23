@@ -19,7 +19,11 @@ import type { PaginationMeta, User } from "@/types/api";
 
 const PAGE_SIZE = 20;
 
-export default function UsersPage() {
+// Aba "Usuários" de /configuracao (movida de /dashboard/users — §
+// Reestruturação de rotas). Sem cabeçalho próprio: a aba já rotula esta
+// seção, e app/(protected)/configuracao/layout.tsx já mostra o título
+// "Configurações" acima das abas.
+export default function UsuariosPage() {
   const [page, setPage] = useState(1);
   const [users, setUsers] = useState<User[] | null>(null);
   const [meta, setMeta] = useState<PaginationMeta | null>(null);
@@ -44,12 +48,7 @@ export default function UsersPage() {
   useEffect(load, [load]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-semibold">Usuários</h1>
-        <p className="text-sm text-muted">Todos com acesso ao NIX Platform.</p>
-      </div>
-
+    <div className="flex flex-col gap-4">
       {error && <ErrorState message={error} onRetry={load} />}
 
       {!error && !users && (

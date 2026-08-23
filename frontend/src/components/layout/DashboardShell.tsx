@@ -57,18 +57,27 @@ export function DashboardShell({
   return (
     <ToastProvider>
       <NotificationHistoryProvider>
-        <div className="flex min-h-screen">
-          <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <Topbar
-              userLabel={userLabel}
-              connectionState={connectionState}
-              onToggleSidebar={toggleSidebar}
-              initialTheme={initialTheme}
-            />
-            <main className="flex-1 overflow-x-auto p-4 sm:p-6">{children}</main>
-          </div>
-        </div>
+        <Topbar
+          userLabel={userLabel}
+          connectionState={connectionState}
+          onToggleSidebar={toggleSidebar}
+          initialTheme={initialTheme}
+        />
+        <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
+
+        {/* Topbar e Sidebar são fixed (fora do fluxo normal — ver seus
+            próprios comentários) — este <main> precisa compensar os dois
+            manualmente: pt-14 pela altura da Topbar (sempre presente,
+            mobile incluso), pl-16/pl-60 pela largura da Sidebar SÓ no
+            desktop (md:), já que no mobile ela fica off-canvas e não
+            ocupa espaço nenhum na página. */}
+        <main
+          className={`min-h-screen overflow-x-auto pt-14 px-4 pb-4 transition-[padding] duration-200 sm:px-6 sm:pb-6
+            ${collapsed ? "md:pl-16" : "md:pl-60"}`}
+        >
+          {children}
+        </main>
+
         <NotificationCenter onConnectionStateChange={setConnectionState} />
       </NotificationHistoryProvider>
     </ToastProvider>

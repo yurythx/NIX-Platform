@@ -15,9 +15,15 @@ import { getToken } from "next-auth/jwt";
 //    páginas estáticas em cache), aceitável aqui pois é um dashboard
 //    interno, não um site de alto tráfego dependente de cache em CDN.
 //
-// 2. Proteção de rota: redireciona visitas não autenticadas a
-//    /dashboard/** para /login, sem deixar a página nem começar a
-//    renderizar.
+// 2. Proteção de rota: redireciona visitas não autenticadas a qualquer
+//    seção protegida (PROTECTED_PREFIXES) para /login, sem deixar a
+//    página nem começar a renderizar.
+// Seções autenticadas (§ Reestruturação de rotas): as duas compartilham
+// um único grupo de rotas no App Router (app/(protected)/), mas esse
+// grupo não aparece na URL — proxy.ts só enxerga o caminho real, então
+// precisa saber sobre as duas independentemente.
+const PROTECTED_PREFIXES = ["/dashboard", "/configuracao"];
+
 export async function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const isDev = process.env.NODE_ENV === "development";
@@ -50,8 +56,10 @@ export async function proxy(request: NextRequest) {
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", cspHeader);
 
-  const isDashboardRoute = request.nextUrl.pathname.startsWith("/dashboard");
-  if (isDashboardRoute) {
+  const isProtectedRoute = PROTECTED_PREFIXES.some(
+    (prefix) => request.nextUrl.pathname === prefix || request.nextUrl.pathname.startsWith(prefix + "/"),
+  );
+  if (isProtectedRoute) {
     const token = await getToken({ req: request });
     if (!token || token.error) {
       const loginUrl = new URL("/login", request.url);

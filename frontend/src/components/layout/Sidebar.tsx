@@ -1,14 +1,13 @@
 "use client";
 
-import { LayoutDashboard, Settings, Users, X } from "lucide-react";
+import { LayoutDashboard, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 
 const links = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
-  { href: "/dashboard/users", label: "Usuários", icon: Users },
-  { href: "/dashboard/settings", label: "Configurações", icon: Settings },
+  { href: "/configuracao", label: "Configurações", icon: Settings },
 ];
 
 interface SidebarProps {
@@ -23,11 +22,12 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-// Navegação lateral (§ Redesenho de layout, inspirado em
-// papermoon.cloud): recolhível a uma trilha de ícones no desktop, e um
-// painel off-canvas com overlay no mobile — mesmo componente cobrindo os
-// dois casos via classes condicionais, em vez de dois componentes
-// separados.
+// Navegação lateral (§ Sidebar/Topbar no layout do papermoon.cloud):
+// fixa, começando ABAIXO da Topbar (top-14 — a Topbar tem h-14 e também é
+// fixa, ver Topbar.tsx) em vez de ao lado dela; recolhível a uma trilha de
+// ícones no desktop, painel off-canvas com overlay no mobile. Sem cabeçalho
+// próprio (logo/fechar) — a Topbar já cobre os dois (logo sempre visível,
+// o mesmo botão de hambúrguer fecha o painel mobile).
 export function Sidebar({ collapsed, mobileOpen, onCloseMobile }: SidebarProps) {
   const pathname = usePathname();
 
@@ -53,7 +53,7 @@ export function Sidebar({ collapsed, mobileOpen, onCloseMobile }: SidebarProps) 
           painel aberto; invisível e fora do fluxo de layout no desktop. */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          className="fixed inset-0 top-14 z-40 bg-black/40 md:hidden"
           onClick={onCloseMobile}
           aria-hidden="true"
         />
@@ -61,29 +61,23 @@ export function Sidebar({ collapsed, mobileOpen, onCloseMobile }: SidebarProps) 
 
       <nav
         aria-label="Principal"
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-surface-border bg-surface
-          transition-transform duration-200 md:static md:z-auto md:translate-x-0
-          ${collapsed ? "md:w-16" : "md:w-56"}
-          ${mobileOpen ? "translate-x-0" : "-translate-x-full"} w-64`}
+        className={`fixed left-0 top-14 bottom-0 z-40 flex flex-col overflow-hidden border-r border-surface-border bg-surface
+          transition-transform duration-200 md:translate-x-0
+          ${collapsed ? "md:w-16" : "md:w-60"}
+          ${mobileOpen ? "translate-x-0" : "-translate-x-full"} w-72`}
       >
-        <div className="flex items-center justify-between px-4 py-4">
-          {!collapsed && <span className="text-lg font-semibold">NIX Platform</span>}
-          <button
-            type="button"
-            onClick={onCloseMobile}
-            aria-label="Fechar menu"
-            className="rounded-md p-1 text-muted hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5 md:hidden"
-          >
-            <X size={18} aria-hidden="true" />
-          </button>
-        </div>
-        <ul className="flex flex-col gap-1 px-2">
+        {!collapsed && (
+          <div className="px-3 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-muted">
+            Principal
+          </div>
+        )}
+        <ul className="flex flex-col gap-0.5 px-2 pt-2">
           {links.map((link) => {
             const Icon = link.icon;
-            // startsWith cobre sub-rotas (ex.: /dashboard/settings/integrations/diario
+            // startsWith cobre sub-rotas (ex.: /configuracao/integracoes/diario
             // ainda deve marcar "Configurações" como ativa) — só para
-            // /dashboard, que "contém" toda rota do dashboard, é preciso o
-            // match exato pra não marcar todo item como ativo ao mesmo tempo.
+            // /dashboard, que não tem sub-rotas próprias, é preciso o
+            // match exato.
             const active =
               pathname === link.href ||
               (link.href !== "/dashboard" && pathname.startsWith(link.href + "/"));

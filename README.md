@@ -190,13 +190,17 @@ Com os containers saudáveis:
 | `/` | pública | Página inicial — filosofia da plataforma e os serviços/módulos disponíveis. |
 | `/sobre` | pública | Sobre a plataforma: princípios de arquitetura e como é construída. |
 | `/login` | pública | Login (usuário/senha local ou SSO via Keycloak — ver [Login local](#login-local-adicional-ao-keycloak)). |
-| `/dashboard` | autenticada | Visão geral: status das integrações e atalhos. |
-| `/dashboard/users` | autenticada | Diretório de usuários. |
-| `/dashboard/settings` | autenticada | Configurações: integrações externas + feature flags (`nix-admin`). |
-| `/dashboard/settings/integrations/diario` | autenticada | Detalhe/teste da integração com o Diário Oficial. |
+| `/dashboard` | autenticada | Visão geral — só isso: status das integrações e atalhos. |
+| `/configuracao` | autenticada | Aba "Sistema" — configuração dinâmica (feature flags, `nix-admin`). |
+| `/configuracao/integracoes` | autenticada | Aba "Integrações" — integrações externas configuradas. |
+| `/configuracao/integracoes/diario` | autenticada | Detalhe/teste da integração com o Diário Oficial. |
+| `/configuracao/usuarios` | autenticada | Aba "Usuários" — diretório de usuários. |
 
-`/dashboard/integrations` e `/dashboard/integrations/diario` (nomes usados antes da
-reestruturação de páginas) redirecionam permanentemente para os caminhos acima
+`/dashboard` e `/configuracao` compartilham um único grupo de rotas autenticado
+(`app/(protected)/`, sem segmento próprio na URL) — a checagem de sessão e o shell visual
+(Sidebar/Topbar) são definidos uma única vez ali. Todo nome usado por essas páginas antes da
+reestruturação (`/dashboard/users`, `/dashboard/settings[/integrations/diario]`,
+`/dashboard/integrations[/diario]`) redireciona permanentemente para os caminhos acima
 (`frontend/next.config.ts`).
 
 ## Migrations

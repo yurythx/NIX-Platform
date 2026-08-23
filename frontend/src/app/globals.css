@@ -18,6 +18,14 @@
   --primary-foreground: #ffffff;
   --danger: #dc2626;
 
+  /* Fundo do painel de marca do login (app/login/page.tsx) — DELIBERADAMENTE
+     fora dos blocos de tema claro/escuro abaixo, igual ao
+     --papermoon-midnight-fixed-rgb do papermoon.cloud: um roxo quase preto
+     FIXO, que não muda com o toggle de tema nem com o SO. --primary
+     continua vivo/vibrante (para botões/acentos, onde precisa de
+     contraste), este token é só para esse fundo decorativo específico. */
+  --brand-panel: #0d0618;
+
   --status-online: #16a34a;
   --status-offline: #dc2626;
   --status-degraded: #d97706;
@@ -34,6 +42,7 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-danger: var(--danger);
+  --color-brand-panel: var(--brand-panel);
   /* Expostas como classes utilitárias (bg-status-online, etc.) para que
      StatusIndicator/Header nunca precisem de um atributo style="" inline
      — o CSP com nonce (proxy.ts) bloqueia estilo inline, e nonce não se

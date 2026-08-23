@@ -37,7 +37,7 @@ export default async function LoginPage() {
       {/* Painel de marca — só no desktop (lg: e acima), igual ao
           comportamento do papermoon.cloud: abaixo disso a tela vira só o
           formulário, centralizado. */}
-      <div className="relative hidden overflow-hidden bg-primary text-primary-foreground lg:flex lg:w-[44%] lg:flex-col lg:justify-between lg:p-12">
+      <div className="relative hidden overflow-hidden bg-brand-panel text-primary-foreground lg:flex lg:w-[44%] lg:flex-col lg:justify-between lg:p-12">
         <div
           className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-white/10 blur-3xl"
           aria-hidden="true"
