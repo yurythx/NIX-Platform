@@ -6,15 +6,36 @@ import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Logo } from "@/components/ui/Logo";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@/components/ui/Table";
 
 const description =
-  "Princípios de arquitetura do NIX Platform: monólito modular, resiliência, segurança por padrão e observabilidade — e como a plataforma é construída.";
+  "Princípios de arquitetura do NIX Platform, o mapeamento completo contra o OWASP Top 10 e como a plataforma é construída.";
 
 export const metadata: Metadata = {
   title: "Sobre — NIX Platform",
   description,
   openGraph: { title: "Sobre o NIX Platform", description, type: "website" },
 };
+
+// Mesma matriz de docs/roadmap-secops-orchestrator.md — mantida em
+// sincronia manualmente (o roadmap é o documento fonte, esta página é o
+// resumo pro público). Cada célula da coluna "Hoje" foi conferida no
+// código durante a auditoria de 2026-08 e a sessão seguinte, não copiada
+// de um checklist genérico — em especial A03 (zero concatenação de
+// string em SQL, checado com grep no backend inteiro) e A10 (nenhum
+// endpoint aceita URL arbitrária do chamador, mesma checagem).
+const owaspMapping = [
+  { code: "A01", risk: "Broken Access Control", today: "RBAC por permissão em cada rota sensível — nunca só a presença de um token." },
+  { code: "A02", risk: "Cryptographic Failures", today: "RS256 com chave própria para o login local, bcrypt, segredos via arquivo, nunca em texto puro." },
+  { code: "A03", risk: "Injection", today: "100% consultas parametrizadas — conferido: zero concatenação de string em SQL em todo o backend." },
+  { code: "A04", risk: "Insecure Design", today: "Monólito modular com fronteiras de módulo e decisões de arquitetura documentadas em ADRs." },
+  { code: "A05", risk: "Security Misconfiguration", today: "CSP com nonce por requisição, containers non-root, headers de segurança em toda resposta." },
+  { code: "A06", risk: "Vulnerable Components", today: "govulncheck, npm audit, Trivy e Dependabot rodando a cada mudança de código, no CI." },
+  { code: "A07", risk: "Identification & Auth Failures", today: "Bloqueio de conta, rate limiting distribuído, erro sempre genérico (nunca revela se um usuário existe)." },
+  { code: "A08", risk: "Software & Data Integrity Failures", today: "Idempotência e outbox transacional. Pendente: assinatura/SBOM de artefatos de build (ver roadmap)." },
+  { code: "A09", risk: "Logging & Monitoring Failures", today: "Auditoria imutável (a tabela recusa UPDATE/DELETE), logs correlacionados por request id, métricas e tracing." },
+  { code: "A10", risk: "SSRF", today: "Conferido: nenhum endpoint aceita uma URL arbitrária vinda de quem chama." },
+];
 
 // Princípios como o README/os ADRs deste repositório já os descrevem —
 // não duplicando o texto deles, só resumindo pro visitante da página
@@ -100,6 +121,45 @@ export default async function AboutPage() {
               );
             })}
           </div>
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <div>
+            <h2 className="text-xl font-semibold text-foreground">OWASP Top 10</h2>
+            <p className="mt-1 text-sm text-muted">
+              Tratado como checklist de engenharia desde o primeiro commit, não como algo
+              adicionado depois de pronto. A coluna da direita descreve a prática de hoje — quando
+              algo ainda está pendente, dizemos isso em vez de deixar de fora.
+            </p>
+          </div>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell>Risco</TableHeaderCell>
+                <TableHeaderCell>Prática hoje no NIX Platform</TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {owaspMapping.map((item) => (
+                <TableRow key={item.code}>
+                  <TableCell className="whitespace-nowrap align-top font-medium text-foreground">
+                    <span className="font-mono text-xs text-primary">{item.code}</span>{" "}
+                    {item.risk}
+                  </TableCell>
+                  <TableCell className="text-muted">{item.today}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <p className="text-sm text-muted">
+            Estamos expandindo isso para varredura automatizada de código e dependências (SAST,
+            scanning de containers, segredos vazados, testes dinâmicos) orquestrada pelo mesmo
+            padrão que já usamos para o VirusTotal hoje — o plano completo, fase por fase, está em{" "}
+            <code className="rounded bg-black/5 px-1 py-0.5 text-xs dark:bg-white/10">
+              docs/roadmap-secops-orchestrator.md
+            </code>{" "}
+            no repositório.
+          </p>
         </section>
 
         <section className="flex flex-col gap-3">

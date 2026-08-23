@@ -330,6 +330,12 @@ Os testes do backend se dividem em dois grupos:
   funcionando, e nenhum campo atual (email corporativo, por exemplo) justifica essa complexidade
   extra sem um requisito concreto.
 
+**Roadmap de segurança**: [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md)
+mapeia o que já está implementado (tabela acima) contra o OWASP Top 10 e propõe fases futuras —
+scanners de SAST/DAST/dependências/segredos (Semgrep, Trivy sob demanda, TruffleHog, SonarQube,
+OWASP ZAP) orquestrados pelo mesmo padrão Strategy/Adapter/Observer que o módulo `secops` já usa
+para o VirusTotal. Nenhuma fase está implementada ainda — é um documento de planejamento.
+
 ## Observabilidade
 
 - **Logs**: estruturados (`log/slog`), JSON em produção, texto em desenvolvimento, com
