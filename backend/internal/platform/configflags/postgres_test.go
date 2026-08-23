@@ -90,7 +90,7 @@ func TestPostgresStore_ListIncludesSeededFlags(t *testing.T) {
 	for _, f := range flags {
 		seen[f.Key] = true
 	}
-	for _, want := range []string{"secops_virustotal_enabled", "diario_oficial_scraping_enabled"} {
+	for _, want := range []string{"diario_oficial_scraping_enabled"} {
 		if !seen[want] {
 			t.Errorf("List() não incluiu a flag semeada %q", want)
 		}

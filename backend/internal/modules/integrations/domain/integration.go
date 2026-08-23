@@ -23,7 +23,7 @@ const (
 
 // Integration é um sistema externo configurado, do qual a plataforma pode
 // consultar o status e, para alguns tipos, disparar uma execução de teste
-// (ex.: Diário Oficial, VirusTotal).
+// (ex.: Diário Oficial).
 type Integration struct {
 	ID            uuid.UUID
 	Key           string

@@ -1,9 +1,9 @@
 // Package idempotency implementa suporte a chaves de idempotência (padrão
 // popularizado pela Stripe API) para endpoints HTTP que criam efeito
-// colateral — hoje, os dois endpoints de criação de job assíncrono
-// (POST .../diario-oficial/test e .../secops/virustotal/test). Sem isto,
-// um duplo clique no botão "Testar" no dashboard, ou um retry automático
-// de um cliente HTTP após um timeout de rede, cria dois jobs em vez de um
+// colateral — hoje, o endpoint de criação de job assíncrono
+// (POST .../diario-oficial/test). Sem isto, um duplo clique no botão
+// "Testar" no dashboard, ou um retry automático de um cliente HTTP após
+// um timeout de rede, cria dois jobs em vez de um
 // — o segundo nunca sabendo que o primeiro já tinha sido aceito.
 //
 // Contrato: o cliente envia um header "Idempotency-Key" com um valor

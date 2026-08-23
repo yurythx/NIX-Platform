@@ -22,7 +22,7 @@ import (
 // fakeRepository é um domain.Repository em memória — este módulo nunca
 // teve nenhum teste (nem de application, nem de transport) antes desta
 // auditoria; UpdateStatusTx não é exercitado por nenhum dos dois handlers
-// HTTP testados aqui (só os workers de diario_oficial/secops chamam
+// HTTP testados aqui (só o worker de diario_oficial chama
 // RecordCheckResult), então fica deliberadamente sem implementação real.
 type fakeRepository struct {
 	byID map[uuid.UUID]*domain.Integration
@@ -89,7 +89,7 @@ func withChiURLParam(r *http.Request, key, value string) *http.Request {
 func TestListIntegrations_ReturnsAllConfigured(t *testing.T) {
 	repo := newFakeRepository(
 		&domain.Integration{ID: uuid.New(), Key: "diario-oficial", Name: "Diário Oficial", Status: domain.StatusOnline},
-		&domain.Integration{ID: uuid.New(), Key: "virustotal", Name: "VirusTotal", Status: domain.StatusOffline},
+		&domain.Integration{ID: uuid.New(), Key: "example-provider", Name: "Example Provider", Status: domain.StatusOffline},
 	)
 	h := NewHandlers(application.NewService(repo), testLogger())
 

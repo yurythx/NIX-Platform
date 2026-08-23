@@ -51,7 +51,7 @@ describe("jobEventPayloadSchema", () => {
 describe("integrationStatusPayloadSchema", () => {
   it("accepts a known status", () => {
     const result = integrationStatusPayloadSchema.safeParse({
-      key: "virustotal",
+      key: "diario-oficial",
       status: "online",
     });
     expect(result.success).toBe(true);
@@ -59,7 +59,7 @@ describe("integrationStatusPayloadSchema", () => {
 
   it("rejects an unknown status value", () => {
     const result = integrationStatusPayloadSchema.safeParse({
-      key: "virustotal",
+      key: "diario-oficial",
       status: "flying",
     });
     expect(result.success).toBe(false);

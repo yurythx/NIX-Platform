@@ -19,8 +19,4 @@ export const integrationRegistry: Record<string, IntegrationRegistryEntry> = {
       "Executa uma verificação assíncrona de conectividade com o endpoint configurado do Diário Oficial.",
     testPath: "v1/integrations/diario-oficial/test",
   },
-  virustotal: {
-    description: "Executa uma verificação assíncrona de conectividade com a API do VirusTotal.",
-    testPath: "v1/integrations/secops/virustotal/test",
-  },
 };

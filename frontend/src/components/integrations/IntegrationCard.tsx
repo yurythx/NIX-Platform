@@ -15,7 +15,7 @@ export function IntegrationCard({
   extra,
 }: {
   integration: Integration;
-  /** POST path (relative to /api/backend/) that triggers a test run, e.g. "v1/integrations/secops/virustotal/test". */
+  /** POST path (relative to /api/backend/) that triggers a test run, e.g. "v1/integrations/diario-oficial/test". */
   testPath?: string;
   extra?: ReactNode;
 }) {

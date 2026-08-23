@@ -38,7 +38,7 @@ type Flag struct {
 
 // Store persiste e consulta feature flags. Os casos de uso dependem desta
 // interface, não de *PostgresStore diretamente — o campo Flags de um
-// Service pode ficar nil (ver diario_oficial/secops application.Service),
+// Service pode ficar nil (ver diario_oficial.Service),
 // e nesse caso a checagem é pulada e a funcionalidade correspondente é
 // tratada como sempre habilitada; isso mantém os testes de aplicação
 // existentes funcionando sem precisar semear flags para cada cenário.

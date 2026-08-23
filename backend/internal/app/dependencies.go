@@ -37,7 +37,7 @@ import (
 // uma manter sua própria contagem independente em memória (e portanto
 // N×-generosa demais).
 type RateLimiters struct {
-	TestJob    httpserver.Limiter // POST .../diario-oficial/test, .../virustotal/test
+	TestJob    httpserver.Limiter // POST .../diario-oficial/test
 	WSTicket   httpserver.Limiter // POST /api/v1/ws/ticket
 	LocalLogin httpserver.Limiter // POST /api/v1/auth/login — chave por IP, não por usuário (§ Sistema de Login Local), já que quem chama ainda não está autenticado
 }

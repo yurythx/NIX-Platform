@@ -38,16 +38,6 @@ var (
 		RoutingKeys: []string{"diario_oficial.job.created"},
 	}
 
-	// QueueIntegrationWorker trata o fluxo genérico de "rodar um teste de
-	// integração" compartilhado por todo provedor SecOps (VirusTotal hoje,
-	// mais no futuro por §36/§76) sem precisar de uma fila nova por
-	// provedor.
-	QueueIntegrationWorker = QueueSpec{
-		Name:        "nix.integration.worker",
-		DLQName:     "nix.integration.dlq",
-		RoutingKeys: []string{"integration.test.requested"},
-	}
-
 	// QueueNotificationWebsocket alimenta o Hub de WebSocket (§37/§72):
 	// está vinculada a todo tipo de evento sobre o qual o frontend deve
 	// ser notificado, não só a eventos explícitos "notification.created".
@@ -58,7 +48,6 @@ var (
 			"notification.created",
 			"diario_oficial.job.completed",
 			"diario_oficial.job.failed",
-			"integration.test.completed",
 			"integration.status.changed",
 		},
 	}
@@ -66,7 +55,7 @@ var (
 
 // AllQueues lista toda fila que a plataforma declara no startup.
 func AllQueues() []QueueSpec {
-	return []QueueSpec{QueueDiarioOficialWorker, QueueIntegrationWorker, QueueNotificationWebsocket}
+	return []QueueSpec{QueueDiarioOficialWorker, QueueNotificationWebsocket}
 }
 
 // DeclareTopology declara de forma idempotente o exchange, toda fila e sua

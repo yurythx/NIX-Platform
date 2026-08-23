@@ -4,29 +4,37 @@
   planejamento; a decisão de qual fase atacar primeiro é do usuário.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
+- **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
+  vivo de cada padrão já implementado. Esse módulo foi removido do produto (decisão do usuário —
+  era a única integração "SecOps" real, e o rumo daqui pra frente é o orquestrador desenhado
+  abaixo, não um provedor de lookup avulso). Os exemplos abaixo foram trocados para
+  `diario_oficial`, o único módulo de integração restante — a arquitetura de plataforma que os
+  patterns abaixo reaproveitam (outbox, circuit breaker, feature flags, auditoria) não mudou.
 
 ## Por que isto não é um "Core" novo — é uma extensão do que já existe
 
 A proposta original pede um núcleo em Go do zero, gerenciando ferramentas de segurança como
-plug-ins. O NIX Platform **já tem exatamente essa espinha dorsal**, construída para o VirusTotal
-e pronta pra crescer sem ser reescrita:
+plug-ins. O NIX Platform **já tem a espinha dorsal de plataforma** que isso precisa — o que não
+existe mais é um exemplo vivo do papel específico de "Strategy" (não há mais um segundo provedor
+plugável hoje, só `diario_oficial`, que fala com um único endpoint fixo) — mas a infraestrutura
+em volta continua real e reaproveitável:
 
 | Padrão pedido na proposta | Onde já existe no NIX Platform hoje |
 |---|---|
-| Strategy Pattern (interface `Scanner` comum) | `internal/modules/secops/domain.SecurityProvider` (`Name()`, `TestConnection()`, `AnalyzeTarget()`) — o VirusTotal já é uma implementação disso. |
-| Adapter Pattern (normalizar o output de cada ferramenta) | `secops/infrastructure/virustotal/client.go` já traduz o JSON da API do VirusTotal pro modelo próprio (`domain.SecCheckResult`). |
-| Observer / Event-Driven | Outbox transacional + RabbitMQ (`internal/platform/outbox`, `internal/domain/events`) já publicam `integration.status.changed`, `*.job.completed/failed` — o frontend já reage a isso via WebSocket (`NotificationCenter`), sem acoplamento direto. |
-| Microkernel / plug-in registry | `secops/application.Service` já recebe um `map[string]domain.SecurityProvider` — registrar uma ferramenta nova é adicionar uma entrada nesse mapa, o `Service` não muda. |
+| Strategy Pattern (interface comum por ferramenta) | Sem exemplo vivo no momento (era `secops.domain.SecurityProvider`, removido). O contrato é simples de recriar do zero — é exatamente o que a Fase 1 propõe (`CodeScanner`) — mas vale registrar: não há mais nenhuma abstração desse tipo herdada, a Fase 1 parte de uma folha em branco. |
+| Adapter Pattern (normalizar o output de cada ferramenta) | `diario_oficial/infrastructure/http_client.go` traduz a resposta HTTP do endpoint configurado pro modelo próprio do módulo — mesmo princípio (isolar o formato de terceiros do resto do sistema), aplicado a um único parceiro em vez de vários. |
+| Observer / Event-Driven | Outbox transacional + RabbitMQ (`internal/platform/outbox`, `internal/domain/events`) já publicam `integration.status.changed`, `diario_oficial.job.completed/failed` — o frontend já reage a isso via WebSocket (`NotificationCenter`), sem acoplamento direto. |
+| Microkernel / plug-in registry | Sem exemplo vivo hoje (era um `map[string]domain.SecurityProvider` no `secops.application.Service`). Um `map[string]CodeScanner` no `scanning.Service` novo (Fase 1) recria exatamente esse registro — é só um `map` em Go, não uma peça de infraestrutura que precise já existir de antemão. |
 | Resiliência (timeout, circuit breaker) | `internal/platform/resilience` (circuit breaker) e `context.Context` com timeout já protegem toda chamada externa — o mesmo mecanismo cobre um scanner novo sem código extra. |
-| Interruptor de emergência por ferramenta | `internal/platform/configflags` (feature flags em runtime) já desliga uma integração inteira sem reimplantar — cada scanner novo ganha sua própria flag do mesmo jeito que `secops_virustotal_enabled` já existe. |
+| Interruptor de emergência por ferramenta | `internal/platform/configflags` (feature flags em runtime) já desliga uma integração inteira sem reimplantar — `diario_oficial_scraping_enabled` é o exemplo vivo hoje; cada scanner novo ganha sua própria flag do mesmo jeito. |
 | Auditoria de cada execução | `internal/platform/audit` (log imutável) já registra toda ação sensível — cada scan vira uma entrada de auditoria como qualquer outra. |
 
-**A diferença real que exige código novo:** `SecurityProvider.AnalyzeTarget` devolve **um**
-resultado (`SecCheckResult{Success, Summary, Details}`) — certo para "esse hash é malicioso?
-sim/não". Trivy/Semgrep/TruffleHog/SonarQube devolvem uma **lista** de achados discretos (um scan
-pode encontrar 40 vulnerabilidades, cada uma com seu próprio CVE/arquivo/linha/severidade). Forçar
-isso dentro de `SecCheckResult` perderia estrutura — por isso a Fase 1 abaixo propõe uma interface
-**irmã**, não uma reforma da existente.
+**A diferença real que exige código novo:** um lookup de "essa entidade é maliciosa? sim/não"
+(o que o `secops` removido fazia) cabe num resultado único. Trivy/Semgrep/TruffleHog/SonarQube
+devolvem uma **lista** de achados discretos (um scan pode encontrar 40 vulnerabilidades, cada
+uma com seu próprio CVE/arquivo/linha/severidade) — um formato estruturalmente diferente, que a
+interface `CodeScanner` da Fase 1 já nasce pensando nisso, em vez de tentar encaixar numa forma
+de resultado único.
 
 ## Arquitetura adaptada
 
@@ -82,9 +90,8 @@ type Finding struct {
 }
 
 // CodeScanner é o contrato que toda ferramenta de scanning implementa —
-// a versão "lista de achados" de secops.domain.SecurityProvider (que
-// continua existindo, sem mudança, para provedores de resultado único
-// como o VirusTotal).
+// desenhado desde já pra "lista de achados" (não um resultado único),
+// já que é isso que Trivy/Semgrep/TruffleHog/SonarQube/ZAP produzem.
 type CodeScanner interface {
     Name() string
     Execute(ctx context.Context, target string) ([]Finding, error)
@@ -103,9 +110,9 @@ ferramentas estarem prontas para gerar valor.
 - `scanning.Service` (Strategy + Microkernel): recebe `map[string]CodeScanner`, roda um scan,
   grava achados numa transação + evento de outbox `scanning.scan.completed` — mesmo desenho do
   `diario_oficial.Service.CreateTestJob`.
-- Testado inteiramente com um `fakeScanner`, do mesmo jeito que `secops/application/service_test.go`
-  já testa contra Postgres real com um `fakeProvider` — nenhuma ferramenta externa precisa estar
-  instalada para esta fase passar no CI.
+- Testado inteiramente com um `fakeScanner`, do mesmo jeito que
+  `diario_oficial/application/service_test.go` já testa contra Postgres real com um `fakeClient`
+  — nenhuma ferramenta externa precisa estar instalada para esta fase passar no CI.
 - RBAC: `scanning:read`/`scanning:manage` adicionadas a `rbac.go`.
 
 **Fase 2 — TruffleHog (secret scanning)**

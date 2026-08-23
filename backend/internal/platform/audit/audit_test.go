@@ -31,7 +31,7 @@ func TestWriter_Record(t *testing.T) {
 	err := writer.Record(context.Background(), Entry{
 		Action:        ActionIntegrationTest,
 		ResourceType:  "integration",
-		ResourceID:    "virustotal",
+		ResourceID:    "diario-oficial",
 		Metadata:      map[string]any{"result": "online"},
 		CorrelationID: &corrID,
 		IPAddress:     "127.0.0.1",
@@ -54,7 +54,7 @@ func TestWriter_Record(t *testing.T) {
 	if resourceType != "integration" {
 		t.Errorf("resource_type = %q", resourceType)
 	}
-	if resourceID != "virustotal" {
+	if resourceID != "diario-oficial" {
 		t.Errorf("resource_id = %q", resourceID)
 	}
 }

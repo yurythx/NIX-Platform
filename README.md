@@ -5,10 +5,12 @@ automações e notificações numa única aplicação extensível.
 
 Construída como um **Monólito Modular** (API Go + Worker Go + frontend Next.js, um único
 código-fonte, dois binários) com um núcleo **orientado a eventos**: PostgreSQL para estado,
-RabbitMQ para processamento assíncrono, e um Keycloak externo já existente para identidade. Os
-módulos iniciais são **Diário Oficial** (uma verificação externa agendada/sob demanda) e **SecOps**
-(VirusTotal hoje, plugável para outros provedores), compartilhando o mesmo pipeline
-job → outbox → fila → worker → notificação.
+RabbitMQ para processamento assíncrono, e um Keycloak externo já existente para identidade. O
+módulo inicial é **Diário Oficial** (uma verificação externa agendada/sob demanda), seguindo o
+pipeline job → outbox → fila → worker → notificação — o mesmo pipeline que qualquer integração
+nova (ver [`/integracoes`](#rotas-do-frontend) e o
+[roadmap de segurança](docs/roadmap-secops-orchestrator.md)) reaproveita sem precisar de código
+de plataforma novo.
 
 ## Arquitetura em resumo
 
@@ -149,15 +151,14 @@ cp .env.example .env
 
 Preencha no mínimo: `DB_PASSWORD`, `RABBITMQ_DEFAULT_PASS`/`RABBITMQ_URL`, todos os valores
 `KEYCLOAK_*` da seção acima, `NEXTAUTH_SECRET` (um valor aleatório de 32+ bytes —
-`openssl rand -base64 32`), e, se quiser que o módulo SecOps realmente converse com o VirusTotal,
-`VIRUSTOTAL_API_KEY`. Se quiser o login local (veja [Login local](#login-local-adicional-ao-keycloak)
+`openssl rand -base64 32`). Se quiser o login local (veja [Login local](#login-local-adicional-ao-keycloak)
 acima), gere a chave RSA como mostrado ali — `LOCAL_AUTH_PRIVATE_KEY_FILE` já vem apontando para
 `/run/secrets/local_auth_private_key.pem` e `LOCAL_AUTH_ENABLED` já vem `true` por padrão. Toda
 variável está documentada diretamente no `.env.example`. Segredos nunca são commitados — `.env` e
 `secrets/` estão no `.gitignore`.
 
 **Gestão de segredos em produção**: além de variáveis de ambiente diretas, todo valor sensível
-(`DB_PASSWORD`, `RABBITMQ_URL`, `KEYCLOAK_CLIENT_SECRET`, `VIRUSTOTAL_API_KEY`) também aceita uma
+(`DB_PASSWORD`, `RABBITMQ_URL`, `KEYCLOAK_CLIENT_SECRET`, `LOCAL_AUTH_PRIVATE_KEY`) também aceita uma
 variável `<NOME>_FILE` apontando para um arquivo — o conteúdo do arquivo tem prioridade sobre a
 variável direta. Esse é o padrão usado por Docker Secrets, Kubernetes Secrets montados como
 volume, e pelo Vault Agent Sidecar Injector, então nenhum código específico de provedor é
@@ -192,7 +193,7 @@ Com os containers saudáveis:
 | `/login` | pública | Login (usuário/senha local ou SSO via Keycloak — ver [Login local](#login-local-adicional-ao-keycloak)). |
 | `/dashboard` | autenticada | Visão geral — só isso: status das integrações e atalhos. |
 | `/integracoes` | autenticada | Lista toda integração configurada — cada uma leva pra sua página de detalhe. |
-| `/integracoes/{key}` | autenticada | Página de detalhe genérica (rota dinâmica) de uma integração — status e teste de conectividade. `{key}` é o mesmo valor que a integração tem no backend (`diario-oficial`, `virustotal`, ...). |
+| `/integracoes/{key}` | autenticada | Página de detalhe genérica (rota dinâmica) de uma integração — status e teste de conectividade. `{key}` é o mesmo valor que a integração tem no backend (`diario-oficial`, e cada integração nova que for adicionada). |
 | `/configuracao` | autenticada | Aba "Sistema" — configuração dinâmica (feature flags, `nix-admin`). |
 | `/configuracao/usuarios` | autenticada | Aba "Usuários" — diretório de usuários. |
 
@@ -333,8 +334,9 @@ Os testes do backend se dividem em dois grupos:
 **Roadmap de segurança**: [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md)
 mapeia o que já está implementado (tabela acima) contra o OWASP Top 10 e propõe fases futuras —
 scanners de SAST/DAST/dependências/segredos (Semgrep, Trivy sob demanda, TruffleHog, SonarQube,
-OWASP ZAP) orquestrados pelo mesmo padrão Strategy/Adapter/Observer que o módulo `secops` já usa
-para o VirusTotal. Nenhuma fase está implementada ainda — é um documento de planejamento.
+OWASP ZAP) orquestrados pelo mesmo padrão Strategy/Adapter/Observer que o resto da plataforma já
+usa para integrações externas (ver `diario_oficial`). Nenhuma fase está implementada ainda — é um
+documento de planejamento.
 
 ## Observabilidade
 
@@ -370,10 +372,12 @@ nix-platform/
 
 Novos módulos de negócio seguem a mesma estrutura de quatro a cinco camadas dos já existentes
 (`domain/`, `application/`, `infrastructure/`, `transport/`, opcionalmente `worker/`) e são
-conectados em exatamente um lugar: `backend/internal/app/modules.go`. Um novo provedor SecOps,
-por exemplo, é só mais uma implementação de `domain.SecurityProvider` registrada no mapa
-`providers` desse arquivo — nenhuma mudança no módulo SecOps em si, na topologia do RabbitMQ, ou
-no Core.
+conectados em exatamente um lugar: `backend/internal/app/modules.go`. `diario_oficial` é a
+referência a seguir: um cliente HTTP próprio por trás de uma interface pequena
+(`domain.Client`), reaproveitando outbox/circuit breaker/feature flags/idempotência da
+plataforma sem precisar de nenhuma mudança nesses pacotes. Ver
+[`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md) para o desenho de
+um módulo de segurança orquestrando múltiplas ferramentas externas seguindo o mesmo princípio.
 
 Extrair um módulo para um serviço separado é deliberadamente não uma decisão inicial — o monólito
 modular é o plano até que um módulo tenha um motivo concreto e real (escala independente, deploy

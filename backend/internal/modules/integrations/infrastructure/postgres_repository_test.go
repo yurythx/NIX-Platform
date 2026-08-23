@@ -24,7 +24,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// Estes testes dependem da linha "virustotal" semeada pela migration 000006.
+// Estes testes dependem da linha "diario-oficial" semeada pela migration 000006.
 
 func TestPostgresRepository_List_IncludesSeeded(t *testing.T) {
 	pool := testPool(t)
@@ -37,12 +37,12 @@ func TestPostgresRepository_List_IncludesSeeded(t *testing.T) {
 
 	found := false
 	for _, i := range list {
-		if i.Key == "virustotal" {
+		if i.Key == "diario-oficial" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("expected the seeded virustotal integration to be present")
+		t.Error("expected the seeded diario-oficial integration to be present")
 	}
 }
 
@@ -52,7 +52,7 @@ func TestPostgresRepository_UpdateStatusTx_ReportsChange(t *testing.T) {
 	ctx := context.Background()
 
 	// Reseta para uma base conhecida, para que o teste independa da ordem.
-	_, err := pool.Exec(ctx, `UPDATE integrations SET status = 'unknown', last_error = NULL WHERE key = 'virustotal'`)
+	_, err := pool.Exec(ctx, `UPDATE integrations SET status = 'unknown', last_error = NULL WHERE key = 'diario-oficial'`)
 	if err != nil {
 		t.Fatalf("reset baseline: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestPostgresRepository_UpdateStatusTx_ReportsChange(t *testing.T) {
 		t.Fatalf("Begin: %v", err)
 	}
 
-	updated, changed, err := repo.UpdateStatusTx(ctx, tx, "virustotal", true, nil)
+	updated, changed, err := repo.UpdateStatusTx(ctx, tx, "diario-oficial", true, nil)
 	if err != nil {
 		t.Fatalf("UpdateStatusTx: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestPostgresRepository_UpdateStatusTx_ReportsChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	_, changedAgain, err := repo.UpdateStatusTx(ctx, tx, "virustotal", true, nil)
+	_, changedAgain, err := repo.UpdateStatusTx(ctx, tx, "diario-oficial", true, nil)
 	if err != nil {
 		t.Fatalf("UpdateStatusTx (2nd): %v", err)
 	}
@@ -99,7 +99,7 @@ func TestPostgresRepository_UpdateStatusTx_ReportsChange(t *testing.T) {
 		t.Fatalf("Begin: %v", err)
 	}
 	errMsg := "connection timeout"
-	updated, changed, err = repo.UpdateStatusTx(ctx, tx, "virustotal", false, &errMsg)
+	updated, changed, err = repo.UpdateStatusTx(ctx, tx, "diario-oficial", false, &errMsg)
 	if err != nil {
 		t.Fatalf("UpdateStatusTx (failure): %v", err)
 	}

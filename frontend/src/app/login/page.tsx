@@ -13,7 +13,7 @@ import { ThemeToggle } from "@/components/ui/ThemeToggle";
 // desta página foi inspirada em papermoon.cloud, mas seus recursos
 // listados eram do produto DELES, não fazia sentido copiar o texto).
 const features = [
-  "Integrações extensíveis (Diário Oficial, SecOps/VirusTotal e mais)",
+  "Integrações extensíveis (Diário Oficial hoje, o próximo provedor sem tocar no núcleo)",
   "Notificações em tempo real via WebSocket",
   "Auditoria imutável de toda ação sensível",
   "Resiliência: circuit breaker e retry automático",

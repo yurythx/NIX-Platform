@@ -123,14 +123,6 @@ type DiarioOficialConfig struct {
 	Timeout time.Duration
 }
 
-// VirusTotalConfig guarda as configurações da integração SecOps com o
-// VirusTotal.
-type VirusTotalConfig struct {
-	APIKey  string
-	BaseURL string
-	Timeout time.Duration
-}
-
 // Config é a configuração da aplicação já totalmente validada.
 type Config struct {
 	App       AppConfig
@@ -143,7 +135,6 @@ type Config struct {
 	Worker    WorkerConfig
 
 	DiarioOficial DiarioOficialConfig
-	VirusTotal    VirusTotalConfig
 
 	FrontendURL         string
 	APIPublicURL        string
@@ -301,11 +292,6 @@ func Load() (*Config, error) {
 		DiarioOficial: DiarioOficialConfig{
 			BaseURL: l.str("DIARIO_OFICIAL_BASE_URL", false, ""),
 			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
-		},
-		VirusTotal: VirusTotalConfig{
-			APIKey:  l.secret("VIRUSTOTAL_API_KEY", false, ""),
-			BaseURL: l.str("VIRUSTOTAL_BASE_URL", false, "https://www.virustotal.com/api/v3"),
-			Timeout: l.durationVal("VIRUSTOTAL_TIMEOUT", false, 10*time.Second),
 		},
 		FrontendURL:         l.str("FRONTEND_URL", false, "http://localhost:3000"),
 		APIPublicURL:        l.str("API_PUBLIC_URL", false, "http://localhost:8000"),

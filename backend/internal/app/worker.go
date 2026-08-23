@@ -10,7 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	diarioWorker "github.com/yurythx/nix-platform/internal/modules/diario_oficial/worker"
-	secopsWorker "github.com/yurythx/nix-platform/internal/modules/secops/worker"
 
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
 	"github.com/yurythx/nix-platform/internal/platform/idempotency"
@@ -49,8 +48,6 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 
 	diarioConsumer := newConsumer(messaging.QueueDiarioOficialWorker.Name)
 	diarioDLQConsumer := newConsumer(messaging.QueueDiarioOficialWorker.DLQName)
-	secopsConsumer := newConsumer(messaging.QueueIntegrationWorker.Name)
-	secopsDLQConsumer := newConsumer(messaging.QueueIntegrationWorker.DLQName)
 
 	return &Worker{
 		deps: deps,
@@ -63,12 +60,6 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 			}),
 			supervised("diario_oficial.dlq", deps.Logger, func(ctx context.Context) error {
 				return diarioDLQConsumer.Consume(ctx, diarioWorker.DeadLetterHandler(deps.Modules.DiarioOficial.Service, deps.Logger))
-			}),
-			supervised("integration.worker", deps.Logger, func(ctx context.Context) error {
-				return secopsConsumer.Consume(ctx, secopsWorker.JobCreatedHandler(deps.Modules.SecOps.Service))
-			}),
-			supervised("integration.dlq", deps.Logger, func(ctx context.Context) error {
-				return secopsDLQConsumer.Consume(ctx, secopsWorker.DeadLetterHandler(deps.Modules.SecOps.Service, deps.Logger))
 			}),
 		},
 	}, nil

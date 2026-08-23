@@ -9,11 +9,6 @@ import (
 	integrationsInfra "github.com/yurythx/nix-platform/internal/modules/integrations/infrastructure"
 	integrationsTransport "github.com/yurythx/nix-platform/internal/modules/integrations/transport"
 
-	secopsApp "github.com/yurythx/nix-platform/internal/modules/secops/application"
-	secopsDomain "github.com/yurythx/nix-platform/internal/modules/secops/domain"
-	"github.com/yurythx/nix-platform/internal/modules/secops/infrastructure/virustotal"
-	secopsTransport "github.com/yurythx/nix-platform/internal/modules/secops/transport"
-
 	usersApp "github.com/yurythx/nix-platform/internal/modules/users/application"
 	usersInfra "github.com/yurythx/nix-platform/internal/modules/users/infrastructure"
 	usersTransport "github.com/yurythx/nix-platform/internal/modules/users/transport"
@@ -42,10 +37,6 @@ type Modules struct {
 		Service  *diarioApp.Service
 		Handlers *diarioTransport.Handlers
 	}
-	SecOps struct {
-		Service  *secopsApp.Service
-		Handlers *secopsTransport.Handlers
-	}
 	ConfigFlags struct {
 		Handlers *configflags.Handlers
 	}
@@ -57,9 +48,9 @@ type Modules struct {
 // buildModules constrói cada módulo de negócio na ordem certa: primeiro
 // as dependências compartilhadas (repositório de jobs, writer de
 // auditoria), depois users e integrations (que não dependem de outros
-// módulos), e por último diario_oficial e secops, que dependem do
-// integrationsSvc já construído para registrar o resultado de seus testes
-// (ver internal/modules/integrations/application.Service.RecordCheckResult).
+// módulos), e por último diario_oficial, que depende do integrationsSvc
+// já construído para registrar o resultado de seus testes (ver
+// internal/modules/integrations/application.Service.RecordCheckResult).
 func buildModules(deps *Dependencies) *Modules {
 	jobsRepo := jobs.NewRepository(deps.DB)
 	auditWriter := audit.NewWriter(deps.DB)
@@ -79,13 +70,6 @@ func buildModules(deps *Dependencies) *Modules {
 	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
 	m.DiarioOficial.Service = diarioSvc
 	m.DiarioOficial.Handlers = diarioTransport.NewHandlers(diarioSvc, deps.Logger)
-
-	providers := map[string]secopsDomain.SecurityProvider{
-		"virustotal": virustotal.NewClient(deps.Config.VirusTotal.APIKey, deps.Config.VirusTotal.BaseURL, deps.Config.VirusTotal.Timeout, deps.Logger),
-	}
-	secopsSvc := secopsApp.NewService(deps.DB, jobsRepo, deps.Outbox, providers, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
-	m.SecOps.Service = secopsSvc
-	m.SecOps.Handlers = secopsTransport.NewHandlers(secopsSvc, deps.Logger)
 
 	m.ConfigFlags.Handlers = configflags.NewHandlers(deps.Flags, auditWriter, deps.Logger)
 

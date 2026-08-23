@@ -9,9 +9,9 @@ import { IntegrationCard } from "./IntegrationCard";
 
 const integration: Integration = {
   id: "int-1",
-  key: "virustotal",
-  name: "VirusTotal",
-  type: "secops",
+  key: "example-provider",
+  name: "Example Provider",
+  type: "example",
   enabled: true,
   status: "online",
 };
@@ -46,7 +46,7 @@ describe("IntegrationCard", () => {
     const user = userEvent.setup();
     render(
       <ToastProvider>
-        <IntegrationCard integration={integration} testPath="v1/integrations/secops/virustotal/test" />
+        <IntegrationCard integration={integration} testPath="v1/integrations/example-provider/test" />
       </ToastProvider>,
     );
 
@@ -62,7 +62,7 @@ describe("IntegrationCard", () => {
     const user = userEvent.setup();
     render(
       <ToastProvider>
-        <IntegrationCard integration={integration} testPath="v1/integrations/secops/virustotal/test" />
+        <IntegrationCard integration={integration} testPath="v1/integrations/example-provider/test" />
       </ToastProvider>,
     );
 

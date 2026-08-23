@@ -25,7 +25,7 @@ info:
     ADR [002](adr/002-enterprise-resilience-and-governance.md).
 
     **Resiliência e disponibilidade condicional**: chamadas que dependem
-    de um provedor externo (Diário Oficial, VirusTotal) podem retornar 503
+    de um provedor externo (ex.: Diário Oficial) podem retornar 503
     por dois motivos distintos, diferenciados pelo `error.code`:
     `CIRCUIT_OPEN` (o circuit breaker interno detectou falhas consecutivas
     e está poupando o provedor — tentativas vão voltar a funcionar
@@ -58,8 +58,6 @@ tags:
     description: Status de cada integração externa configurada.
   - name: diario-oficial
     description: Verificação de conectividade com o Diário Oficial (job assíncrono).
-  - name: secops
-    description: Verificações de conectividade dos provedores SecOps (job assíncrono); hoje, VirusTotal.
   - name: websocket
     description: Emissão de ticket para notificações em tempo real.
   - name: admin
@@ -366,32 +364,6 @@ paths:
         "503":
           $ref: "#/components/responses/IntegrationUnavailable"
 
-  /api/v1/integrations/secops/virustotal/test:
-    post:
-      tags: [secops]
-      summary: Dispara uma verificação assíncrona de conectividade com o VirusTotal
-      operationId: testVirusTotal
-      description: >
-        Mesmo fluxo assíncrono do teste do Diário Oficial, direcionado ao
-        provedor VirusTotal. Aceita `Idempotency-Key` pelo mesmo motivo.
-      security:
-        - bearerAuth: [integrations:test]
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      responses:
-        "202":
-          $ref: "#/components/responses/TestJobAccepted"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/IdempotencyConflict"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
-        "503":
-          $ref: "#/components/responses/IntegrationUnavailable"
-
   /api/v1/ws/ticket:
     post:
       tags: [websocket]
@@ -458,8 +430,8 @@ paths:
       operationId: listFeatureFlags
       description: >
         Restrito ao papel nix-admin. Inclui as flags semeadas por migration
-        (`secops_virustotal_enabled`, `diario_oficial_scraping_enabled`) e
-        qualquer outra já criada via PATCH.
+        (`diario_oficial_scraping_enabled`) e qualquer outra já criada via
+        PATCH.
       security:
         - bearerAuth: [feature_flags:manage]
       responses:
@@ -647,12 +619,12 @@ components:
               summary: Circuit breaker aberto
               value:
                 data: null
-                error: { code: "CIRCUIT_OPEN", message: "virustotal: temporarily unavailable (circuit breaker open)" }
+                error: { code: "CIRCUIT_OPEN", message: "diario-oficial: temporarily unavailable (circuit breaker open)" }
             feature_disabled:
               summary: Feature flag desabilitada por um administrador
               value:
                 data: null
-                error: { code: "FEATURE_DISABLED", message: "the \"secops_virustotal_enabled\" feature is currently disabled" }
+                error: { code: "FEATURE_DISABLED", message: "the \"diario_oficial_scraping_enabled\" feature is currently disabled" }
 
     Unauthorized:
       description: Access token ausente, inválido ou expirado.

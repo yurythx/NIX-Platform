@@ -46,7 +46,7 @@ func testLogger() *slog.Logger {
 // os testes não podem deixar estado vazar de um para o outro.
 //
 // Isto só protege contra vazamento entre testes DESTE pacote/binário.
-// Outros pacotes (diario_oficial, secops) também gravam linhas reais em
+// Outros pacotes (diario_oficial) também gravam linhas reais em
 // outbox_events no mesmo banco ao vivo e não as publicam/limpam — rode com
 // `go test ./... -p 1` (ver Makefile/README) para que os binários de
 // teste de cada pacote nunca rodem concorrentemente contra a tabela

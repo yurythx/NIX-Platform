@@ -1,8 +1,8 @@
 // Package jobs fornece a entidade e o repositório compartilhados de job
 // assíncrono (§33), usados por todo módulo que executa trabalho via
-// RabbitMQ + um worker (hoje: diario_oficial, integrations/secops). É
-// infraestrutura de plataforma, não um módulo de negócio em si — os
-// módulos dependem dele, nunca o contrário.
+// RabbitMQ + um worker (hoje: diario_oficial). É infraestrutura de
+// plataforma, não um módulo de negócio em si — os módulos dependem dele,
+// nunca o contrário.
 package jobs
 
 import (

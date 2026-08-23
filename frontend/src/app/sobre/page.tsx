@@ -154,7 +154,8 @@ export default async function AboutPage() {
           <p className="text-sm text-muted">
             Estamos expandindo isso para varredura automatizada de código e dependências (SAST,
             scanning de containers, segredos vazados, testes dinâmicos) orquestrada pelo mesmo
-            padrão que já usamos para o VirusTotal hoje — o plano completo, fase por fase, está em{" "}
+            padrão que já usamos pras integrações externas hoje — o plano completo, fase por
+            fase, está em{" "}
             <code className="rounded bg-black/5 px-1 py-0.5 text-xs dark:bg-white/10">
               docs/roadmap-secops-orchestrator.md
             </code>{" "}

@@ -43,7 +43,7 @@ const services = [
     icon: LinkIcon,
     title: "Integrações extensíveis",
     description:
-      "Diário Oficial, SecOps/VirusTotal e um padrão pronto para adicionar o próximo provedor sem tocar no núcleo da plataforma.",
+      "Diário Oficial hoje, e um padrão pronto para adicionar o próximo provedor sem tocar no núcleo da plataforma.",
   },
   {
     icon: Bell,
