@@ -1,7 +1,9 @@
 package httpserver
 
 import (
+	"bufio"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -123,5 +125,44 @@ func TestRateLimit_DifferentKeysAreIndependent(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Errorf("user %s: status = %d, want 200", user, rec.Code)
 		}
+	}
+}
+
+// fakeHijackableWriter é um http.ResponseWriter mínimo que também
+// implementa http.Hijacker, para testar que statusRecorder repassa
+// Hijack() em vez de escondê-lo atrás do embedding de uma interface (o
+// bug real que quebrava GET /ws atrás de AccessLog/Metrics — ver o
+// comentário de statusRecorder.Hijack).
+type fakeHijackableWriter struct {
+	http.ResponseWriter
+	hijacked bool
+}
+
+func (f *fakeHijackableWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	f.hijacked = true
+	return nil, nil, nil
+}
+
+func TestStatusRecorder_HijackDelegatesToUnderlyingWriter(t *testing.T) {
+	underlying := &fakeHijackableWriter{ResponseWriter: httptest.NewRecorder()}
+	rec := &statusRecorder{ResponseWriter: underlying, status: http.StatusOK}
+
+	hijacker, ok := (http.ResponseWriter(rec)).(http.Hijacker)
+	if !ok {
+		t.Fatal("statusRecorder does not satisfy http.Hijacker — WebSocket upgrades behind AccessLog/Metrics would fail")
+	}
+	if _, _, err := hijacker.Hijack(); err != nil {
+		t.Fatalf("Hijack: unexpected error %v", err)
+	}
+	if !underlying.hijacked {
+		t.Error("expected the underlying ResponseWriter's Hijack to have been called")
+	}
+}
+
+func TestStatusRecorder_HijackErrorsWhenUnderlyingDoesNotSupportIt(t *testing.T) {
+	rec := &statusRecorder{ResponseWriter: httptest.NewRecorder(), status: http.StatusOK}
+
+	if _, _, err := rec.Hijack(); err == nil {
+		t.Fatal("expected an error when the underlying ResponseWriter does not implement http.Hijacker")
 	}
 }

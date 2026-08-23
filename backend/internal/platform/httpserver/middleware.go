@@ -1,9 +1,11 @@
 package httpserver
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -69,6 +71,26 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// Hijack repassa para o http.ResponseWriter original, se ele suportar
+// hijacking — necessário para que o upgrade de WebSocket (GET /ws)
+// funcione atravessando AccessLog/Metrics. Embutir http.ResponseWriter
+// (um valor de interface) só promove os métodos DA INTERFACE
+// http.ResponseWriter (Header/Write/WriteHeader); não promove Hijack,
+// mesmo que o valor concreto por trás dela implemente http.Hijacker —
+// sem este método explícito, ww.(http.Hijacker) falha silenciosamente e
+// gorilla/websocket rejeita todo upgrade com "response does not
+// implement http.Hijacker", quebrando WebSocket em produção mesmo com o
+// servidor HTTP subjacente suportando hijacking perfeitamente bem (bug
+// real, encontrado ao vivo: o indicador de conexão do frontend ficava
+// preso em "Reconectando…" para sempre).
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("httpserver: underlying ResponseWriter does not support hijacking")
+	}
+	return hijacker.Hijack()
 }
 
 // Metrics registra nix_http_requests_total e
