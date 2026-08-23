@@ -17,21 +17,26 @@ import (
 // como o restante deste construtor promete.
 const discoveryTimeout = 10 * time.Second
 
-// Verifier valida access tokens OIDC contra o realm do Keycloak
-// configurado. Faz o discovery OIDC uma única vez no startup e mantém o
-// JWKS em cache no próprio processo (só é atualizado quando aparece um key
-// id desconhecido, conforme a implementação de remote key set do go-oidc)
-// — sem nenhuma chamada ao Keycloak por requisição (§29).
+// Verifier valida access tokens contra o realm do Keycloak configurado
+// e, opcionalmente, contra tokens locais assinados pelo próprio backend
+// (§ Sistema de Login Local — sempre um caminho ADICIONAL, nunca um
+// substituto do Keycloak). Faz o discovery OIDC uma única vez no startup
+// e mantém o JWKS em cache no próprio processo (só é atualizado quando
+// aparece um key id desconhecido, conforme a implementação de remote key
+// set do go-oidc) — sem nenhuma chamada ao Keycloak por requisição (§29).
 type Verifier struct {
 	idTokenVerifier *oidc.IDTokenVerifier
 	clientID        string
+	localAuth       config.LocalAuthConfig
 }
 
 // NewVerifier faz o discovery OIDC contra cfg.IssuerURL. Falha rápido
 // (retorna um erro) se o issuer estiver inalcançável ou malformado, para
 // que uma configuração errada apareça no startup em vez de na primeira
-// requisição que precisar validar um token.
-func NewVerifier(ctx context.Context, cfg config.KeycloakConfig) (*Verifier, error) {
+// requisição que precisar validar um token. localAuth pode vir com
+// Enabled=false — nesse caso Verify nunca tenta o caminho local, só
+// Keycloak, exatamente como antes deste recurso existir.
+func NewVerifier(ctx context.Context, cfg config.KeycloakConfig, localAuth config.LocalAuthConfig) (*Verifier, error) {
 	discoveryCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 	defer cancel()
 
@@ -48,6 +53,7 @@ func NewVerifier(ctx context.Context, cfg config.KeycloakConfig) (*Verifier, err
 	return &Verifier{
 		idTokenVerifier: verifier,
 		clientID:        cfg.ClientID,
+		localAuth:       localAuth,
 	}, nil
 }
 
@@ -55,16 +61,33 @@ func NewVerifier(ctx context.Context, cfg config.KeycloakConfig) (*Verifier, err
 // algoritmo de rawToken, e então extrai a Identity da plataforma a partir
 // das suas claims. Nunca chama o Keycloak — a verificação é inteiramente
 // local, contra o JWKS em cache.
+//
+// Tenta primeiro o Keycloak (o caminho principal e sempre ativo); se isso
+// falhar e o login local estiver habilitado, tenta a verificação HS256
+// local antes de desistir. Um token de verdade do Keycloak (assinado com
+// RSA) nunca passa na verificação local por acidente, e vice-versa — as
+// duas verificações usam algoritmos incompatíveis, então não há ambiguidade
+// possível sobre qual token "pertence" a qual caminho.
 func (v *Verifier) Verify(ctx context.Context, rawToken string) (Identity, error) {
-	token, err := v.idTokenVerifier.Verify(ctx, rawToken)
-	if err != nil {
-		return Identity{}, fmt.Errorf("auth: token verification failed: %w", err)
+	token, keycloakErr := v.idTokenVerifier.Verify(ctx, rawToken)
+	if keycloakErr == nil {
+		var claims accessTokenClaims
+		if err := token.Claims(&claims); err != nil {
+			return Identity{}, fmt.Errorf("auth: decode token claims: %w", err)
+		}
+		return claims.toIdentity(v.clientID), nil
 	}
 
-	var claims accessTokenClaims
-	if err := token.Claims(&claims); err != nil {
-		return Identity{}, fmt.Errorf("auth: decode token claims: %w", err)
+	if !v.localAuth.Enabled {
+		return Identity{}, fmt.Errorf("auth: token verification failed: %w", keycloakErr)
 	}
 
-	return claims.toIdentity(v.clientID), nil
+	identity, localErr := verifyLocalToken(v.localAuth.JWTSecret, rawToken)
+	if localErr != nil {
+		// Nenhum dos dois caminhos aceitou o token — reporta o erro do
+		// Keycloak, já que é o caminho principal e o mais provável de ser
+		// o que o chamador esperava usar.
+		return Identity{}, fmt.Errorf("auth: token verification failed: %w", keycloakErr)
+	}
+	return identity, nil
 }

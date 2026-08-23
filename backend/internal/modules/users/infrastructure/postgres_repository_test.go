@@ -35,7 +35,7 @@ func TestPostgresRepository_UpsertIsIdempotentAndTracksCreation(t *testing.T) {
 	username := "jdoe-" + suffix[:8]
 
 	first, err := repo.UpsertByKeycloakSubject(ctx, &domain.User{
-		KeycloakSubject: subject, Username: username, Email: "jdoe-" + suffix[:8] + "@example.com",
+		KeycloakSubject: &subject, Username: username, Email: "jdoe-" + suffix[:8] + "@example.com",
 	})
 	if err != nil {
 		t.Fatalf("first upsert: %v", err)
@@ -46,7 +46,7 @@ func TestPostgresRepository_UpsertIsIdempotentAndTracksCreation(t *testing.T) {
 
 	updatedEmail := "jdoe-" + suffix[:8] + "-updated@example.com"
 	second, err := repo.UpsertByKeycloakSubject(ctx, &domain.User{
-		KeycloakSubject: subject, Username: username, Email: updatedEmail,
+		KeycloakSubject: &subject, Username: username, Email: updatedEmail,
 	})
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)

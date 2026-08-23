@@ -74,6 +74,17 @@ type KeycloakConfig struct {
 	Audience     string
 }
 
+// LocalAuthConfig guarda as configurações do login local por
+// usuário/senha (§ Sistema de Login Local) — um caminho de autenticação
+// PARALELO ao Keycloak (útil para dev/teste e como conta de emergência),
+// nunca um substituto: nada aqui desliga ou substitui a verificação via
+// Keycloak, que continua obrigatória e configurada como sempre foi.
+type LocalAuthConfig struct {
+	Enabled   bool
+	JWTSecret string
+	TokenTTL  time.Duration
+}
+
 // JobsConfig guarda as configurações de processamento assíncrono de jobs.
 type JobsConfig struct {
 	Timeout time.Duration
@@ -110,13 +121,14 @@ type VirusTotalConfig struct {
 
 // Config é a configuração da aplicação já totalmente validada.
 type Config struct {
-	App      AppConfig
-	HTTP     HTTPConfig
-	Database DatabaseConfig
-	RabbitMQ RabbitMQConfig
-	Keycloak KeycloakConfig
-	Jobs     JobsConfig
-	Worker   WorkerConfig
+	App       AppConfig
+	HTTP      HTTPConfig
+	Database  DatabaseConfig
+	RabbitMQ  RabbitMQConfig
+	Keycloak  KeycloakConfig
+	LocalAuth LocalAuthConfig
+	Jobs      JobsConfig
+	Worker    WorkerConfig
 
 	DiarioOficial DiarioOficialConfig
 	VirusTotal    VirusTotalConfig
@@ -207,6 +219,19 @@ func (l *loader) durationVal(key string, required bool, def time.Duration) time.
 	return d
 }
 
+func (l *loader) boolVal(key string, def bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		l.errs = append(l.errs, fmt.Sprintf("%s (invalid boolean %q)", key, v))
+		return def
+	}
+	return b
+}
+
 // Load lê a configuração a partir do ambiente do processo. Retorna um erro
 // nomeando toda variável obrigatória ausente/inválida, caso a validação
 // falhe.
@@ -249,6 +274,11 @@ func Load() (*Config, error) {
 			ClientSecret: l.secret("KEYCLOAK_CLIENT_SECRET", false, ""),
 			Audience:     l.str("KEYCLOAK_AUDIENCE", true, ""),
 		},
+		LocalAuth: LocalAuthConfig{
+			Enabled:   l.boolVal("LOCAL_AUTH_ENABLED", false),
+			JWTSecret: l.secret("LOCAL_AUTH_JWT_SECRET", false, ""),
+			TokenTTL:  l.durationVal("LOCAL_AUTH_TOKEN_TTL", false, time.Hour),
+		},
 		Jobs: JobsConfig{
 			Timeout: l.durationVal("JOB_TIMEOUT", false, 5*time.Minute),
 		},
@@ -278,6 +308,15 @@ func Load() (*Config, error) {
 
 	if cfg.App.Env != "development" && cfg.App.Env != "staging" && cfg.App.Env != "production" && cfg.App.Env != "test" {
 		return nil, fmt.Errorf("config: APP_ENV must be one of development|staging|production|test, got %q", cfg.App.Env)
+	}
+
+	// LOCAL_AUTH_JWT_SECRET só é obrigatória quando o login local está
+	// ligado — não faz sentido validá-la sempre (ela não é usada em
+	// nenhum outro caminho), mas um deploy com LOCAL_AUTH_ENABLED=true e
+	// sem segredo configurado precisa falhar no startup, não emitir
+	// tokens assinados com uma string vazia.
+	if cfg.LocalAuth.Enabled && cfg.LocalAuth.JWTSecret == "" {
+		return nil, fmt.Errorf("config: LOCAL_AUTH_JWT_SECRET is required when LOCAL_AUTH_ENABLED=true")
 	}
 
 	return cfg, nil

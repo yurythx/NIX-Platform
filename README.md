@@ -94,6 +94,38 @@ Passos (console de administração do Keycloak):
    `KEYCLOAK_ISSUER_URL` (ex.: `https://keycloak.example.com/realms/nix`), nunca as URLs de cada
    endpoint individualmente.
 
+## Login local (adicional ao Keycloak)
+
+Além do Keycloak, o NIX Platform tem um segundo caminho de autenticação **local**
+(usuário/senha, sem depender de nenhum IdP externo) — pensado para o primeiro acesso
+administrativo e para ambientes de teste/demo onde configurar um Keycloak seria fricção
+desnecessária. Os dois caminhos coexistem: nenhum substitui o outro, e ambos terminam na mesma
+sessão da aplicação.
+
+- **Backend**: `POST /api/v1/auth/login` (rota pública, fora do grupo autenticado) recebe
+  `{"username", "password"}`, valida contra `password_hash` (bcrypt) na tabela `users` e devolve
+  um token assinado (HS256, segredo próprio — `LOCAL_AUTH_JWT_SECRET`, nunca o mesmo valor de
+  `NEXTAUTH_SECRET`). Controlado por `LOCAL_AUTH_ENABLED`; com a flag desligada o endpoint
+  responde 404. Tentativas malsucedidas (usuário inexistente, conta só-Keycloak, senha errada)
+  sempre devolvem a mesma mensagem genérica e são auditadas em `audit_logs` — nenhuma delas
+  revela qual condição falhou.
+- **Frontend**: a tela de login (`/login`) mostra o botão do Keycloak e, abaixo, um formulário de
+  usuário/senha lado a lado — um segundo `CredentialsProvider` do NextAuth que chama o endpoint
+  acima. As duas rotas produzem o mesmo tipo de sessão; o resto da aplicação não distingue qual
+  caminho o usuário usou.
+- Uma conta pode ter só Keycloak, só senha local, ou ambos — `keycloak_subject` e `password_hash`
+  são independentes e ao menos um deles precisa estar preenchido.
+
+**Usuário administrador pronto para teste** (criado pela migration `000011_local_auth.sql`, já
+aplicada no ambiente de desenvolvimento):
+
+| Usuário | Senha | Roles |
+|---|---|---|
+| `admin` | `Admin123!` | `nix-admin`, `nix-user` |
+
+Troque essa senha (ou desative a conta) antes de qualquer deploy que não seja puramente local —
+ela existe só para permitir testar a aplicação sem precisar configurar o Keycloak primeiro.
+
 ## Configuração
 
 ```bash
@@ -103,8 +135,10 @@ cp .env.example .env
 Preencha no mínimo: `DB_PASSWORD`, `RABBITMQ_DEFAULT_PASS`/`RABBITMQ_URL`, todos os valores
 `KEYCLOAK_*` da seção acima, `NEXTAUTH_SECRET` (um valor aleatório de 32+ bytes —
 `openssl rand -base64 32`), e, se quiser que o módulo SecOps realmente converse com o VirusTotal,
-`VIRUSTOTAL_API_KEY`. Toda variável está documentada diretamente no `.env.example`. Segredos nunca
-são commitados — `.env` está no `.gitignore`.
+`VIRUSTOTAL_API_KEY`. Se quiser o login local (veja [Login local](#login-local-adicional-ao-keycloak)
+acima), defina também `LOCAL_AUTH_JWT_SECRET` (outro valor aleatório de 32+ bytes, distinto de
+`NEXTAUTH_SECRET`) — `LOCAL_AUTH_ENABLED` já vem `true` por padrão. Toda variável está documentada
+diretamente no `.env.example`. Segredos nunca são commitados — `.env` está no `.gitignore`.
 
 **Gestão de segredos em produção**: além de variáveis de ambiente diretas, todo valor sensível
 (`DB_PASSWORD`, `RABBITMQ_URL`, `KEYCLOAK_CLIENT_SECRET`, `VIRUSTOTAL_API_KEY`) também aceita uma

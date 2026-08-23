@@ -25,15 +25,39 @@ func NewHandlers(service *application.Service, logger *slog.Logger, maxPageSize 
 	return &Handlers{service: service, logger: logger, maxPageSize: maxPageSize}
 }
 
-// GetCurrentUser trata GET /api/v1/me. Sincroniza a linha local do usuário
-// a partir da identidade do token a cada chamada (ver
-// application.Service.GetCurrentUser) — é assim que o frontend descobre
-// quem é o usuário logado e, no primeiro acesso, dispara a criação da
-// conta local.
+// GetCurrentUser trata GET /api/v1/me.
+//
+// Para identidades do Keycloak, sincroniza a linha local do usuário a
+// partir do token a cada chamada (ver application.Service.GetCurrentUser)
+// — é assim que o frontend descobre quem é o usuário logado e, no
+// primeiro acesso, dispara a criação da conta local.
+//
+// Para identidades locais (§ Sistema de Login Local), NÃO há upsert: a
+// conta já existe por definição (foi ela quem acabou de provar a senha em
+// POST /api/v1/auth/login) e identity.Subject já É o id interno da linha
+// em "users" — usar o fluxo de upsert-por-keycloak_subject aqui tentaria
+// inserir uma segunda linha com o mesmo username/email e falharia com uma
+// violação de unicidade, então os dois casos são tratados
+// deliberadamente de formas diferentes.
 func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 	identity, ok := auth.IdentityFromContext(r.Context())
 	if !ok {
 		httputil.WriteError(w, r, h.logger, apperrors.Unauthorized("authentication required"))
+		return
+	}
+
+	if identity.Source == auth.SourceLocal {
+		id, err := uuid.Parse(identity.Subject)
+		if err != nil {
+			httputil.WriteError(w, r, h.logger, apperrors.Unauthorized("invalid subject in local token"))
+			return
+		}
+		user, err := h.service.GetUser(r.Context(), id)
+		if err != nil {
+			httputil.WriteError(w, r, h.logger, err)
+			return
+		}
+		httputil.WriteOK(w, toUserResponse(user))
 		return
 	}
 

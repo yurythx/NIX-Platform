@@ -37,8 +37,9 @@ import (
 // uma manter sua própria contagem independente em memória (e portanto
 // N×-generosa demais).
 type RateLimiters struct {
-	TestJob  httpserver.Limiter // POST .../diario-oficial/test, .../virustotal/test
-	WSTicket httpserver.Limiter // POST /api/v1/ws/ticket
+	TestJob    httpserver.Limiter // POST .../diario-oficial/test, .../virustotal/test
+	WSTicket   httpserver.Limiter // POST /api/v1/ws/ticket
+	LocalLogin httpserver.Limiter // POST /api/v1/auth/login — chave por IP, não por usuário (§ Sistema de Login Local), já que quem chama ainda não está autenticado
 }
 
 // OutboxSource identifica este backend como o Source carimbado em todo
@@ -100,7 +101,7 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 	}
 	metrics.RegisterPostgresPoolMetrics(pool)
 
-	verifier, err := auth.NewVerifier(ctx, cfg.Keycloak)
+	verifier, err := auth.NewVerifier(ctx, cfg.Keycloak, cfg.LocalAuth)
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("app: initialize OIDC verifier: %w", err)
@@ -148,6 +149,11 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 			TestJob: ratelimit.NewPostgresLimiter(pool, 10, 3),
 			// Equivalente a 1 req/s, burst 5: até 5 requisições a cada 5s.
 			WSTicket: ratelimit.NewPostgresLimiter(pool, 5, 5),
+			// Mais apertado de propósito — até 5 tentativas de login a
+			// cada 60s por IP, para desacelerar força bruta de senha sem
+			// travar um usuário legítimo que só errou a senha uma ou
+			// duas vezes.
+			LocalLogin: ratelimit.NewPostgresLimiter(pool, 60, 5),
 		},
 		Idempotency: idempotency.NewPostgresStore(pool),
 		Flags:       configflags.NewPostgresStore(pool),

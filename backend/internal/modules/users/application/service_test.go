@@ -19,13 +19,17 @@ func newFakeRepository() *fakeRepository {
 }
 
 func (f *fakeRepository) UpsertByKeycloakSubject(ctx context.Context, u *domain.User) (domain.UpsertResult, error) {
-	if existing, ok := f.bySubject[u.KeycloakSubject]; ok {
+	var subject string
+	if u.KeycloakSubject != nil {
+		subject = *u.KeycloakSubject
+	}
+	if existing, ok := f.bySubject[subject]; ok {
 		existing.Username = u.Username
 		existing.Email = u.Email
 		return domain.UpsertResult{User: existing, Created: false}, nil
 	}
 	u.ID = uuid.New()
-	f.bySubject[u.KeycloakSubject] = u
+	f.bySubject[subject] = u
 	return domain.UpsertResult{User: u, Created: true}, nil
 }
 

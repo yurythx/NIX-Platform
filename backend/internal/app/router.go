@@ -16,6 +16,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
 	"github.com/yurythx/nix-platform/internal/platform/idempotency"
+	"github.com/yurythx/nix-platform/internal/platform/localauth"
 	"github.com/yurythx/nix-platform/internal/platform/ws"
 )
 
@@ -40,6 +41,13 @@ func NewRouter(deps *Dependencies) chi.Router {
 	// definir um header Authorization no handshake — §38), então
 	// deliberadamente NÃO fica atrás de auth.RequireAuthentication.
 	r.Get("/ws", ws.UpgradeHandler(deps.Hub, deps.Tickets, deps.Config.FrontendURL, deps.Logger))
+
+	// Registrado no router de fora, ANTES do grupo /api/v1 autenticado
+	// abaixo — quem está fazendo login, por definição, ainda não tem um
+	// token para apresentar (§ Sistema de Login Local). Deliberadamente
+	// um no-op (404) quando LOCAL_AUTH_ENABLED=false, ver
+	// localauth.Handlers.Login.
+	localauth.RegisterRoutes(r, deps.Modules.LocalAuth.Handlers, deps.Logger, deps.RateLimiters.LocalLogin)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		api.Use(auth.RequireAuthentication(deps.Verifier, deps.Logger))

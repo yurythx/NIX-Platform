@@ -44,5 +44,6 @@ func (c accessTokenClaims) toIdentity(clientID string) Identity {
 		Username: c.PreferredUsername,
 		Email:    c.Email,
 		Roles:    roles,
+		Source:   SourceKeycloak,
 	}
 }

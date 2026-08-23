@@ -12,6 +12,15 @@ declare module "next-auth" {
     // — proxy.ts usa este campo para decidir redirecionar para /login.
     error?: string;
   }
+
+  // O que authorize() do CredentialsProvider local retorna (ver
+  // lib/auth/options.ts) — o campo extra accessToken/accessTokenExpires
+  // é o que o callback jwt() copia para o token de sessão, no mesmo lugar
+  // onde o fluxo Keycloak copia account.access_token.
+  interface User {
+    accessToken?: string;
+    accessTokenExpires?: number;
+  }
 }
 
 declare module "next-auth/jwt" {
@@ -21,7 +30,9 @@ declare module "next-auth/jwt" {
     refreshToken?: string;
     // Necessário para o RP-Initiated Logout (ver
     // app/api/auth/keycloak-logout-url/route.ts) — é o id_token_hint que
-    // o Keycloak exige para encerrar a sessão dele também.
+    // o Keycloak exige para encerrar a sessão dele também. Ausente para
+    // sessões do login local, que não têm um id_token do Keycloak — ver
+    // fullSignOut() em components/layout/Header.tsx.
     idToken?: string;
     error?: string;
   }

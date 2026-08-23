@@ -1,5 +1,6 @@
 import type { NextAuthOptions, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
+import CredentialsProvider from "next-auth/providers/credentials";
 import KeycloakProvider from "next-auth/providers/keycloak";
 
 // Env somente de servidor — nunca com prefixo NEXT_PUBLIC_, nunca enviada
@@ -19,6 +20,11 @@ if (!issuer || !clientId || !clientSecret) {
   );
 }
 
+// O mesmo endereço interno que o proxy BFF usa (ver
+// app/api/backend/[...path]/route.ts) — o login local também é uma
+// chamada server-to-server ao backend Go, nunca exposta ao navegador.
+const backendInternalURL = process.env.BACKEND_INTERNAL_URL ?? "http://localhost:8000";
+
 interface KeycloakTokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -28,7 +34,10 @@ interface KeycloakTokenResponse {
 }
 
 /** Renova um access token expirado através do endpoint de token do
- * Keycloak, usando o refresh_token guardado na sessão. */
+ * Keycloak, usando o refresh_token guardado na sessão. Só se aplica a
+ * sessões que vieram do Keycloak — o login local (ver
+ * localLoginAuthorize) não tem conceito de refresh token, uma sessão
+ * local expirada simplesmente exige logar de novo. */
 async function refreshAccessToken(token: JWT): Promise<JWT> {
   try {
     const response = await fetch(`${issuer}/protocol/openid-connect/token`, {
@@ -64,6 +73,15 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
   }
 }
 
+interface LocalLoginResponse {
+  data: {
+    access_token: string;
+    expires_at: string;
+    user: { id: string; username: string; email: string };
+  } | null;
+  error: { code: string; message: string } | null;
+}
+
 export const authOptions: NextAuthOptions = {
   providers: [
     KeycloakProvider({
@@ -73,6 +91,58 @@ export const authOptions: NextAuthOptions = {
       // As checks padrão do KeycloakProvider já incluem "pkce" e "state"
       // — Authorization Code + PKCE conforme §30, sem configuração extra
       // necessária.
+    }),
+
+    // Login local (§ Sistema de Login Local) — um caminho ADICIONAL ao
+    // Keycloak, nunca um substituto. Chama o mesmo endpoint que qualquer
+    // outro cliente HTTP chamaria (POST /api/v1/auth/login no backend
+    // Go); este provider só faz a ponte entre o formulário de
+    // usuário/senha e a sessão do NextAuth. Se LOCAL_AUTH_ENABLED=false
+    // no backend, o endpoint responde 404 e authorize() retorna null —
+    // o botão de login local continua aparecendo no frontend, mas
+    // qualquer tentativa falha com a mensagem genérica de credenciais
+    // inválidas (não vaza se o recurso está desligado ou se a senha
+    // estava errada).
+    CredentialsProvider({
+      id: "local",
+      name: "Local",
+      credentials: {
+        username: { label: "Usuário", type: "text" },
+        password: { label: "Senha", type: "password" },
+      },
+      async authorize(credentials) {
+        if (!credentials?.username || !credentials?.password) {
+          return null;
+        }
+
+        let res: Response;
+        try {
+          res = await fetch(`${backendInternalURL}/api/v1/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              username: credentials.username,
+              password: credentials.password,
+            }),
+          });
+        } catch (err) {
+          console.error("Local login: backend unreachable", err);
+          return null;
+        }
+
+        const body: LocalLoginResponse = await res.json();
+        if (!res.ok || !body.data) {
+          return null;
+        }
+
+        return {
+          id: body.data.user.id,
+          name: body.data.user.username,
+          email: body.data.user.email,
+          accessToken: body.data.access_token,
+          accessTokenExpires: new Date(body.data.expires_at).getTime(),
+        };
+      },
     }),
   ],
 
@@ -92,9 +162,11 @@ export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
 
   callbacks: {
-    async jwt({ token, account }) {
-      // Primeiro login: persiste os tokens que o Keycloak acabou de emitir.
-      if (account) {
+    async jwt({ token, account, user }) {
+      // Primeiro login via Keycloak: persiste os tokens que ele acabou de
+      // emitir (inclui refresh_token — sessões Keycloak se renovam
+      // sozinhas via refreshAccessToken quando expiram).
+      if (account?.provider === "keycloak") {
         return {
           ...token,
           accessToken: account.access_token,
@@ -104,17 +176,32 @@ export const authOptions: NextAuthOptions = {
         };
       }
 
+      // Primeiro login via credenciais locais: authorize() já validou a
+      // senha e devolveu um token pronto do backend — não há
+      // refresh_token neste caminho (ver o comentário de
+      // refreshAccessToken), então quando accessTokenExpires passar a
+      // sessão simplesmente expira e pede novo login.
+      if (account?.provider === "local" && user) {
+        return {
+          ...token,
+          accessToken: user.accessToken,
+          accessTokenExpires: user.accessTokenExpires,
+          refreshToken: undefined,
+          idToken: undefined,
+        };
+      }
+
       // Ainda válido.
       if (token.accessTokenExpires && Date.now() < (token.accessTokenExpires as number)) {
         return token;
       }
 
-      // Expirado: renova.
+      // Expirado: só o caminho Keycloak sabe se renovar sozinho.
       if (token.refreshToken) {
         return refreshAccessToken(token);
       }
 
-      return token;
+      return { ...token, error: "RefreshAccessTokenError" };
     },
 
     async session({ session, token }): Promise<Session> {

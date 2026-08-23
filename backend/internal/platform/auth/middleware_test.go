@@ -118,7 +118,7 @@ func newTestVerifier(t *testing.T, p *testOIDCProvider, clientID, audience strin
 		IssuerURL: p.issuer,
 		ClientID:  clientID,
 		Audience:  audience,
-	})
+	}, config.LocalAuthConfig{})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

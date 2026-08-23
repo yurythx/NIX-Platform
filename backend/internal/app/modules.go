@@ -21,6 +21,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/platform/audit"
 	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
+	"github.com/yurythx/nix-platform/internal/platform/localauth"
 )
 
 // Modules guarda o serviço de aplicação e os handlers HTTP de todo módulo
@@ -47,6 +48,9 @@ type Modules struct {
 	}
 	ConfigFlags struct {
 		Handlers *configflags.Handlers
+	}
+	LocalAuth struct {
+		Handlers *localauth.Handlers
 	}
 }
 
@@ -84,6 +88,9 @@ func buildModules(deps *Dependencies) *Modules {
 	m.SecOps.Handlers = secopsTransport.NewHandlers(secopsSvc, deps.Logger)
 
 	m.ConfigFlags.Handlers = configflags.NewHandlers(deps.Flags, auditWriter, deps.Logger)
+
+	localAuthStore := localauth.NewPostgresStore(deps.DB)
+	m.LocalAuth.Handlers = localauth.NewHandlers(localAuthStore, deps.Config.LocalAuth, auditWriter, deps.Logger)
 
 	return m
 }

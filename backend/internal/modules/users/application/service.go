@@ -47,7 +47,7 @@ func (s *Service) GetCurrentUser(ctx context.Context, in SyncIdentityInput) (*do
 	}
 
 	result, err := s.repo.UpsertByKeycloakSubject(ctx, &domain.User{
-		KeycloakSubject: in.Subject,
+		KeycloakSubject: &in.Subject,
 		Username:        in.Username,
 		Email:           in.Email,
 		Active:          true,
