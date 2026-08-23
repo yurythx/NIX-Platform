@@ -1,10 +1,10 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
-- **Status:** Fase 1 (Fundação), Fase 3 (Trivy), Fase 4 (Semgrep) e Fase 5 (SonarQube)
-  implementadas — ver detalhes na seção "Fases" abaixo. Fase 2 (TruffleHog) foi pulada por decisão
-  do usuário (redundante com o gitleaks já no CI). Fase 6 (OWASP ZAP) segue proposta — é a única
-  fase restante, e a de maior risco de todas (dispara ataques ativos contra um alvo rodando de
-  verdade).
+- **Status:** Fase 1 (Fundação), Fase 3 (Trivy), Fase 4 (Semgrep), Fase 5 (SonarQube) e Fase 6
+  (OWASP ZAP) implementadas — ver detalhes na seção "Fases" abaixo. Todas as fases propostas estão
+  concluídas ou puladas por decisão explícita: Fase 2 (TruffleHog) foi pulada por redundância com
+  o gitleaks já no CI. Fases 7-9 (orquestração concorrente, CLI/CI unificado, UI no frontend) são
+  refinamentos sobre o que já existe, não scanners novos — seguem como planejamento futuro.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -25,7 +25,7 @@ em volta continua real e reaproveitável:
 | Padrão pedido na proposta | Onde já existe no NIX Platform hoje |
 |---|---|
 | Strategy Pattern (interface comum por ferramenta) | ✅ Implementado: `scanning/domain/scanner.go` define `CodeScanner`, com `TrivyScanner` (Fase 3) como primeira implementação real registrada — não mais só o `fakeScanner` de teste. |
-| Adapter Pattern (normalizar o output de cada ferramenta) | ✅ Implementado, três adapters reais: `trivy_scanner.go`, `semgrep_scanner.go` e `sonar_scanner.go` traduzem a saída de cada ferramenta pro `domain.Finding` unificado — mesmo princípio que `diario_oficial/infrastructure/http_client.go` já aplicava a um único parceiro. O que os três têm em comum (clonar o alvo via git, validar SSRF) foi extraído pra `git_clone.go` em vez de duplicado. Cada scanner novo (Fase 6+) ganha seu próprio adapter no mesmo pacote. |
+| Adapter Pattern (normalizar o output de cada ferramenta) | ✅ Implementado, quatro adapters reais: `trivy_scanner.go`, `semgrep_scanner.go`, `sonar_scanner.go` e `zap_scanner.go` traduzem a saída de cada ferramenta pro `domain.Finding` unificado — mesmo princípio que `diario_oficial/infrastructure/http_client.go` já aplicava a um único parceiro. O que os três primeiros têm em comum (clonar o alvo via git, validar SSRF) foi extraído pra `git_clone.go` em vez de duplicado; o `zap_scanner.go` é estruturalmente diferente (ataca um alvo HTTP em vez de ler código-fonte) e por isso não reaproveita esse arquivo — tem sua própria validação (allowlist obrigatória, ver Fase 6). |
 | Observer / Event-Driven | Outbox transacional + RabbitMQ (`internal/platform/outbox`, `internal/domain/events`) já publicam `integration.status.changed`, `diario_oficial.job.completed/failed` e, desde a Fase 1/3, `scanning.scan.completed`/`scanning.scan.failed` — o consumer real hoje é só o Hub de WebSocket (`nix.notification.websocket`); nenhuma reação automática a achados CRITICAL/HIGH existe ainda. |
 | Microkernel / plug-in registry | ✅ Implementado: `scanning.Service` recebe `...domain.CodeScanner` no construtor e monta um `map[string]CodeScanner` internamente — registrar uma ferramenta nova (Fase 4+) é só passar mais um argumento no wiring de `internal/app/modules.go`, sem tocar em `RunScan`/`ProcessScanJob`. |
 | Resiliência (timeout, circuit breaker) | `internal/platform/resilience` (circuit breaker) e `context.Context` com timeout já protegem toda chamada externa — o mesmo mecanismo cobre um scanner novo sem código extra. |
@@ -258,12 +258,37 @@ ferramentas estarem prontas para gerar valor.
 - Severidade: escala legada de 5 níveis do SonarQube (BLOCKER/CRITICAL/MAJOR/MINOR/INFO, ainda o
   campo `severity` de todo issue na API atual) mapeada pra CRITICAL/CRITICAL/HIGH/MEDIUM/LOW.
 
-**Fase 6 — OWASP ZAP (DAST)**
-- **Maior risco de todas as fases**: dispara ataques ativos contra um alvo rodando de verdade.
-  Regra inegociável: `ZapAdapter` só pode apontar para ambientes de homologação/staging,
-  nunca produção — reforçado por uma allowlist de hosts no próprio Core (o mesmo princípio do
-  Gateway Pattern que a proposta cita para mitigar A10/SSRF, aplicado aqui na direção inversa:
-  não deixar o próprio scanner virar um vetor de ataque contra o alvo errado).
+**Fase 6 — OWASP ZAP (DAST) — ✅ implementada**
+- **Maior risco de todas as fases, decisão explícita do usuário antes de implementar**: sem
+  ambiente de staging/homologação real disponível, a verificação de ponta a ponta usou um alvo
+  local — não um alvo público de teste (`testphp.vulnweb.com`, o candidato óbvio, mostrou-se
+  inalcançável a partir deste ambiente durante a implementação; substituído por OWASP Juice Shop e
+  nginx rodando localmente na mesma rede, especificamente pra este fim).
+- **Diferença estrutural fundamental em relação a Trivy/Semgrep/SonarQube, refletida no próprio
+  desenho do código**: os três primeiros só LEEM código-fonte — nunca interagem com o alvo além de
+  clonar/enviar um relatório. O `ZapScanner`
+  (`backend/internal/modules/scanning/infrastructure/zap_scanner.go`) ATIVAMENTE ATACA um serviço
+  rodando de verdade (spider/crawl seguido de scan ativo — injeção, XSS, etc. — via a API REST de
+  um daemon OWASP ZAP self-hosted, `docker-compose.yml` serviço `zap`). Por isso o alvo NUNCA passa
+  por `cloneShallow`/`validateHost` (a defesa de SSRF dos outros três não faz sentido aqui — um IP
+  privado é frequentemente o alvo LEGÍTIMO, um staging interno); a defesa central é uma
+  **allowlist de hosts explícita e obrigatória** (`SCANNING_ZAP_ALLOWED_HOSTS`) — vazia por
+  padrão, o oposto do "aberto por padrão" das outras validações desta plataforma: TODO alvo é
+  recusado até um host de staging ser explicitamente autorizado. Nunca produção — regra
+  inegociável, imposta em código (`validateTarget`), não só em documentação.
+- **Descoberta real ao integrar com a API de um daemon real**: ao contrário do Trivy/Semgrep/
+  SonarQube, o ZAP expõe um mapeamento OWASP Top 10 **estruturado de verdade** — cada alerta carrega
+  tags como `OWASP_2021_A01` cujo valor é uma URL
+  (`https://owasp.org/Top10/A01_2021-Broken_Access_Control/`), da qual `zapOWASPCategory` deriva o
+  mesmo formato `"A01:2021-Broken Access Control"` que Trivy/Semgrep já usam. Um mesmo alerta pode
+  carregar tags de 2017/2021/2025 simultaneamente (verificado contra a saída real) — só a 2021 é
+  usada, pra bater com a edição que todo o resto deste roadmap já usa.
+- Severidade: escala de 4 níveis do ZAP (High/Medium/Low/Informational — sem um nível acima de
+  High, mesmo raciocínio que fez o Semgrep não usar CRITICAL) mapeada pra HIGH/MEDIUM/LOW/LOW.
+- `docker-compose.yml`: serviço `zap` (`zaproxy/zap-stable:2.17.0`, daemon com API REST, autenticado
+  por `api.key` obrigatório — sem chave, qualquer container na mesma rede poderia disparar
+  ataques). Ao contrário de trivy/semgrep/sonar-scanner (processos rodados dentro do worker), o ZAP
+  roda como um serviço de vida longa; o worker fala com a API dele via HTTP.
 
 **Fase 7 — Orquestração concorrente**
 - Rodar scanners independentes em paralelo via goroutines + `errgroup`, com timeout por
@@ -285,13 +310,13 @@ ferramentas estarem prontas para gerar valor.
 
 | Risco | Já implementado no NIX Platform hoje | O que este roadmap adiciona |
 |---|---|---|
-| A01 Broken Access Control | RBAC por permissão (`RequirePermission`), rotas sensíveis protegidas | ZAP testando fuzzing de IDs em staging (Fase 6) |
+| A01 Broken Access Control | RBAC por permissão (`RequirePermission`), rotas sensíveis protegidas | ✅ ZAP (scan ativo, allowlist de staging obrigatória) via `POST /api/v1/scanning/scans` (Fase 6) |
 | A02 Cryptographic Failures | RS256 próprio pro login local, bcrypt, segredos via `_FILE`, HSTS | — (já coberto; scanners não mudam isso) |
 | A03 Injection | 100% consultas parametrizadas via pgx (conferido nesta sessão: zero concatenação de string em SQL) | ✅ Semgrep (`p/owasp-top-ten`, taint analysis, Fase 4) + SonarQube (issues do tipo `VULNERABILITY`, Fase 5) via `POST /api/v1/scanning/scans` |
 | A04 Insecure Design | Monólito modular com fronteiras de módulo, ADRs documentando decisão de arquitetura | — (prática de engenharia, não uma ferramenta) |
 | A05 Security Misconfiguration | CSP com nonce, headers de segurança, containers non-root | ✅ Trivy (`--scanners misconfig`) varrendo Dockerfiles sob demanda, via `POST /api/v1/scanning/scans` (Fase 3) |
 | A06 Vulnerable Components | govulncheck + npm audit + Trivy (imagens) + Dependabot, todos já no CI | ✅ Trivy (`--scanners vuln`) sob demanda contra qualquer repositório git, fora do CI (Fase 3) |
-| A07 Auth Failures | Bloqueio de conta, rate limit distribuído, erro genérico (sem enumeração de usuário) | ZAP testando o ciclo de vida de sessão em staging (Fase 6) |
+| A07 Auth Failures | Bloqueio de conta, rate limit distribuído, erro genérico (sem enumeração de usuário) | ✅ ZAP testando o ciclo de vida de sessão em staging (Fase 6) |
 | A08 Software & Data Integrity | Idempotência, outbox transacional, CI builda a partir do código-fonte | Nenhuma assinatura/SBOM ainda — gap real, não coberto por nenhuma fase acima; ficaria fora de escopo deste roadmap |
 | A09 Logging & Monitoring | Audit log imutável, logs estruturados correlacionados por request id, Prometheus, OpenTelemetry | `scanning.scan.completed` como mais um evento auditado (Fase 1) |
 | A10 SSRF | ⚠️ Desde a Fase 3, `POST /api/v1/scanning/scans` (target de `trivy`, `semgrep` **e**, desde a Fase 5, `sonarqube` — os três reaproveitam a mesma validação via `git_clone.go`) É um endpoint que aceita uma URL do chamador — `validateHost` resolve o host e rejeita IP privado/loopback/link-local/não especificado antes de clonar, defesa em profundidade (não uma proteção completa contra DNS rebinding, já que o `git` re-resolve o host ao conectar; aceito hoje porque quem chama já precisa de `scanning:manage`). Todo outro endpoint continua sem aceitar URL arbitrária. | ✅ Semgrep + SonarQube (Fases 4/5) já rodam contra os próprios módulos da plataforma sob demanda — detectariam um cliente HTTP com URL não validada se esse padrão aparecesse no futuro |

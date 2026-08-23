@@ -333,7 +333,7 @@ Os testes do backend se dividem em dois grupos:
 
 **Roadmap de segurança**: [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md)
 mapeia o que já está implementado (tabela acima) contra o OWASP Top 10. O módulo `scanning`
-(`POST /api/v1/scanning/scans`, `GET /api/v1/scanning/scans/{scanID}/findings`) orquestra três
+(`POST /api/v1/scanning/scans`, `GET /api/v1/scanning/scans/{scanID}/findings`) orquestra quatro
 scanners reais, todos seguindo o mesmo padrão Strategy/Adapter e o mesmo pipeline
 job → outbox → fila → worker → notificação de `diario_oficial`:
 
@@ -341,12 +341,16 @@ job → outbox → fila → worker → notificação de `diario_oficial`:
 - **Semgrep** — SAST (`p/owasp-top-ten`), mesmo mecanismo de clone.
 - **SonarQube** — qualidade de código/bugs/vulnerabilidades via um servidor self-hosted
   (`docker-compose.yml`, serviços `sonarqube`/`sonarqube-db`); assíncrono em dois níveis (upload +
-  processamento pela Compute Engine do servidor), o único dos três que não é só "rodar um
-  binário".
+  processamento pela Compute Engine do servidor).
+- **OWASP ZAP** — DAST: dispara um crawl seguido de ataques ativos de verdade (injeção, XSS, ...)
+  contra uma URL rodando de verdade, via um daemon self-hosted (`docker-compose.yml`, serviço
+  `zap`). Estruturalmente diferente dos outros três — não lê código-fonte, ataca um serviço vivo —
+  por isso exige uma allowlist de hosts explícita (`SCANNING_ZAP_ALLOWED_HOSTS`, vazia por padrão:
+  recusa todo alvo até um host de staging/homologação ser autorizado). **Nunca aponte para
+  produção.**
 
-TruffleHog (Fase 2) foi pulado por redundância com o gitleaks já no CI. OWASP ZAP (DAST, Fase 6,
-a de maior risco de todas — dispara ataques ativos contra um alvo rodando de verdade) segue como
-planejamento.
+TruffleHog (Fase 2) foi pulado por redundância com o gitleaks já no CI. Todas as demais fases
+propostas (1, 3-6) estão implementadas.
 
 ## Observabilidade
 

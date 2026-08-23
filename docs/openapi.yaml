@@ -397,7 +397,7 @@ paths:
                 scanner:
                   type: string
                   description: Nome de um CodeScanner registrado.
-                  enum: ["trivy", "semgrep", "sonarqube"]
+                  enum: ["trivy", "semgrep", "sonarqube", "zap"]
                   example: "trivy"
                 target:
                   type: string
@@ -415,6 +415,16 @@ paths:
                     contrário) e leva mais tempo — além do scan em si, o
                     worker espera a Compute Engine do servidor terminar de
                     processar o relatório enviado.
+
+                    Para "zap" (DAST) — completamente diferente: o alvo é
+                    uma URL http(s) de um serviço RODANDO DE VERDADE (não
+                    um repositório git), que o ZAP ativamente ataca
+                    (spider + scan ativo — injeção, XSS, etc.). Exige que
+                    o host do alvo esteja na allowlist configurada em
+                    SCANNING_ZAP_ALLOWED_HOSTS — vazia por padrão, recusa
+                    TODO alvo até um host de staging/homologação ser
+                    explicitamente autorizado (400 VALIDATION_ERROR caso
+                    contrário). Nunca aponte para produção.
                   example: "https://github.com/org/repo.git#main"
       responses:
         "202":

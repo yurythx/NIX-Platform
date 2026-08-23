@@ -124,6 +124,36 @@ services:
       retries: 10
       start_period: 90s
 
+  # zap: infraestrutura da Fase 6 do roadmap de segurança (OWASP ZAP,
+  # DAST — a fase de maior risco de todas: dispara ataques ativos contra
+  # um alvo rodando de verdade, decisão explícita do usuário registrada
+  # em docs/roadmap-secops-orchestrator.md). Ao contrário de
+  # trivy/semgrep/sonar-scanner (processos rodados dentro do próprio
+  # worker), o ZAP roda como um daemon de vida longa com sua API REST
+  # habilitada; o worker fala com essa API via HTTP (ver
+  # internal/modules/scanning/infrastructure/zap_scanner.go), nunca
+  # invoca um binário ZAP diretamente. api.key é obrigatório — sem ele,
+  # qualquer container na mesma rede poderia disparar ataques através
+  # deste serviço.
+  zap:
+    image: zaproxy/zap-stable:2.17.0
+    restart: unless-stopped
+    command: >
+      zap.sh -daemon -host 0.0.0.0 -port 8080
+      -config api.key=${SCANNING_ZAP_API_KEY:?SCANNING_ZAP_API_KEY must be set}
+      -config api.addrs.addr.name=.*
+      -config api.addrs.addr.regex=true
+    networks:
+      - nix_internal
+    # Não exposto por padrão — só o worker (mesma rede interna) precisa
+    # falar com a API deste serviço.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf 'http://127.0.0.1:8080/JSON/core/view/version/?apikey=${SCANNING_ZAP_API_KEY}' | grep -q version"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
   backend-api:
     build:
       context: ./backend

@@ -145,6 +145,19 @@ type ScanningConfig struct {
 	SonarQubeToken           string
 	SonarQubeAnalysisTimeout time.Duration
 
+	// ZapURL/ZapAPIKey apontam pro daemon OWASP ZAP (docker-compose.yml,
+	// serviço `zap`) — igual a SonarQubeURL, vazio por padrão reporta o
+	// scanner "zap" como indisponível em vez de derrubar o worker.
+	// ZapAllowedHosts é a allowlist OBRIGATÓRIA (regra inegociável do
+	// roadmap — Fase 6: ZAP nunca aponta pra produção): vazia por padrão
+	// significa que NENHUM alvo é aceito até um host de
+	// staging/homologação ser explicitamente configurado — nunca "tudo
+	// liberado por padrão" para uma ferramenta que ataca de verdade.
+	ZapURL          string
+	ZapAPIKey       string
+	ZapAllowedHosts []string
+	ZapScanTimeout  time.Duration
+
 	CloneTimeout time.Duration
 }
 
@@ -261,6 +274,26 @@ func (l *loader) boolVal(key string, def bool) bool {
 	return b
 }
 
+// splitAndTrim divide uma lista separada por vírgula (ex.:
+// SCANNING_ZAP_ALLOWED_HOSTS) em entradas individuais, descartando
+// espaço em volta e entradas vazias (uma vírgula sobrando no fim/início
+// não vira uma entrada fantasma). Uma string vazia retorna uma lista
+// vazia, não uma lista com um elemento vazio.
+func splitAndTrim(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // Load lê a configuração a partir do ambiente do processo. Retorna um erro
 // nomeando toda variável obrigatória ausente/inválida, caso a validação
 // falhe.
@@ -328,6 +361,11 @@ func Load() (*Config, error) {
 			SonarQubeURL:             l.str("SCANNING_SONARQUBE_URL", false, ""),
 			SonarQubeToken:           l.secret("SCANNING_SONARQUBE_TOKEN", false, ""),
 			SonarQubeAnalysisTimeout: l.durationVal("SCANNING_SONARQUBE_ANALYSIS_TIMEOUT", false, 5*time.Minute),
+
+			ZapURL:          l.str("SCANNING_ZAP_URL", false, ""),
+			ZapAPIKey:       l.secret("SCANNING_ZAP_API_KEY", false, ""),
+			ZapAllowedHosts: splitAndTrim(l.str("SCANNING_ZAP_ALLOWED_HOSTS", false, "")),
+			ZapScanTimeout:  l.durationVal("SCANNING_ZAP_SCAN_TIMEOUT", false, 30*time.Minute),
 
 			CloneTimeout: l.durationVal("SCANNING_GIT_CLONE_TIMEOUT", false, 3*time.Minute),
 		},

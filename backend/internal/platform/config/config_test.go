@@ -112,3 +112,28 @@ func TestDatabaseConfig_DSN(t *testing.T) {
 		t.Errorf("DSN() = %q, want %q", dsn, want)
 	}
 }
+
+func TestSplitAndTrim(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"staging.example.com", []string{"staging.example.com"}},
+		{"a.example.com, b.example.com,c.example.com", []string{"a.example.com", "b.example.com", "c.example.com"}},
+		{" , a.example.com , ,", []string{"a.example.com"}}, // vírgulas sobrando e espaço não viram entradas fantasma
+	}
+	for _, tc := range cases {
+		got := splitAndTrim(tc.in)
+		if len(got) != len(tc.want) {
+			t.Errorf("splitAndTrim(%q) = %v, want %v", tc.in, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("splitAndTrim(%q) = %v, want %v", tc.in, got, tc.want)
+				break
+			}
+		}
+	}
+}

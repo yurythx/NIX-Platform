@@ -88,7 +88,11 @@ func buildModules(deps *Dependencies) *Modules {
 		deps.Config.Scanning.SonarScannerPath, deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,
 		deps.Config.Scanning.CloneTimeout, deps.Config.Scanning.SonarQubeAnalysisTimeout, deps.Logger,
 	)
-	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner, semgrepScanner, sonarScanner)
+	zapScanner := scanningInfra.NewZapScanner(
+		deps.Config.Scanning.ZapURL, deps.Config.Scanning.ZapAPIKey, deps.Config.Scanning.ZapAllowedHosts,
+		deps.Config.Scanning.ZapScanTimeout, deps.Logger,
+	)
+	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner, semgrepScanner, sonarScanner, zapScanner)
 	m.Scanning.Service = scanningSvc
 	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger)
 
