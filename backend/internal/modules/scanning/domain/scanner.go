@@ -1,13 +1,15 @@
 // Package domain guarda a entidade e os contratos do módulo scanning —
-// Fase 1 do roadmap de segurança (docs/roadmap-secops-orchestrator.md).
-// Nenhuma ferramenta real (Trivy, Semgrep, TruffleHog, SonarQube, OWASP
-// ZAP) está implementada ainda; esta é a fundação que a próxima fase
-// preenche com um CodeScanner de verdade — o Service e o schema já
-// funcionam hoje contra um scanner falso (ver application/service_test.go).
+// Fase 1 do roadmap de segurança (docs/roadmap-secops-orchestrator.md)
+// definiu o modelo e o Service; a Fase Trivy adicionou o primeiro
+// CodeScanner real (scanning/infrastructure.TrivyScanner). O Service
+// continua testado inteiramente contra um scanner falso
+// (ver application/service_test.go) — nenhum teste depende do binário
+// trivy estar instalado.
 package domain
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -59,7 +61,28 @@ type CodeScanner interface {
 	Execute(ctx context.Context, target string) ([]Finding, error)
 }
 
-// Repository persiste os achados de uma execução de scan.
+// PersistedFinding é um Finding já gravado, com os metadados que só
+// existem depois da persistência (ID próprio da linha, a que scan
+// pertence, quando foi gravado) — o que ListByScanID devolve. Finding em
+// si (o que um CodeScanner produz) nunca carrega isso, para não obrigar
+// toda implementação de CodeScanner a inventar um ID/timestamp que ainda
+// não existem no momento em que o achado é só um resultado de execução.
+//
+// O campo da linha se chama RecordID, não ID: Finding já tem seu próprio
+// ID (o CVE/regra do achado) — se os dois se chamassem ID, o embedding
+// faria o de PersistedFinding esconder o de Finding tanto no acesso Go
+// quanto na serialização JSON (a mesma regra de shadowing golpeia os
+// dois), apagando silenciosamente o CVE/regra de toda resposta HTTP.
+type PersistedFinding struct {
+	RecordID uuid.UUID
+	ScanID   uuid.UUID
+	Scanner  string
+	Target   string
+	Finding
+	CreatedAt time.Time
+}
+
+// Repository persiste e consulta os achados de uma execução de scan.
 type Repository interface {
 	// SaveFindings grava todo achado de scanID numa única operação,
 	// dentro da transação de quem chama (ver
@@ -67,4 +90,9 @@ type Repository interface {
 	// gravado na mesma transação, para nunca existir um achado
 	// persistido sem o evento correspondente publicado, ou vice-versa.
 	SaveFindings(ctx context.Context, tx pgx.Tx, scanID uuid.UUID, scanner, target string, findings []Finding) error
+
+	// ListByScanID retorna todo achado de uma execução, mais recente
+	// primeiro. Uma lista vazia (scan limpo, ou scanID desconhecido) não
+	// é erro — quem chama decide se isso merece um 404.
+	ListByScanID(ctx context.Context, scanID uuid.UUID) ([]PersistedFinding, error)
 }

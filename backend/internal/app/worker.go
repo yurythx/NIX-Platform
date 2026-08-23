@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	diarioWorker "github.com/yurythx/nix-platform/internal/modules/diario_oficial/worker"
+	scanningWorker "github.com/yurythx/nix-platform/internal/modules/scanning/worker"
 
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
 	"github.com/yurythx/nix-platform/internal/platform/idempotency"
@@ -49,6 +50,9 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 	diarioConsumer := newConsumer(messaging.QueueDiarioOficialWorker.Name)
 	diarioDLQConsumer := newConsumer(messaging.QueueDiarioOficialWorker.DLQName)
 
+	scanningConsumer := newConsumer(messaging.QueueScanningWorker.Name)
+	scanningDLQConsumer := newConsumer(messaging.QueueScanningWorker.DLQName)
+
 	return &Worker{
 		deps: deps,
 		processors: []processor{
@@ -60,6 +64,12 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 			}),
 			supervised("diario_oficial.dlq", deps.Logger, func(ctx context.Context) error {
 				return diarioDLQConsumer.Consume(ctx, diarioWorker.DeadLetterHandler(deps.Modules.DiarioOficial.Service, deps.Logger))
+			}),
+			supervised("scanning.worker", deps.Logger, func(ctx context.Context) error {
+				return scanningConsumer.Consume(ctx, scanningWorker.ScanRequestedHandler(deps.Modules.Scanning.Service))
+			}),
+			supervised("scanning.dlq", deps.Logger, func(ctx context.Context) error {
+				return scanningDLQConsumer.Consume(ctx, scanningWorker.DeadLetterHandler(deps.Modules.Scanning.Service, deps.Logger))
 			}),
 		},
 	}, nil

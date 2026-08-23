@@ -1,8 +1,9 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
-- **Status:** Fase 1 (Fundação) implementada — ver detalhes na seção "Fases" abaixo. Fases 2+
-  (as ferramentas externas de verdade: TruffleHog, Trivy, Semgrep, SonarQube, OWASP ZAP) seguem
-  propostas; a decisão de qual atacar primeiro é do usuário.
+- **Status:** Fase 1 (Fundação) e Fase 3 (Trivy) implementadas — ver detalhes na seção "Fases"
+  abaixo. Fase 2 (TruffleHog) foi pulada por decisão do usuário (redundante com o gitleaks já no
+  CI). Fases 4+ (Semgrep, SonarQube, OWASP ZAP) seguem propostas; a decisão de qual atacar em
+  seguida é do usuário.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -22,10 +23,10 @@ em volta continua real e reaproveitável:
 
 | Padrão pedido na proposta | Onde já existe no NIX Platform hoje |
 |---|---|
-| Strategy Pattern (interface comum por ferramenta) | ✅ Implementado na Fase 1: `scanning/domain/scanner.go` define `CodeScanner`; nenhuma implementação real ainda registrada (só o `fakeScanner` de teste) até a Fase 2 trazer a primeira ferramenta de verdade. |
-| Adapter Pattern (normalizar o output de cada ferramenta) | `diario_oficial/infrastructure/http_client.go` traduz a resposta HTTP do endpoint configurado pro modelo próprio do módulo — mesmo princípio (isolar o formato de terceiros do resto do sistema), aplicado a um único parceiro em vez de vários. Cada scanner real (Fase 2+) ganha seu próprio adapter em `scanning/infrastructure/`. |
-| Observer / Event-Driven | Outbox transacional + RabbitMQ (`internal/platform/outbox`, `internal/domain/events`) já publicam `integration.status.changed`, `diario_oficial.job.completed/failed` e, desde a Fase 1, `scanning.scan.completed` — ainda sem nenhum consumer real deste último. |
-| Microkernel / plug-in registry | ✅ Implementado na Fase 1: `scanning.Service` recebe `...domain.CodeScanner` no construtor e monta um `map[string]CodeScanner` internamente — registrar uma ferramenta nova (Fase 2+) é só passar mais um argumento no wiring de `internal/app`, sem tocar em `RunScan`. |
+| Strategy Pattern (interface comum por ferramenta) | ✅ Implementado: `scanning/domain/scanner.go` define `CodeScanner`, com `TrivyScanner` (Fase 3) como primeira implementação real registrada — não mais só o `fakeScanner` de teste. |
+| Adapter Pattern (normalizar o output de cada ferramenta) | ✅ Implementado: `scanning/infrastructure/trivy_scanner.go` traduz o JSON do `trivy` pro `domain.Finding` unificado — mesmo princípio que `diario_oficial/infrastructure/http_client.go` já aplicava a um único parceiro. Cada scanner novo (Fase 4+) ganha seu próprio adapter no mesmo pacote. |
+| Observer / Event-Driven | Outbox transacional + RabbitMQ (`internal/platform/outbox`, `internal/domain/events`) já publicam `integration.status.changed`, `diario_oficial.job.completed/failed` e, desde a Fase 1/3, `scanning.scan.completed`/`scanning.scan.failed` — o consumer real hoje é só o Hub de WebSocket (`nix.notification.websocket`); nenhuma reação automática a achados CRITICAL/HIGH existe ainda. |
+| Microkernel / plug-in registry | ✅ Implementado: `scanning.Service` recebe `...domain.CodeScanner` no construtor e monta um `map[string]CodeScanner` internamente — registrar uma ferramenta nova (Fase 4+) é só passar mais um argumento no wiring de `internal/app/modules.go`, sem tocar em `RunScan`/`ProcessScanJob`. |
 | Resiliência (timeout, circuit breaker) | `internal/platform/resilience` (circuit breaker) e `context.Context` com timeout já protegem toda chamada externa — o mesmo mecanismo cobre um scanner novo sem código extra. |
 | Interruptor de emergência por ferramenta | `internal/platform/configflags` (feature flags em runtime) já desliga uma integração inteira sem reimplantar — `diario_oficial_scraping_enabled` é o exemplo vivo hoje; cada scanner novo ganha sua própria flag do mesmo jeito. |
 | Auditoria de cada execução | `internal/platform/audit` (log imutável) já registra toda ação sensível — cada scan vira uma entrada de auditoria como qualquer outra. |
@@ -129,36 +130,53 @@ ferramentas estarem prontas para gerar valor.
 - RBAC: `scanning:read`/`scanning:manage` adicionadas a `rbac.go`, concedidas a
   `nix-integration-manager` (leitura+gestão) e `nix-auditor` (só leitura) — o mesmo par de roles
   que já cobre integrações, em vez de um role novo só para isto.
-- Auditoria: `audit.ActionScanCompleted` (`"scan.completed"`) registrado a cada `RunScan`.
-- **Deliberadamente fora desta fase** (chega com o primeiro scanner real, Fase 2+): nenhum
+- Auditoria: `audit.ActionScanCompleted` (`"scan.completed"`) registrado a cada `RunScan` bem-sucedido — a Fase 3 completou o trio com `ActionScanRequested`/`ActionScanFailed` para o fluxo assíncrono (ver abaixo).
+- **Deliberadamente fora desta fase** (chegou na Fase 3, junto com o primeiro scanner real): nenhum
   endpoint HTTP/transport, nenhuma fila/worker RabbitMQ, nenhuma UI no frontend, e o módulo
-  `scanning` ainda **não está conectado** em `internal/app/modules.go` — não há nenhum
-  `CodeScanner` real para registrar nele ainda, e conectar um `Service` sem nenhum scanner nem
-  chamador seria abstração morta (o mesmo raciocínio que levou à remoção completa do módulo
-  `secops`/VirusTotal).
+  `scanning` não estava conectado em `internal/app/modules.go` — sem nenhum `CodeScanner` real
+  ainda, conectar um `Service` sem scanner nem chamador teria sido abstração morta (o mesmo
+  raciocínio que levou à remoção completa do módulo `secops`/VirusTotal). Ver Fase 3 abaixo para
+  onde cada uma dessas peças foi de fato construída.
 
-**Fase 2 — TruffleHog (secret scanning)**
-- ⚠️ **Observação de engenharia antes de implementar**: o CI deste projeto já roda
-  [gitleaks](https://github.com/gitleaks/gitleaks) (`.github/workflows/gitleaks.yml`) — a mesma
-  categoria de ferramenta que o TruffleHog. Rodar os dois é redundante sem ganho claro. Duas
-  opções pra decidir antes de começar esta fase: (a) adotar TruffleHog e aposentar o job do
-  gitleaks, ou (b) manter gitleaks no CI (já funciona, já está configurado) e usar esta fase pra
-  outro scanner da lista. Este roadmap assume (a) por seguir literalmente a proposta original,
-  mas é uma escolha do usuário, não uma conclusão técnica.
-- `TruffleHogAdapter`: roda via `os/exec` chamando o binário instalado no container do worker
-  (mesmo padrão de spawnar processo já usado por nenhum código atual — seria a primeira vez que
-  o backend chama um binário externo, então vale revisar com cuidado: timeout via
-  `context.Context`, `stderr` capturado pro log, nunca repassar o output bruto pro cliente). Se
-  em vez disso rodar como container (mais isolado, mas mais pesado), a dependência nova seria o
-  SDK do Docker (`github.com/docker/docker/client`) — não está no `go.mod` hoje, então essa
-  escolha (processo local vs. container) é a primeira decisão real desta fase.
+**Fase 2 — TruffleHog (secret scanning) — ⏭️ pulada por decisão do usuário**
+- O CI deste projeto já roda [gitleaks](https://github.com/gitleaks/gitleaks)
+  (`.github/workflows/gitleaks.yml`) — a mesma categoria de ferramenta que o TruffleHog. Diante da
+  redundância, o usuário escolheu explicitamente ir direto para a Fase 3 (Trivy) em vez de adotar
+  TruffleHog e aposentar o gitleaks. Fica registrada como decisão tomada, não como observação em
+  aberto — se algum dia fizer sentido revisitar (ex.: TruffleHog cobre verificação ativa contra
+  provedores conhecidos, gitleaks só regex), é aqui que essa fase retomaria.
 
-**Fase 3 — Trivy (dependências, containers, IaC)**
-- Menor risco de implementação: o Trivy **já roda no CI** (`ci.yml`, escaneando as 3 imagens
-  Docker finais) — esta fase reaproveita o mesmo binário/imagem, só que disparado sob demanda
-  pelo `scanning.Service` em vez de só no pipeline.
-- `TrivyAdapter`: escaneia `go.mod`/`package-lock.json` (dependências), Dockerfiles, e a própria
-  imagem construída — três alvos, um adaptador (o parâmetro `target` já distingue).
+**Fase 3 — Trivy (dependências, Dockerfiles) — ✅ implementada**
+- **A suposição original desta fase estava errada e foi corrigida durante a implementação**: o
+  texto original assumia que dava pra "reaproveitar o mesmo binário/imagem" que o Trivy já usa no
+  CI. Investigando antes de implementar, descobriu-se que isso não é viável em produção: o
+  `backend-worker` roda numa imagem Alpine mínima sem o código-fonte do repositório, sem acesso ao
+  daemon Docker, e o CI nunca publica as imagens construídas em nenhum registry — não há de onde
+  ler um Dockerfile ou uma imagem em tempo de execução sem antes obter o código de algum lugar.
+  Perguntado sobre isso, o usuário escolheu explicitamente: **clonar o alvo via git** para um
+  diretório temporário no worker e rodar `trivy fs` nele — em vez de montar o socket do Docker
+  (superfície de ataque equivalente a root no host) ou publicar imagens num registry (escopo maior
+  antes do Trivy em si funcionar).
+- `TrivyScanner` (`backend/internal/modules/scanning/infrastructure/trivy_scanner.go`): alvo é
+  `"<url-git-https>[#branch-ou-tag]"` — só `https://` é aceito (bloqueia `file://`, que permitiria
+  ler qualquer caminho local do worker, e `ssh://`, que exigiria gerenciar uma chave privada), e o
+  prefixo obrigatório garante por construção que o valor nunca começa com `-`, prevenindo injeção
+  de argumento no `git`/`trivy` via `os/exec` (nunca via shell, mas real do mesmo jeito). Roda
+  `trivy fs --scanners vuln,misconfig` (sem `secret` — gitleaks já cobre essa categoria no CI,
+  mesmo raciocínio que decidiu a Fase 2 acima). Verificado de ponta a ponta contra um repositório
+  público real (`OWASP/NodeGoat`) com 86 achados reais parseados corretamente.
+- `git` e `trivy` instalados só na imagem do `backend-worker` (nunca na do `backend-api`), com o
+  binário do Trivy verificado por checksum SHA-256 contra o `checksums.txt` publicado pelo próprio
+  projeto antes de instalar — integridade de supply chain (A08:2021) para a própria ferramenta de
+  segurança que a plataforma orquestra.
+- **Desvio deliberado do padrão síncrono da Fase 1**: com um scanner real e lento (clone + scan
+  pode levar de segundos a minutos) chamado por HTTP de verdade, o par
+  `CreateScanJob`/`ProcessScanJob` (mesmo desenho job+outbox+worker de
+  `diario_oficial.Service.CreateTestJob`/`ProcessJob`) substitui a chamada síncrona só para o
+  caminho HTTP — `RunScan` continua existindo, síncrono, para quem quiser chamar um scanner
+  diretamente sem depender de fila (testes, uma futura execução agendada que já roda no worker).
+  `POST /api/v1/scanning/scans` retorna 202 imediatamente; o `job_id` retornado é o mesmo `scan_id`
+  usado depois em `GET /api/v1/scanning/scans/{scanID}/findings`.
 
 **Fase 4 — Semgrep (SAST)**
 - `SemgrepAdapter`: exatamente como no exemplo da proposta original (`os/exec` chamando
@@ -201,8 +219,8 @@ ferramentas estarem prontas para gerar valor.
 | A02 Cryptographic Failures | RS256 próprio pro login local, bcrypt, segredos via `_FILE`, HSTS | — (já coberto; scanners não mudam isso) |
 | A03 Injection | 100% consultas parametrizadas via pgx (conferido nesta sessão: zero concatenação de string em SQL) | Semgrep com taint analysis automatizado (Fase 4) |
 | A04 Insecure Design | Monólito modular com fronteiras de módulo, ADRs documentando decisão de arquitetura | — (prática de engenharia, não uma ferramenta) |
-| A05 Security Misconfiguration | CSP com nonce, headers de segurança, containers non-root | Trivy varrendo Dockerfile/Terraform sob demanda (Fase 3) |
-| A06 Vulnerable Components | govulncheck + npm audit + Trivy (imagens) + Dependabot, todos já no CI | Trivy sob demanda fora do CI também (Fase 3) |
+| A05 Security Misconfiguration | CSP com nonce, headers de segurança, containers non-root | ✅ Trivy (`--scanners misconfig`) varrendo Dockerfiles sob demanda, via `POST /api/v1/scanning/scans` (Fase 3) |
+| A06 Vulnerable Components | govulncheck + npm audit + Trivy (imagens) + Dependabot, todos já no CI | ✅ Trivy (`--scanners vuln`) sob demanda contra qualquer repositório git, fora do CI (Fase 3) |
 | A07 Auth Failures | Bloqueio de conta, rate limit distribuído, erro genérico (sem enumeração de usuário) | ZAP testando o ciclo de vida de sessão em staging (Fase 6) |
 | A08 Software & Data Integrity | Idempotência, outbox transacional, CI builda a partir do código-fonte | Nenhuma assinatura/SBOM ainda — gap real, não coberto por nenhuma fase acima; ficaria fora de escopo deste roadmap |
 | A09 Logging & Monitoring | Audit log imutável, logs estruturados correlacionados por request id, Prometheus, OpenTelemetry | `scanning.scan.completed` como mais um evento auditado (Fase 1) |

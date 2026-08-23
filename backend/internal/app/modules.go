@@ -9,6 +9,10 @@ import (
 	integrationsInfra "github.com/yurythx/nix-platform/internal/modules/integrations/infrastructure"
 	integrationsTransport "github.com/yurythx/nix-platform/internal/modules/integrations/transport"
 
+	scanningApp "github.com/yurythx/nix-platform/internal/modules/scanning/application"
+	scanningInfra "github.com/yurythx/nix-platform/internal/modules/scanning/infrastructure"
+	scanningTransport "github.com/yurythx/nix-platform/internal/modules/scanning/transport"
+
 	usersApp "github.com/yurythx/nix-platform/internal/modules/users/application"
 	usersInfra "github.com/yurythx/nix-platform/internal/modules/users/infrastructure"
 	usersTransport "github.com/yurythx/nix-platform/internal/modules/users/transport"
@@ -37,6 +41,10 @@ type Modules struct {
 		Service  *diarioApp.Service
 		Handlers *diarioTransport.Handlers
 	}
+	Scanning struct {
+		Service  *scanningApp.Service
+		Handlers *scanningTransport.Handlers
+	}
 	ConfigFlags struct {
 		Handlers *configflags.Handlers
 	}
@@ -48,9 +56,11 @@ type Modules struct {
 // buildModules constrói cada módulo de negócio na ordem certa: primeiro
 // as dependências compartilhadas (repositório de jobs, writer de
 // auditoria), depois users e integrations (que não dependem de outros
-// módulos), e por último diario_oficial, que depende do integrationsSvc
-// já construído para registrar o resultado de seus testes (ver
-// internal/modules/integrations/application.Service.RecordCheckResult).
+// módulos), diario_oficial (que depende do integrationsSvc já construído
+// para registrar o resultado de seus testes — ver
+// internal/modules/integrations/application.Service.RecordCheckResult),
+// e por fim scanning, que só depende do jobsRepo compartilhado e de todo
+// domain.CodeScanner registrado (hoje: só o TrivyScanner).
 func buildModules(deps *Dependencies) *Modules {
 	jobsRepo := jobs.NewRepository(deps.DB)
 	auditWriter := audit.NewWriter(deps.DB)
@@ -70,6 +80,12 @@ func buildModules(deps *Dependencies) *Modules {
 	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
 	m.DiarioOficial.Service = diarioSvc
 	m.DiarioOficial.Handlers = diarioTransport.NewHandlers(diarioSvc, deps.Logger)
+
+	scanningRepo := scanningInfra.NewPostgresRepository(deps.DB)
+	trivyScanner := scanningInfra.NewTrivyScanner(deps.Config.Scanning.TrivyPath, deps.Config.Scanning.CloneTimeout, deps.Logger)
+	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner)
+	m.Scanning.Service = scanningSvc
+	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger)
 
 	m.ConfigFlags.Handlers = configflags.NewHandlers(deps.Flags, auditWriter, deps.Logger)
 

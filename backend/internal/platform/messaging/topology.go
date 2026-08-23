@@ -38,6 +38,16 @@ var (
 		RoutingKeys: []string{"diario_oficial.job.created"},
 	}
 
+	// QueueScanningWorker consome apenas o evento-gatilho que inicia uma
+	// execução de scan (ex.: o TrivyScanner clonando um repositório e
+	// escaneando); scanning.scan.completed/failed são publicados POR este
+	// worker, não consumidos por ele.
+	QueueScanningWorker = QueueSpec{
+		Name:        "nix.scanning.worker",
+		DLQName:     "nix.scanning.dlq",
+		RoutingKeys: []string{"scanning.scan.requested"},
+	}
+
 	// QueueNotificationWebsocket alimenta o Hub de WebSocket (§37/§72):
 	// está vinculada a todo tipo de evento sobre o qual o frontend deve
 	// ser notificado, não só a eventos explícitos "notification.created".
@@ -49,13 +59,15 @@ var (
 			"diario_oficial.job.completed",
 			"diario_oficial.job.failed",
 			"integration.status.changed",
+			"scanning.scan.completed",
+			"scanning.scan.failed",
 		},
 	}
 )
 
 // AllQueues lista toda fila que a plataforma declara no startup.
 func AllQueues() []QueueSpec {
-	return []QueueSpec{QueueDiarioOficialWorker, QueueNotificationWebsocket}
+	return []QueueSpec{QueueDiarioOficialWorker, QueueScanningWorker, QueueNotificationWebsocket}
 }
 
 // DeclareTopology declara de forma idempotente o exchange, toda fila e sua

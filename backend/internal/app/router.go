@@ -8,6 +8,7 @@ import (
 
 	diarioTransport "github.com/yurythx/nix-platform/internal/modules/diario_oficial/transport"
 	integrationsTransport "github.com/yurythx/nix-platform/internal/modules/integrations/transport"
+	scanningTransport "github.com/yurythx/nix-platform/internal/modules/scanning/transport"
 	usersTransport "github.com/yurythx/nix-platform/internal/modules/users/transport"
 
 	"github.com/yurythx/nix-platform/internal/platform/auth"
@@ -64,6 +65,7 @@ func NewRouter(deps *Dependencies) chi.Router {
 		usersTransport.RegisterRoutes(api, deps.Modules.Users.Handlers, deps.Logger)
 		integrationsTransport.RegisterRoutes(api, deps.Modules.Integrations.Handlers)
 		diarioTransport.RegisterRoutes(api, deps.Modules.DiarioOficial.Handlers, deps.Logger, deps.RateLimiters.TestJob)
+		scanningTransport.RegisterRoutes(api, deps.Modules.Scanning.Handlers, deps.Logger, deps.RateLimiters.ScanJob)
 		configflags.RegisterRoutes(api, deps.Modules.ConfigFlags.Handlers, deps.Logger)
 	})
 

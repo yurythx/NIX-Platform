@@ -14,7 +14,32 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/worker 
 
 # ---- runtime ----
 FROM alpine:3.20 AS runtime
-RUN apk add --no-cache ca-certificates && \
+
+# TrivyScanner (internal/modules/scanning/infrastructure) precisa dos
+# binários git (clonar o alvo) e trivy (escanear) dentro da imagem do
+# worker — é o único lugar que os chama, o backend-api nunca precisa
+# deles. O tarball do trivy é baixado e verificado contra o checksums.txt
+# publicado pelo próprio projeto (assinado por release, não um valor fixo
+# neste Dockerfile) antes de ser instalado — mesmo princípio de
+# integridade de supply chain que este roadmap de segurança pede das
+# ferramentas que orquestra (A08:2021).
+ARG TRIVY_VERSION=0.74.0
+RUN apk add --no-cache ca-certificates git curl && \
+    ARCH="$(uname -m)" && \
+    case "$ARCH" in \
+        x86_64) TRIVY_ARCH="64bit" ;; \
+        aarch64) TRIVY_ARCH="ARM64" ;; \
+        *) echo "unsupported architecture for trivy: $ARCH" >&2; exit 1 ;; \
+    esac && \
+    cd /tmp && \
+    curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" && \
+    curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt" && \
+    grep "trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" trivy_${TRIVY_VERSION}_checksums.txt | sha256sum -c - && \
+    tar -xzf "trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" trivy && \
+    mv trivy /usr/local/bin/trivy && \
+    chmod +x /usr/local/bin/trivy && \
+    rm -f /tmp/trivy_${TRIVY_VERSION}_* && \
+    apk del curl && \
     addgroup -S nix && adduser -S nix -G nix
 USER nix
 WORKDIR /app

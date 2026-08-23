@@ -252,14 +252,14 @@ Os testes do backend se dividem em dois grupos:
 
 - **Exchange**: `nix.events`, tipo `topic`, durável.
 - **Routing keys**: `<contexto>.<entidade>.<ação>` — ex.: `diario_oficial.job.completed`,
-  `integration.test.requested`, `notification.created`.
-- **Filas** (cada uma durável, cada uma com sua própria DLQ):
+  `scanning.scan.requested`, `notification.created`.
+- **Filas** (cada uma durável, cada uma com sua própria DLQ — ver `internal/platform/messaging/topology.go`):
 
   | Fila | Routing keys associadas | DLQ |
   |---|---|---|
   | `nix.diario_oficial.worker` | `diario_oficial.job.created` | `nix.diario_oficial.dlq` |
-  | `nix.integration.worker` | `integration.test.requested` (compartilhada por todo provedor SecOps) | `nix.integration.dlq` |
-  | `nix.notification.websocket` | `notification.created`, `diario_oficial.job.completed`, `diario_oficial.job.failed`, `integration.test.completed`, `integration.status.changed` | `nix.notification.dlq` |
+  | `nix.scanning.worker` | `scanning.scan.requested` | `nix.scanning.dlq` |
+  | `nix.notification.websocket` | `notification.created`, `diario_oficial.job.completed`, `diario_oficial.job.failed`, `integration.status.changed`, `scanning.scan.completed`, `scanning.scan.failed` | `nix.notification.dlq` |
 
 - **Consumidor**: ack manual — `internal/platform/messaging.Consumer` despacha cada entrega para
   sua própria goroutine (limitado por `RABBITMQ_PREFETCH_COUNT`).
@@ -333,10 +333,13 @@ Os testes do backend se dividem em dois grupos:
 
 **Roadmap de segurança**: [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md)
 mapeia o que já está implementado (tabela acima) contra o OWASP Top 10 e propõe fases futuras —
-scanners de SAST/DAST/dependências/segredos (Semgrep, Trivy sob demanda, TruffleHog, SonarQube,
-OWASP ZAP) orquestrados pelo mesmo padrão Strategy/Adapter/Observer que o resto da plataforma já
-usa para integrações externas (ver `diario_oficial`). Nenhuma fase está implementada ainda — é um
-documento de planejamento.
+scanners de SAST/DAST/dependências/segredos (Semgrep, TruffleHog, SonarQube, OWASP ZAP)
+orquestrados pelo mesmo padrão Strategy/Adapter/Observer que o resto da plataforma já usa para
+integrações externas (ver `diario_oficial`). O módulo `scanning` (`POST /api/v1/scanning/scans`,
+`GET /api/v1/scanning/scans/{scanID}/findings`) já está implementado com o primeiro scanner real
+registrado — **Trivy**: clona um alvo via git e escaneia dependências/Dockerfiles sob demanda,
+mesmo padrão job → outbox → fila → worker → notificação de `diario_oficial`. As demais fases
+seguem como planejamento.
 
 ## Observabilidade
 

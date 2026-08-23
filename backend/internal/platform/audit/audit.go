@@ -30,10 +30,13 @@ const (
 	ActionJobCreated               = "job.created"
 	ActionJobCompleted             = "job.completed"
 	ActionJobFailed                = "job.failed"
-	// ActionScanCompleted é registrada pelo módulo scanning (Fase 1 do
-	// roadmap de segurança) toda vez que Service.RunScan termina, com ou
-	// sem achados.
+	// ActionScanRequested/ActionScanCompleted/ActionScanFailed são
+	// registradas pelo módulo scanning: pedido de scan (CreateScanJob),
+	// scan concluído com ou sem achados (RunScan/ProcessScanJob), e scan
+	// que esgotou os retries (HandleScanDeadLetter).
+	ActionScanRequested = "scan.requested"
 	ActionScanCompleted = "scan.completed"
+	ActionScanFailed    = "scan.failed"
 )
 
 // Entry é um registro de auditoria.

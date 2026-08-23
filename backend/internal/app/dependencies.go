@@ -40,6 +40,7 @@ type RateLimiters struct {
 	TestJob    httpserver.Limiter // POST .../diario-oficial/test
 	WSTicket   httpserver.Limiter // POST /api/v1/ws/ticket
 	LocalLogin httpserver.Limiter // POST /api/v1/auth/login — chave por IP, não por usuário (§ Sistema de Login Local), já que quem chama ainda não está autenticado
+	ScanJob    httpserver.Limiter // POST /api/v1/scanning/scans — clonar+escanear é bem mais caro que um teste de integração comum, por isso mais apertado que TestJob
 }
 
 // OutboxSource identifica este backend como o Source carimbado em todo
@@ -162,6 +163,11 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 			// travar um usuário legítimo que só errou a senha uma ou
 			// duas vezes.
 			LocalLogin: ratelimit.NewPostgresLimiter(pool, 60, 5),
+			// Até 2 scans a cada 60s por usuário: um `git clone` + `trivy
+			// fs` custa bem mais CPU/I/O/rede que um teste de integração
+			// comum, então o limite é deliberadamente mais apertado que
+			// TestJob.
+			ScanJob: ratelimit.NewPostgresLimiter(pool, 60, 2),
 		},
 		Idempotency: idempotency.NewPostgresStore(pool),
 		Flags:       configflags.NewPostgresStore(pool),

@@ -123,6 +123,16 @@ type DiarioOficialConfig struct {
 	Timeout time.Duration
 }
 
+// ScanningConfig guarda as configurações do módulo scanning. TrivyPath é
+// só "trivy" por padrão (resolvido via PATH da imagem do worker);
+// CloneTimeout limita quanto tempo TrivyScanner espera o `git clone` de
+// um alvo terminar antes de desistir, para que um repositório gigante ou
+// um host lento nunca prenda um worker indefinidamente.
+type ScanningConfig struct {
+	TrivyPath    string
+	CloneTimeout time.Duration
+}
+
 // Config é a configuração da aplicação já totalmente validada.
 type Config struct {
 	App       AppConfig
@@ -135,6 +145,7 @@ type Config struct {
 	Worker    WorkerConfig
 
 	DiarioOficial DiarioOficialConfig
+	Scanning      ScanningConfig
 
 	FrontendURL         string
 	APIPublicURL        string
@@ -292,6 +303,10 @@ func Load() (*Config, error) {
 		DiarioOficial: DiarioOficialConfig{
 			BaseURL: l.str("DIARIO_OFICIAL_BASE_URL", false, ""),
 			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
+		},
+		Scanning: ScanningConfig{
+			TrivyPath:    l.str("SCANNING_TRIVY_PATH", false, "trivy"),
+			CloneTimeout: l.durationVal("SCANNING_GIT_CLONE_TIMEOUT", false, 3*time.Minute),
 		},
 		FrontendURL:         l.str("FRONTEND_URL", false, "http://localhost:3000"),
 		APIPublicURL:        l.str("API_PUBLIC_URL", false, "http://localhost:8000"),

@@ -58,6 +58,11 @@ tags:
     description: Status de cada integração externa configurada.
   - name: diario-oficial
     description: Verificação de conectividade com o Diário Oficial (job assíncrono).
+  - name: scanning
+    description: >
+      SecOps Orchestrator (ver docs/roadmap-secops-orchestrator.md): dispara
+      scanners de segurança registrados (hoje: trivy) contra um alvo e
+      consulta os achados. Job assíncrono, mesmo padrão de diario-oficial.
   - name: websocket
     description: Emissão de ticket para notificações em tempo real.
   - name: admin
@@ -363,6 +368,108 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/IntegrationUnavailable"
+
+  /api/v1/scanning/scans:
+    post:
+      tags: [scanning]
+      summary: Dispara um scan assíncrono contra um alvo
+      operationId: createScan
+      description: >
+        Não executa o scanner em si. Cria um job, o persiste junto com um
+        evento de outbox em uma única transação, e retorna imediatamente —
+        o worker o processa (clona o alvo via git e roda o scanner
+        registrado), e o frontend é notificado via WebSocket quando ele
+        concluir ou falhar. `job_id` retornado é o mesmo `scan_id` usado em
+        `GET /api/v1/scanning/scans/{scanID}/findings`. Sujeito a rate
+        limiting por chamador. Aceita `Idempotency-Key`.
+      security:
+        - bearerAuth: [scanning:manage]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scanner, target]
+              properties:
+                scanner:
+                  type: string
+                  description: Nome de um CodeScanner registrado.
+                  example: "trivy"
+                target:
+                  type: string
+                  description: >
+                    Para o scanner "trivy": uma URL git https://, com um
+                    branch/tag opcional após "#" (ex.:
+                    "https://github.com/org/repo.git#main"). Só https://
+                    é aceito.
+                  example: "https://github.com/org/repo.git#main"
+      responses:
+        "202":
+          $ref: "#/components/responses/TestJobAccepted"
+        "400":
+          description: Corpo inválido (target vazio, JSON malformado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: "`scanner` não está registrado."
+          content:
+            application/json:
+              example:
+                data: null
+                error: { code: "NOT_FOUND", message: "scanner \"trivy\" not registered" }
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/scanning/scans/{scanID}/findings:
+    get:
+      tags: [scanning]
+      summary: Lista os achados de uma execução de scan
+      operationId: listScanFindings
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: scanID
+          in: path
+          required: true
+          description: O mesmo `job_id` recebido de `POST /api/v1/scanning/scans`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Todo achado do scan (lista vazia se ainda não concluiu, ou se não encontrou nada).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Finding"
+        "400":
+          description: scanID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/v1/ws/ticket:
     post:
@@ -756,6 +863,42 @@ components:
         last_error:
           type: string
           nullable: true
+
+    Finding:
+      type: object
+      description: Um achado persistido de uma execução de scan (ver `/api/v1/scanning/scans/{scanID}/findings`).
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID da própria linha (não confundir com finding_id).
+        scan_id:
+          type: string
+          format: uuid
+        scanner:
+          type: string
+          example: "trivy"
+        target:
+          type: string
+        finding_id:
+          type: string
+          description: O identificador do achado em si — um CVE, ou uma regra do scanner.
+          example: "CVE-2026-12345"
+        owasp_category:
+          type: string
+          example: "A06:2021-Vulnerable and Outdated Components"
+        severity:
+          type: string
+          enum: [CRITICAL, HIGH, MEDIUM, LOW]
+        description:
+          type: string
+        file:
+          type: string
+        line:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
 
     FeatureFlag:
       type: object
