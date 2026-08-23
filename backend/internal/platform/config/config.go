@@ -78,11 +78,23 @@ type KeycloakConfig struct {
 // usuário/senha (§ Sistema de Login Local) — um caminho de autenticação
 // PARALELO ao Keycloak (útil para dev/teste e como conta de emergência),
 // nunca um substituto: nada aqui desliga ou substitui a verificação via
-// Keycloak, que continua obrigatória e configurada como sempre foi.
+// Keycloak, que continua obrigatória e configurada como sempre foi. Os
+// tokens locais são assinados com RSA (RS256) usando um par de chaves
+// PRÓPRIO deste subsistema — nunca a mesma chave/segredo usado por
+// qualquer coisa relacionada ao Keycloak/SSO, para que os dois caminhos
+// de autenticação permaneçam criptograficamente independentes (ver
+// internal/platform/auth/local.go e docs/adr/003-local-auth-rsa-hardening.md).
 type LocalAuthConfig struct {
-	Enabled   bool
-	JWTSecret string
-	TokenTTL  time.Duration
+	Enabled bool
+	// PrivateKeyPEM é o conteúdo PEM (PKCS1 ou PKCS8) da chave privada RSA
+	// usada para assinar e verificar tokens locais — a chave pública é
+	// derivada dela em tempo de execução (auth.NewLocalSigner), nunca
+	// configurada separadamente. Suporta o padrão "<KEY>_FILE" via
+	// loader.secret (LOCAL_AUTH_PRIVATE_KEY_FILE), o jeito recomendado de
+	// fornecer este valor: PEM é multi-linha e não cabe bem numa variável
+	// de ambiente comum.
+	PrivateKeyPEM string
+	TokenTTL      time.Duration
 }
 
 // JobsConfig guarda as configurações de processamento assíncrono de jobs.
@@ -275,9 +287,9 @@ func Load() (*Config, error) {
 			Audience:     l.str("KEYCLOAK_AUDIENCE", true, ""),
 		},
 		LocalAuth: LocalAuthConfig{
-			Enabled:   l.boolVal("LOCAL_AUTH_ENABLED", false),
-			JWTSecret: l.secret("LOCAL_AUTH_JWT_SECRET", false, ""),
-			TokenTTL:  l.durationVal("LOCAL_AUTH_TOKEN_TTL", false, time.Hour),
+			Enabled:       l.boolVal("LOCAL_AUTH_ENABLED", false),
+			PrivateKeyPEM: l.secret("LOCAL_AUTH_PRIVATE_KEY", false, ""),
+			TokenTTL:      l.durationVal("LOCAL_AUTH_TOKEN_TTL", false, time.Hour),
 		},
 		Jobs: JobsConfig{
 			Timeout: l.durationVal("JOB_TIMEOUT", false, 5*time.Minute),
@@ -310,13 +322,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("config: APP_ENV must be one of development|staging|production|test, got %q", cfg.App.Env)
 	}
 
-	// LOCAL_AUTH_JWT_SECRET só é obrigatória quando o login local está
-	// ligado — não faz sentido validá-la sempre (ela não é usada em
-	// nenhum outro caminho), mas um deploy com LOCAL_AUTH_ENABLED=true e
-	// sem segredo configurado precisa falhar no startup, não emitir
-	// tokens assinados com uma string vazia.
-	if cfg.LocalAuth.Enabled && cfg.LocalAuth.JWTSecret == "" {
-		return nil, fmt.Errorf("config: LOCAL_AUTH_JWT_SECRET is required when LOCAL_AUTH_ENABLED=true")
+	// LOCAL_AUTH_PRIVATE_KEY (ou _FILE) só é obrigatória quando o login
+	// local está ligado — não faz sentido validá-la sempre (ela não é
+	// usada em nenhum outro caminho), mas um deploy com
+	// LOCAL_AUTH_ENABLED=true e sem chave configurada precisa falhar no
+	// startup, não emitir tokens sem assinatura válida. A validação de que
+	// o PEM de fato parseia como uma chave RSA válida (e do tamanho
+	// mínimo) acontece em auth.NewLocalSigner, não aqui — este pacote só
+	// confere presença, não a validade criptográfica do conteúdo.
+	if cfg.LocalAuth.Enabled && cfg.LocalAuth.PrivateKeyPEM == "" {
+		return nil, fmt.Errorf("config: LOCAL_AUTH_PRIVATE_KEY is required when LOCAL_AUTH_ENABLED=true")
 	}
 
 	return cfg, nil

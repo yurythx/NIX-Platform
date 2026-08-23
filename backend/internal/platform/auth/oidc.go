@@ -27,16 +27,18 @@ const discoveryTimeout = 10 * time.Second
 type Verifier struct {
 	idTokenVerifier *oidc.IDTokenVerifier
 	clientID        string
-	localAuth       config.LocalAuthConfig
+	localSigner     *LocalSigner
 }
 
 // NewVerifier faz o discovery OIDC contra cfg.IssuerURL. Falha rápido
 // (retorna um erro) se o issuer estiver inalcançável ou malformado, para
 // que uma configuração errada apareça no startup em vez de na primeira
-// requisição que precisar validar um token. localAuth pode vir com
-// Enabled=false — nesse caso Verify nunca tenta o caminho local, só
-// Keycloak, exatamente como antes deste recurso existir.
-func NewVerifier(ctx context.Context, cfg config.KeycloakConfig, localAuth config.LocalAuthConfig) (*Verifier, error) {
+// requisição que precisar validar um token. localSigner pode ser nil —
+// nesse caso Verify nunca tenta o caminho local, só Keycloak, exatamente
+// como antes deste recurso existir. Note que localSigner é *outra* chave,
+// independente de qualquer coisa relacionada a cfg (Keycloak): os dois
+// caminhos de autenticação nunca compartilham material criptográfico.
+func NewVerifier(ctx context.Context, cfg config.KeycloakConfig, localSigner *LocalSigner) (*Verifier, error) {
 	discoveryCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 	defer cancel()
 
@@ -53,7 +55,7 @@ func NewVerifier(ctx context.Context, cfg config.KeycloakConfig, localAuth confi
 	return &Verifier{
 		idTokenVerifier: verifier,
 		clientID:        cfg.ClientID,
-		localAuth:       localAuth,
+		localSigner:     localSigner,
 	}, nil
 }
 
@@ -63,11 +65,12 @@ func NewVerifier(ctx context.Context, cfg config.KeycloakConfig, localAuth confi
 // local, contra o JWKS em cache.
 //
 // Tenta primeiro o Keycloak (o caminho principal e sempre ativo); se isso
-// falhar e o login local estiver habilitado, tenta a verificação HS256
-// local antes de desistir. Um token de verdade do Keycloak (assinado com
-// RSA) nunca passa na verificação local por acidente, e vice-versa — as
-// duas verificações usam algoritmos incompatíveis, então não há ambiguidade
-// possível sobre qual token "pertence" a qual caminho.
+// falhar e o login local estiver habilitado, tenta a verificação RS256
+// local (com a chave própria de LocalSigner) antes de desistir. Um token
+// de verdade do Keycloak nunca passa na verificação local por acidente, e
+// vice-versa — as duas chaves RSA são inteiramente independentes (uma
+// pertence ao realm do Keycloak, a outra só existe neste processo), então
+// não há ambiguidade possível sobre qual token "pertence" a qual caminho.
 func (v *Verifier) Verify(ctx context.Context, rawToken string) (Identity, error) {
 	token, keycloakErr := v.idTokenVerifier.Verify(ctx, rawToken)
 	if keycloakErr == nil {
@@ -78,11 +81,11 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (Identity, error
 		return claims.toIdentity(v.clientID), nil
 	}
 
-	if !v.localAuth.Enabled {
+	if v.localSigner == nil {
 		return Identity{}, fmt.Errorf("auth: token verification failed: %w", keycloakErr)
 	}
 
-	identity, localErr := verifyLocalToken(v.localAuth.JWTSecret, rawToken)
+	identity, localErr := v.localSigner.verifyToken(rawToken)
 	if localErr != nil {
 		// Nenhum dos dois caminhos aceitou o token — reporta o erro do
 		// Keycloak, já que é o caminho principal e o mais provável de ser

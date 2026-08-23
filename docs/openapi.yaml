@@ -46,6 +46,12 @@ servers:
 tags:
   - name: system
     description: Health, readiness e métricas — sem autenticação.
+  - name: auth
+    description: >
+      Login local por usuário/senha — um caminho ADICIONAL ao Keycloak,
+      nunca um substituto (ver ADR
+      003-local-auth-rsa-hardening.md). Sem autenticação prévia, por
+      definição.
   - name: users
     description: O chamador autenticado e o diretório de usuários.
   - name: integrations
@@ -117,6 +123,78 @@ paths:
             text/plain:
               schema:
                 type: string
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Login local por usuário/senha
+      operationId: localLogin
+      security: []
+      description: >
+        Rota pública — o chamador ainda não está autenticado. Responde 404
+        se LOCAL_AUTH_ENABLED estiver desligado no backend. O token
+        emitido é assinado RS256 com uma chave RSA própria deste
+        subsistema (nunca compartilhada com o Keycloak — ver ADR
+        003-local-auth-rsa-hardening.md) e pode ser usado como Bearer nos
+        mesmos endpoints autenticados que aceitam um token do Keycloak.
+
+
+        Toda falha (usuário inexistente, conta só-Keycloak, conta
+        inativa, conta temporariamente bloqueada por excesso de
+        tentativas, ou senha errada) retorna exatamente a mesma resposta
+        401 genérica — nunca dá para descobrir, por tentativa e erro, qual
+        delas ocorreu. Uma conta é bloqueada por 15 minutos depois de 5
+        tentativas seguidas de senha errada.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+            example:
+              username: admin
+              password: Admin123!
+      responses:
+        "200":
+          description: Credenciais válidas — token emitido.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: "no-store" }
+              description: O corpo carrega um bearer token; nunca deve ser cacheado.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          access_token: { type: string }
+                          token_type: { type: string, example: "Bearer" }
+                          expires_at: { type: string, format: date-time }
+                          user:
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              username: { type: string }
+                              email: { type: string, format: email }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Login local está desligado (LOCAL_AUTH_ENABLED=false).
+          content:
+            application/json:
+              example:
+                data: null
+                error: { code: "NOT_FOUND", message: "local login is not enabled" }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /api/v1/me:
     get:

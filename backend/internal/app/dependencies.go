@@ -57,6 +57,7 @@ type Dependencies struct {
 	Logger       *slog.Logger
 	DB           *pgxpool.Pool
 	Verifier     *auth.Verifier
+	LocalSigner  *auth.LocalSigner
 	Messaging    *messaging.Connection
 	Publisher    events.EventPublisher
 	Outbox       *outbox.Writer
@@ -101,7 +102,13 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 	}
 	metrics.RegisterPostgresPoolMetrics(pool)
 
-	verifier, err := auth.NewVerifier(ctx, cfg.Keycloak, cfg.LocalAuth)
+	localSigner, err := auth.NewLocalSigner(cfg.LocalAuth)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app: initialize local auth signer: %w", err)
+	}
+
+	verifier, err := auth.NewVerifier(ctx, cfg.Keycloak, localSigner)
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("app: initialize OIDC verifier: %w", err)
@@ -134,15 +141,16 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 	publisher := messaging.NewPublisher(mqConn)
 
 	deps := &Dependencies{
-		Config:    cfg,
-		Logger:    logger,
-		DB:        pool,
-		Verifier:  verifier,
-		Messaging: mqConn,
-		Publisher: publisher,
-		Outbox:    outbox.NewWriter(OutboxSource),
-		Hub:       ws.NewHub(logger),
-		Tickets:   ws.NewTicketStore(ws.TicketTTL),
+		Config:      cfg,
+		Logger:      logger,
+		DB:          pool,
+		Verifier:    verifier,
+		LocalSigner: localSigner,
+		Messaging:   mqConn,
+		Publisher:   publisher,
+		Outbox:      outbox.NewWriter(OutboxSource),
+		Hub:         ws.NewHub(logger),
+		Tickets:     ws.NewTicketStore(ws.TicketTTL),
 		RateLimiters: &RateLimiters{
 			// Equivalente aproximado aos parâmetros anteriores em memória
 			// (0.5 req/s, burst 3): até 3 requisições a cada 10s.

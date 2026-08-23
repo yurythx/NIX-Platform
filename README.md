@@ -104,17 +104,32 @@ sessão da aplicação.
 
 - **Backend**: `POST /api/v1/auth/login` (rota pública, fora do grupo autenticado) recebe
   `{"username", "password"}`, valida contra `password_hash` (bcrypt) na tabela `users` e devolve
-  um token assinado (HS256, segredo próprio — `LOCAL_AUTH_JWT_SECRET`, nunca o mesmo valor de
-  `NEXTAUTH_SECRET`). Controlado por `LOCAL_AUTH_ENABLED`; com a flag desligada o endpoint
-  responde 404. Tentativas malsucedidas (usuário inexistente, conta só-Keycloak, senha errada)
-  sempre devolvem a mesma mensagem genérica e são auditadas em `audit_logs` — nenhuma delas
-  revela qual condição falhou.
-- **Frontend**: a tela de login (`/login`) mostra o botão do Keycloak e, abaixo, um formulário de
-  usuário/senha lado a lado — um segundo `CredentialsProvider` do NextAuth que chama o endpoint
-  acima. As duas rotas produzem o mesmo tipo de sessão; o resto da aplicação não distingue qual
-  caminho o usuário usou.
+  um token assinado **RS256**, com um par de chaves RSA próprio deste subsistema — nunca a mesma
+  chave/segredo usado pelo Keycloak ou por qualquer outra coisa da aplicação (ver ADR
+  [003](docs/adr/003-local-auth-rsa-hardening.md)). Controlado por `LOCAL_AUTH_ENABLED`; com a
+  flag desligada o endpoint responde 404. Tentativas malsucedidas (usuário inexistente, conta
+  só-Keycloak, conta bloqueada, senha errada) sempre devolvem a mesma mensagem genérica e são
+  auditadas em `audit_logs` — nenhuma delas revela qual condição falhou, nem por tempo de
+  resposta. Uma conta é bloqueada por 15 minutos depois de 5 tentativas seguidas de senha errada
+  (defesa em profundidade além do rate limit por IP já aplicado à rota).
+- **Frontend**: a tela de login (`/login`) mostra o formulário de usuário/senha como opção
+  principal e o SSO corporativo (Keycloak) como opção secundária abaixo — um segundo
+  `CredentialsProvider` do NextAuth que chama o endpoint acima. As duas rotas produzem o mesmo
+  tipo de sessão; o resto da aplicação não distingue qual caminho o usuário usou.
 - Uma conta pode ter só Keycloak, só senha local, ou ambos — `keycloak_subject` e `password_hash`
   são independentes e ao menos um deles precisa estar preenchido.
+- **Gerando a chave RSA** (necessária sempre que `LOCAL_AUTH_ENABLED=true`):
+  ```bash
+  mkdir -p secrets
+  openssl genrsa -out secrets/local_auth_private_key.pem 2048
+  chmod 644 secrets/local_auth_private_key.pem
+  ```
+  `secrets/` nunca é commitado (`.gitignore`) e é montado somente leitura em `backend-api`/
+  `backend-worker` pelo `docker-compose.yml`. O `chmod` é necessário porque os dois containers
+  rodam como um usuário não-root (`nix`, diferente do seu usuário no host) — sem permissão de
+  leitura para "outros", o processo falha no startup com "permission denied" em vez de subir.
+  Trocar a chave invalida imediatamente todo token local emitido antes da troca — aceitável dado
+  o TTL curto (1h por padrão).
 
 **Usuário administrador pronto para teste** (criado pela migration `000011_local_auth.sql`, já
 aplicada no ambiente de desenvolvimento):
@@ -136,9 +151,10 @@ Preencha no mínimo: `DB_PASSWORD`, `RABBITMQ_DEFAULT_PASS`/`RABBITMQ_URL`, todo
 `KEYCLOAK_*` da seção acima, `NEXTAUTH_SECRET` (um valor aleatório de 32+ bytes —
 `openssl rand -base64 32`), e, se quiser que o módulo SecOps realmente converse com o VirusTotal,
 `VIRUSTOTAL_API_KEY`. Se quiser o login local (veja [Login local](#login-local-adicional-ao-keycloak)
-acima), defina também `LOCAL_AUTH_JWT_SECRET` (outro valor aleatório de 32+ bytes, distinto de
-`NEXTAUTH_SECRET`) — `LOCAL_AUTH_ENABLED` já vem `true` por padrão. Toda variável está documentada
-diretamente no `.env.example`. Segredos nunca são commitados — `.env` está no `.gitignore`.
+acima), gere a chave RSA como mostrado ali — `LOCAL_AUTH_PRIVATE_KEY_FILE` já vem apontando para
+`/run/secrets/local_auth_private_key.pem` e `LOCAL_AUTH_ENABLED` já vem `true` por padrão. Toda
+variável está documentada diretamente no `.env.example`. Segredos nunca são commitados — `.env` e
+`secrets/` estão no `.gitignore`.
 
 **Gestão de segredos em produção**: além de variáveis de ambiente diretas, todo valor sensível
 (`DB_PASSWORD`, `RABBITMQ_URL`, `KEYCLOAK_CLIENT_SECRET`, `VIRUSTOTAL_API_KEY`) também aceita uma

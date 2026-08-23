@@ -61,6 +61,14 @@ services:
     environment:
       DB_HOST: postgres
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-nix}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-nix}
+    volumes:
+      # A chave privada RSA do login local (§ ADR 003) — nunca no
+      # controle de versão, montada somente leitura no mesmo caminho que
+      # LOCAL_AUTH_PRIVATE_KEY_FILE aponta no .env.example. O mesmo padrão
+      # que Docker Secrets/Kubernetes Secrets usam (ver o comentário de
+      # loader.secret em internal/platform/config/config.go) — um bind
+      # mount local é só o jeito mais simples de reproduzir isso em dev.
+      - ./secrets:/run/secrets:ro
     networks:
       - nix_internal
     ports:
@@ -97,6 +105,8 @@ services:
     environment:
       DB_HOST: postgres
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-nix}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-nix}
+    volumes:
+      - ./secrets:/run/secrets:ro
     networks:
       - nix_internal
     depends_on:

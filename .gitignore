@@ -21,6 +21,7 @@ npm-debug.log*
 !.env.example
 *.pem
 *.key
+/secrets/
 
 # --- Docker ---
 docker-compose.override.yml

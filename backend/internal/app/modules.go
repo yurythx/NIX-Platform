@@ -90,7 +90,7 @@ func buildModules(deps *Dependencies) *Modules {
 	m.ConfigFlags.Handlers = configflags.NewHandlers(deps.Flags, auditWriter, deps.Logger)
 
 	localAuthStore := localauth.NewPostgresStore(deps.DB)
-	m.LocalAuth.Handlers = localauth.NewHandlers(localAuthStore, deps.Config.LocalAuth, auditWriter, deps.Logger)
+	m.LocalAuth.Handlers = localauth.NewHandlers(localAuthStore, deps.LocalSigner, auditWriter, deps.Logger)
 
 	return m
 }
