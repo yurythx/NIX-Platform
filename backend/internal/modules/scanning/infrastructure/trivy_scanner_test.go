@@ -1,6 +1,8 @@
 package infrastructure
 
 import (
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -115,6 +117,60 @@ func TestParseTrivyReport_NoFindings_ReturnsEmptyNotError(t *testing.T) {
 	}
 	if len(findings) != 0 {
 		t.Errorf("findings = %v, want none for a clean scan", findings)
+	}
+}
+
+// stubLookup instala uma resposta de DNS falsa para um único hostname
+// durante o teste, restaurando o lookupIP real (net.LookupIP) no
+// t.Cleanup — nenhum teste aqui depende de resolução de DNS de verdade
+// nem de um hostname continuar resolvendo pro mesmo IP para sempre.
+func stubLookup(t *testing.T, host string, ips []net.IP, err error) {
+	t.Helper()
+	original := lookupIP
+	lookupIP = func(h string) ([]net.IP, error) {
+		if h != host {
+			t.Fatalf("unexpected lookup for host %q, want %q", h, host)
+		}
+		return ips, err
+	}
+	t.Cleanup(func() { lookupIP = original })
+}
+
+func TestValidateHost_RejectsPrivateAndReservedTargets(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   net.IP
+	}{
+		{"loopback", net.ParseIP("127.0.0.1")},
+		{"private class A", net.ParseIP("10.0.0.5")},
+		{"private class B", net.ParseIP("172.16.0.5")},
+		{"private class C", net.ParseIP("192.168.1.5")},
+		{"link-local", net.ParseIP("169.254.169.254")}, // ex.: endpoint de metadados de nuvem
+		{"unspecified", net.ParseIP("0.0.0.0")},
+		{"IPv6 loopback", net.ParseIP("::1")},
+		{"IPv6 unique local", net.ParseIP("fd00::1")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubLookup(t, "internal.example.com", []net.IP{tc.ip}, nil)
+			if err := validateHost("https://internal.example.com/repo.git"); err == nil {
+				t.Errorf("validateHost with a %s address = nil error, want rejection", tc.name)
+			}
+		})
+	}
+}
+
+func TestValidateHost_AcceptsPublicTarget(t *testing.T) {
+	stubLookup(t, "github.com", []net.IP{net.ParseIP("140.82.112.3")}, nil)
+	if err := validateHost("https://github.com/org/repo.git"); err != nil {
+		t.Errorf("validateHost with a public address: %v, want no error", err)
+	}
+}
+
+func TestValidateHost_ResolutionFailure_IsRejected(t *testing.T) {
+	stubLookup(t, "does-not-resolve.example.com", nil, fmt.Errorf("no such host"))
+	if err := validateHost("https://does-not-resolve.example.com/repo.git"); err == nil {
+		t.Error("validateHost with a failed DNS lookup = nil error, want rejection")
 	}
 }
 

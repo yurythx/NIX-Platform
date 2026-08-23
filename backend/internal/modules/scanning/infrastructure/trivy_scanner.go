@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -83,6 +85,52 @@ func parseTarget(target string) (repoURL, ref string, err error) {
 	return repoURL, ref, nil
 }
 
+// lookupIP é indireção de teste sobre net.LookupIP — permite que
+// TestValidateHost_RejectsPrivateTargets controle a resposta de DNS sem
+// depender de rede real nem de um hostname específico continuar
+// resolvendo pra um IP privado para sempre.
+var lookupIP = net.LookupIP
+
+// validateHost resolve o host de repoURL e rejeita se qualquer IP
+// resolvido for privado/loopback/link-local/não especificado/multicast —
+// defesa em profundidade contra SSRF via uma URL controlada pelo
+// chamador (quem tem scanning:manage poderia, de outra forma, apontar o
+// `git clone` do worker pra um host só alcançável internamente).
+//
+// É uma checagem de melhor esforço, não uma proteção completa: o próprio
+// `git` (um processo separado, cuja pilha de rede este código não
+// controla) resolve o hostname de novo quando de fato conecta — uma
+// resposta de DNS que muda entre esta checagem e a conexão do git (DNS
+// rebinding) passaria por aqui. Aceito por ora dado que quem chama já
+// precisa ter scanning:manage, o mesmo nível de confiança de qualquer
+// outra ação administrativa de integração nesta plataforma.
+func validateHost(repoURL string) error {
+	u, err := url.Parse(repoURL)
+	if err != nil {
+		return fmt.Errorf("scanning: trivy: parse target URL: %w", err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("scanning: trivy: target URL has no host")
+	}
+
+	ips, err := lookupIP(host)
+	if err != nil {
+		return fmt.Errorf("scanning: trivy: resolve target host %q: %w", host, err)
+	}
+	for _, ip := range ips {
+		if isPrivateOrReserved(ip) {
+			return fmt.Errorf("scanning: trivy: target host %q resolves to a private/internal address, refusing to clone", host)
+		}
+	}
+	return nil
+}
+
+func isPrivateOrReserved(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
 // Execute clona repoURL (raso, um branch só) para um diretório temporário
 // e roda `trivy fs` nele. O diretório é sempre removido ao final,
 // sucesso ou erro — nunca deixa código de terceiros no disco do worker
@@ -90,6 +138,9 @@ func parseTarget(target string) (repoURL, ref string, err error) {
 func (t *TrivyScanner) Execute(ctx context.Context, target string) ([]domain.Finding, error) {
 	repoURL, ref, err := parseTarget(target)
 	if err != nil {
+		return nil, apperrors.Validation(err.Error())
+	}
+	if err := validateHost(repoURL); err != nil {
 		return nil, apperrors.Validation(err.Error())
 	}
 

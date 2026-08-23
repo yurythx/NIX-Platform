@@ -165,6 +165,15 @@ ferramentas estarem prontas para gerar valor.
   `trivy fs --scanners vuln,misconfig` (sem `secret` — gitleaks já cobre essa categoria no CI,
   mesmo raciocínio que decidiu a Fase 2 acima). Verificado de ponta a ponta contra um repositório
   público real (`OWASP/NodeGoat`) com 86 achados reais parseados corretamente.
+- **A10 SSRF, corrigido durante a implementação**: este endpoint é o primeiro da plataforma a
+  aceitar uma URL do chamador (o `target` git) — `validateHost` resolve o hostname e rejeita
+  qualquer IP privado/loopback/link-local/não especificado antes de clonar, para que
+  `scanning:manage` não vire um jeito de sondar/alcançar hosts internos a partir do worker. Defesa
+  em profundidade, não uma proteção completa (o `git`, um processo separado, re-resolve o host de
+  novo ao conectar de verdade — uma resposta de DNS que mude entre a checagem e essa conexão
+  passaria batido), aceita como suficiente hoje porque quem chama já precisa do mesmo nível de
+  confiança de qualquer outra ação administrativa de integração na plataforma. Ver a linha A10 na
+  tabela OWASP abaixo.
 - `git` e `trivy` instalados só na imagem do `backend-worker` (nunca na do `backend-api`), com o
   binário do Trivy verificado por checksum SHA-256 contra o `checksums.txt` publicado pelo próprio
   projeto antes de instalar — integridade de supply chain (A08:2021) para a própria ferramenta de
@@ -224,7 +233,7 @@ ferramentas estarem prontas para gerar valor.
 | A07 Auth Failures | Bloqueio de conta, rate limit distribuído, erro genérico (sem enumeração de usuário) | ZAP testando o ciclo de vida de sessão em staging (Fase 6) |
 | A08 Software & Data Integrity | Idempotência, outbox transacional, CI builda a partir do código-fonte | Nenhuma assinatura/SBOM ainda — gap real, não coberto por nenhuma fase acima; ficaria fora de escopo deste roadmap |
 | A09 Logging & Monitoring | Audit log imutável, logs estruturados correlacionados por request id, Prometheus, OpenTelemetry | `scanning.scan.completed` como mais um evento auditado (Fase 1) |
-| A10 SSRF | Nenhum endpoint aceita URL arbitrária do chamador (conferido nesta sessão) — risco estruturalmente baixo hoje | Semgrep detectando clientes HTTP com URL não validada, se esse padrão aparecer no futuro (Fase 4) |
+| A10 SSRF | ⚠️ Desde a Fase 3, `POST /api/v1/scanning/scans` (target de `trivy`) É um endpoint que aceita uma URL do chamador — `TrivyScanner.validateHost` resolve o host e rejeita IP privado/loopback/link-local/não especificado antes de clonar, defesa em profundidade (não uma proteção completa contra DNS rebinding, já que o `git` re-resolve o host ao conectar; aceito hoje porque quem chama já precisa de `scanning:manage`). Todo outro endpoint continua sem aceitar URL arbitrária. | Semgrep detectando clientes HTTP com URL não validada nos próprios módulos da plataforma (Fase 4) |
 
 ## Fora de escopo deste roadmap
 
