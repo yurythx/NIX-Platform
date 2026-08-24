@@ -6,8 +6,9 @@
   ser redundante). **Fases 10-13 (abaixo) são uma extensão nova**, adaptação de uma segunda
   proposta externa ("Orquestrador de Segurança de Código On-Premise", estilo GitGuard) pra esta
   mesma arquitetura, com 3 decisões explícitas do usuário registradas na seção "Reconciliação" logo
-  abaixo. **Fases 10 (Projeto + upload .zip), 11 (Gitleaks + Syft) e 12 (snippet + deduplicação) já
-  implementadas e verificadas ao vivo; Fase 13 ainda não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
+  abaixo. **Fases 10-13 (Projeto + upload .zip; Gitleaks + Syft; snippet + deduplicação; filtro de
+  ruído + prompt de IA) TODAS implementadas e verificadas ao vivo — a extensão inteira está
+  completa.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
   container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks e Syft migrados e
   verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`/`syft-scanner`, volume
   compartilhado `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker,
@@ -736,22 +737,46 @@ healthcheck que Trivy/Gitleaks.
   recente). `/seguranca` carregado com uma sessão real (NextAuth), "Ver histórico →" expandindo o
   painel corretamente através do proxy BFF.
 
-### Fase 13 — Filtro de ruído + botão "Copiar prompt pra IA" — 🔲 não implementada
+### Fase 13 — Filtro de ruído + botão "Copiar prompt pra IA" — ✅ implementada
 
-- Filtro de ruído por caminho (`/tests/`, `/fixtures/`, `*_test.go`, `.env.example`, etc.):
-  **configurável, não hardcoded** — um achado real de segredo commitado dentro de um arquivo de
-  teste ainda É um segredo real (Gitleaks, por design, não distingue "teste" de "produção"; um
-  `.env.example` com uma chave de exemplo que por acaso é uma chave de verdade já vazada é
-  exatamente o tipo de coisa que não deveria sumir silenciosamente). Lista de padrões de exclusão
-  vira uma feature flag configurável (`internal/platform/configflags`, mesmo mecanismo que já
-  desliga `diario_oficial_scraping_enabled` em runtime) — desligada por padrão (mostra tudo, como
-  hoje), habilitável por quem administra a instância.
+- Filtro de ruído por caminho: **configurável, não hardcoded** — um achado real de segredo
+  commitado dentro de um arquivo de teste ainda É um segredo real (Gitleaks, por design, não
+  distingue "teste" de "produção"; um `.env.example` com uma chave de exemplo que por acaso é uma
+  chave de verdade já vazada é exatamente o tipo de coisa que não deveria sumir silenciosamente).
+  Implementado em duas partes, ambas necessárias pra ser configurável de verdade:
+  - `NoiseFilterFlagKey` = `"scanning_noise_filter_enabled"` — feature flag
+    (`internal/platform/configflags`, mesmo mecanismo que já liga/desliga
+    `diario_oficial_scraping_enabled`), semeada **desligada** por `migrations/000020` (ao contrário
+    das flags de `000010`, semeadas ligadas — aqui "desligada" é o comportamento seguro).
+  - `SCANNING_NOISE_FILTER_PATTERNS` (`ScanningConfig.NoiseFilterPatterns`) — a lista de padrões em
+    si, só tem efeito com a flag ligada; vazio cai num default embutido
+    (`application.defaultNoiseFilterPatterns`: `/tests/`, `/test/`, `/fixtures/`, `/testdata/`,
+    `*_test.go`, `.env.example`). Cada padrão SEM `*` é um substring match contra o caminho inteiro;
+    COM `*` é um glob (`filepath.Match`) contra só o nome do arquivo — cobre tanto "qualquer
+    diretório de teste, em qualquer profundidade" quanto "qualquer arquivo com esse nome, em
+    qualquer lugar" sem precisar de um motor de glob recursivo (`**`) completo.
+  - `filterNoise` (`application/noise_filter.go`) é chamado em `ListFindings`, `ListRecentFindings`
+    e `ListProjectFindingsHistory` (Fase 12) — todo lugar onde achados chegam à UI passa pelo mesmo
+    filtro, nunca um caminho esquecido. Um achado sem `File` (ex.: um alerta de DAST do ZAP, que não
+    é sobre um arquivo) nunca é filtrado.
 - Botão "Copiar prompt pra IA" em cada achado (`FindingsTable`'s Dialog, ao lado de "Como
-  corrigir"): monta o markdown exatamente como a proposta especifica (seção 5.C), mas incluindo
-  também `remediationFor()` (o hint por categoria OWASP que este roadmap já gera, Fase 9 anterior) —
-  contexto a mais que a proposta não tinha porque não existia antes disso ser construído. Cópia via
-  `navigator.clipboard.writeText` (API do navegador, nenhuma dependência nova) — mesmo princípio de
-  zero-novo-design que todo componente desta seção já segue.
+  corrigir"): `buildAIPrompt` (`lib/scanning/aiPrompt.ts`) monta o markdown incluindo também
+  `remediationFor()` (o hint por categoria OWASP que este roadmap já gera desde a Fase 9) e o
+  `Snippet` (Fase 12), quando presentes — contexto a mais que a proposta original não tinha porque
+  não existia antes disso ser construído. Cópia via `navigator.clipboard.writeText`, nenhuma
+  dependência nova.
+- **Achado real testando** (não hipotético): o teste automatizado do botão precisou descobrir que
+  `userEvent.setup()` (`@testing-library/user-event`) mexe no próprio `navigator.clipboard`
+  internamente — um stub definido ANTES de `userEvent.setup()` era sobrescrito silenciosamente;
+  corrigido definindo o stub DEPOIS de `setup()`/`render()`, não antes. Documentado no próprio
+  arquivo de teste pra não ser redescoberto do zero numa próxima vez.
+- Verificado ao vivo, ponta a ponta: scan real (Semgrep contra `OWASP/NodeGoat`) com 21 achados —
+  com `SCANNING_NOISE_FILTER_PATTERNS=tutorial` e a flag desligada, os 21 continuam todos visíveis
+  (tanto em `GET .../findings` quanto em `GET /scanning/findings`); ligando a flag via
+  `PATCH /api/v1/admin/feature-flags/scanning_noise_filter_enabled`, exatamente os 5 achados de
+  `app/views/tutorial/*.html` somem (21 → 16), os outros 16 continuam intactos; desligando de novo,
+  os 21 voltam. Confirma o filtro, o gate por flag, e que nenhum achado não-correspondente é afetado
+  por engano.
 
 ## Mapeamento OWASP Top 10 — o que já é real hoje vs. o que este roadmap adiciona
 

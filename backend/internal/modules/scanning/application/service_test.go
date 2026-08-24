@@ -17,6 +17,7 @@ import (
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/infrastructure"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
 )
@@ -114,6 +115,13 @@ func outboxEventExists(t *testing.T, pool *pgxpool.Pool, aggregateID, eventType 
 }
 
 func newService(pool *pgxpool.Pool, scanners ...domain.CodeScanner) *Service {
+	return newServiceWithFlags(pool, nil, nil, scanners...)
+}
+
+// newServiceWithFlags é a variante completa de newService — usada só
+// pelos testes de Fase 13 (filtro de ruído), que precisam de um
+// configflags.Store de verdade pra exercitar noiseFilterEnabled.
+func newServiceWithFlags(pool *pgxpool.Pool, flags configflags.Store, noiseFilterPatterns []string, scanners ...domain.CodeScanner) *Service {
 	repo := infrastructure.NewPostgresRepository(pool)
 	jobsRepo := jobs.NewRepository(pool)
 	outboxWriter := outbox.NewWriter("nix.test")
@@ -121,7 +129,7 @@ func newService(pool *pgxpool.Pool, scanners ...domain.CodeScanner) *Service {
 	// no diretório temporário padrão do SO — correto pra teste, onde não
 	// existe volume compartilhado nenhum de verdade.
 	zipExtractor := infrastructure.NewZipExtractor("", testLogger())
-	return NewService(pool, repo, jobsRepo, outboxWriter, nil, zipExtractor, testLogger(), scanners...)
+	return NewService(pool, repo, jobsRepo, outboxWriter, nil, zipExtractor, flags, noiseFilterPatterns, testLogger(), scanners...)
 }
 
 func TestRunScan_UnknownScanner_ReturnsNotFound(t *testing.T) {
@@ -1330,5 +1338,79 @@ func TestListProjectFindingsHistory_DeduplicatesAcrossRescans(t *testing.T) {
 	}
 	if gotFixed.StillPresent {
 		t.Error("fixed finding StillPresent = true, want false — it's absent from the most recent scan")
+	}
+}
+
+// A partir daqui: Fase 13 — filtro de ruído por caminho, gate por feature
+// flag. fakeFlags (não o configflags.PostgresStore real): um Store real
+// seria overkill pra decidir "habilitada" vs "desabilitada" neste teste,
+// e sobretudo evita ligar uma flag GLOBAL na mesma instância de Postgres
+// que a stack Docker ao vivo compartilha com TEST_DATABASE_URL — mesmo
+// padrão já estabelecido em
+// diario_oficial/transport/handlers_test.go's fakeFlags.
+type fakeFlags struct{ enabled bool }
+
+func (f fakeFlags) IsEnabled(_ context.Context, _ string, _ bool) (bool, error) {
+	return f.enabled, nil
+}
+func (f fakeFlags) List(_ context.Context) ([]configflags.Flag, error) { return nil, nil }
+func (f fakeFlags) Set(_ context.Context, key string, enabled bool, _ string) (configflags.Flag, error) {
+	return configflags.Flag{Key: key, Enabled: enabled}, nil
+}
+
+func TestListFindings_NoiseFilterFlag_DisabledByDefault_ShowsEverything(t *testing.T) {
+	pool := testPool(t)
+	svc := newServiceWithFlags(pool, fakeFlags{enabled: false}, []string{"*_test.go"}, &fakeScanner{
+		name: "trivy",
+		findings: []domain.Finding{
+			{ID: "CVE-2026-NOISE-1", Severity: domain.SeverityLow, File: "internal/handler_test.go", Description: "seria filtrado se a flag estivesse ligada"},
+		},
+	})
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	findings, err := svc.ListFindings(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1 — o filtro de ruído está desligado por padrão, nada deveria sumir", len(findings))
+	}
+}
+
+func TestListFindings_NoiseFilterFlag_Enabled_HidesMatchingFindings(t *testing.T) {
+	pool := testPool(t)
+	svc := newServiceWithFlags(pool, fakeFlags{enabled: true}, []string{"*_test.go"}, &fakeScanner{
+		name: "trivy",
+		findings: []domain.Finding{
+			{ID: "CVE-2026-NOISE-2", Severity: domain.SeverityLow, File: "internal/handler_test.go", Description: "ruído"},
+			{ID: "CVE-2026-NOISE-3", Severity: domain.SeverityLow, File: "internal/handler.go", Description: "real"},
+		},
+	})
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	findings, err := svc.ListFindings(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	if len(findings) != 1 || findings[0].Description != "real" {
+		t.Fatalf("findings = %+v, want only the non-test-file finding to survive", findings)
 	}
 }

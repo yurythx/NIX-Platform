@@ -99,7 +99,11 @@ func buildModules(deps *Dependencies) *Modules {
 	// clone git — o diretório extraído precisa ficar visível pros
 	// sidecars (trivy-scanner/gitleaks-scanner) igual um clone ficaria.
 	zipExtractor := scanningInfra.NewZipExtractor(deps.Config.Scanning.ScanningWorkspaceDir, deps.Logger)
-	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, zipExtractor, deps.Logger, trivyScanner, gitleaksScanner, syftScanner, semgrepScanner, sonarScanner, zapScanner)
+	scanningSvc := scanningApp.NewService(
+		deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, zipExtractor,
+		deps.Flags, deps.Config.Scanning.NoiseFilterPatterns, deps.Logger,
+		trivyScanner, gitleaksScanner, syftScanner, semgrepScanner, sonarScanner, zapScanner,
+	)
 	m.Scanning.Service = scanningSvc
 	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger, deps.Config.Scanning.SonarQubePublicURL)
 

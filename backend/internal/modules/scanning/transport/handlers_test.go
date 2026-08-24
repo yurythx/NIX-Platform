@@ -73,7 +73,7 @@ func newTestService(pool *pgxpool.Pool, scanners ...domain.CodeScanner) *applica
 	// "" como baseDir do ZipExtractor: mesmo padrão de cloneShallow, cai
 	// no diretório temporário padrão do SO — correto pra teste.
 	zipExtractor := infrastructure.NewZipExtractor("", testLogger())
-	return application.NewService(pool, repo, jobsRepo, outboxWriter, nil, zipExtractor, testLogger(), scanners...)
+	return application.NewService(pool, repo, jobsRepo, outboxWriter, nil, zipExtractor, nil, nil, testLogger(), scanners...)
 }
 
 func decodeEnvelope[T any](t *testing.T, body []byte) T {

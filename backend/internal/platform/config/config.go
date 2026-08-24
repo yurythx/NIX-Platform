@@ -203,6 +203,17 @@ type ScanningConfig struct {
 	ZapScanTimeout  time.Duration
 
 	CloneTimeout time.Duration
+
+	// NoiseFilterPatterns (Fase 13) é a lista de padrões de caminho
+	// excluídos das listagens de achados — só aplicada de verdade quando
+	// a feature flag "scanning_noise_filter_enabled" (Postgres, ver
+	// migrations/000020) está ligada, DESLIGADA por padrão. Cada padrão
+	// sem "*" é um substring match contra o caminho inteiro (ex.:
+	// "/tests/", "/fixtures/", ".env.example"); com "*" é um glob
+	// (filepath.Match) contra só o nome do arquivo (ex.: "*_test.go") —
+	// ver application.matchesNoisePattern. Vazia por padrão usa
+	// defaultNoiseFilterPatterns (application/noise_filter.go).
+	NoiseFilterPatterns []string
 }
 
 // Config é a configuração da aplicação já totalmente validada.
@@ -419,6 +430,8 @@ func Load() (*Config, error) {
 			ZapScanTimeout:  l.durationVal("SCANNING_ZAP_SCAN_TIMEOUT", false, 30*time.Minute),
 
 			CloneTimeout: l.durationVal("SCANNING_GIT_CLONE_TIMEOUT", false, 3*time.Minute),
+
+			NoiseFilterPatterns: splitAndTrim(l.str("SCANNING_NOISE_FILTER_PATTERNS", false, "")),
 		},
 		FrontendURL:         l.str("FRONTEND_URL", false, "http://localhost:3000"),
 		APIPublicURL:        l.str("API_PUBLIC_URL", false, "http://localhost:8000"),

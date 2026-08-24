@@ -40,6 +40,7 @@ import (
 	"github.com/yurythx/nix-platform/internal/domain/pagination"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 	"github.com/yurythx/nix-platform/internal/platform/audit"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
@@ -137,7 +138,14 @@ type Service struct {
 	// infrastructure (Inversão de Dependência), mesmo princípio que já
 	// vale pra domain.Repository/domain.CodeScanner.
 	zipExtractor domain.ZipExtractor
-	logger       *slog.Logger
+	// flags/noiseFilterPatterns (Fase 13) controlam o filtro de ruído por
+	// caminho — flags pode ficar nil (mesmo princípio de
+	// diario_oficial.Service.flags): a checagem de feature flag é pulada
+	// e o filtro nunca é aplicado, mantendo testes de aplicação que não
+	// se importam com feature flags simples de escrever.
+	flags               configflags.Store
+	noiseFilterPatterns []string
+	logger              *slog.Logger
 }
 
 // NewService constrói o Service a partir da lista de scanners disponíveis.
@@ -152,6 +160,8 @@ func NewService(
 	outboxWriter *outbox.Writer,
 	auditWriter *audit.Writer,
 	zipExtractor domain.ZipExtractor,
+	flags configflags.Store,
+	noiseFilterPatterns []string,
 	logger *slog.Logger,
 	scanners ...domain.CodeScanner,
 ) *Service {
@@ -163,15 +173,33 @@ func NewService(
 		byName[s.Name()] = s
 	}
 	return &Service{
-		db:           db,
-		repo:         repo,
-		jobsRepo:     jobsRepo,
-		outboxWriter: outboxWriter,
-		audit:        auditWriter,
-		zipExtractor: zipExtractor,
-		scanners:     byName,
-		logger:       logger,
+		db:                  db,
+		repo:                repo,
+		jobsRepo:            jobsRepo,
+		outboxWriter:        outboxWriter,
+		audit:               auditWriter,
+		zipExtractor:        zipExtractor,
+		flags:               flags,
+		noiseFilterPatterns: noiseFilterPatterns,
+		scanners:            byName,
+		logger:              logger,
 	}
+}
+
+// noiseFilterEnabled consulta NoiseFilterFlagKey — mesmo padrão de
+// diario_oficial.Service.CreateTestJob (s.flags nil pula a checagem,
+// tratado como desligado, já que "mostrar tudo" é o comportamento seguro
+// por padrão desta fase).
+func (s *Service) noiseFilterEnabled(ctx context.Context) bool {
+	if s.flags == nil {
+		return false
+	}
+	enabled, err := s.flags.IsEnabled(ctx, NoiseFilterFlagKey, false)
+	if err != nil {
+		s.logger.Warn("scanning: failed to check noise filter flag (defaulting to showing everything)", slog.Any("error", err))
+		return false
+	}
+	return enabled
 }
 
 // RunScan executa o CodeScanner chamado scannerName contra target,
@@ -280,11 +308,15 @@ func (s *Service) persistCompletion(ctx context.Context, scanID uuid.UUID, targe
 }
 
 // ListFindings retorna todo achado de uma execução de scan, mais
-// severo/recente primeiro.
+// severo/recente primeiro — menos os que baterem com o filtro de ruído
+// (Fase 13), se a feature flag NoiseFilterFlagKey estiver ligada.
 func (s *Service) ListFindings(ctx context.Context, scanID uuid.UUID) ([]domain.PersistedFinding, error) {
 	findings, err := s.repo.ListByScanID(ctx, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanning: list findings for scan %s: %w", scanID, err)
+	}
+	if s.noiseFilterEnabled(ctx) {
+		findings = filterNoise(findings, s.noiseFilterPatterns)
 	}
 	return findings, nil
 }
@@ -565,6 +597,12 @@ func (s *Service) ListProjectFindingsHistory(ctx context.Context, projectID uuid
 	if err != nil {
 		return nil, fmt.Errorf("scanning: list findings history for project %s: %w", projectID, err)
 	}
+	// Filtro de ruído (Fase 13), aplicado ANTES do agrupamento por
+	// fingerprint — um achado de ruído nunca conta pra ScanCount/
+	// FirstSeenAt/LastSeenAt de nenhum grupo.
+	if s.noiseFilterEnabled(ctx) {
+		findings = filterNoise(findings, s.noiseFilterPatterns)
+	}
 
 	type group struct {
 		entry     ProjectFindingHistory
@@ -688,6 +726,16 @@ func (s *Service) ListRecentFindings(ctx context.Context, limit int) ([]domain.P
 	findings, err := s.repo.ListRecent(ctx, limit)
 	if err != nil {
 		return nil, fmt.Errorf("scanning: list recent findings: %w", err)
+	}
+	// Filtro de ruído (Fase 13) aplicado DEPOIS do limit — um achado
+	// removido aqui pode deixar a resposta com menos de `limit` linhas
+	// mesmo havendo mais achados não-ruído além da janela buscada; aceito
+	// como o mesmo tipo de trade-off que qualquer filtro pós-consulta já
+	// tem nesta plataforma (nunca justificou mover o filtro pro SQL só
+	// por isso — configurável em runtime via feature flag, não vale a
+	// complexidade de um WHERE dinâmico por padrão de caminho).
+	if s.noiseFilterEnabled(ctx) {
+		findings = filterNoise(findings, s.noiseFilterPatterns)
 	}
 	return findings, nil
 }

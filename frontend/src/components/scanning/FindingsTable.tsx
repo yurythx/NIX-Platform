@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { useState, type KeyboardEvent } from "react";
 
+import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@/components/ui/Table";
+import { useToast } from "@/components/notifications/ToastProvider";
+import { buildAIPrompt } from "@/lib/scanning/aiPrompt";
 import { remediationFor } from "@/lib/scanning/remediation";
 import type { ScanFinding } from "@/types/api";
 
@@ -31,6 +34,16 @@ export function FindingsTable({
   showScanLink?: boolean;
 }) {
   const [selected, setSelected] = useState<ScanFinding | null>(null);
+  const { showToast } = useToast();
+
+  async function copyAIPrompt(finding: ScanFinding) {
+    try {
+      await navigator.clipboard.writeText(buildAIPrompt(finding));
+      showToast({ title: "Prompt copiado", description: "Cole numa IA de sua preferência.", tone: "info" });
+    } catch {
+      showToast({ title: "Não foi possível copiar", tone: "danger" });
+    }
+  }
 
   if (findings.length === 0) {
     return (
@@ -158,6 +171,16 @@ export function FindingsTable({
             <div>
               <div className="font-medium text-foreground">Como corrigir</div>
               <p className="text-muted">{remediationFor(selected)}</p>
+            </div>
+            {/* "Copiar prompt pra IA" (Fase 13) — monta o mesmo markdown
+                do bloco "Como corrigir" acima + os dados da ferramenta/
+                trecho de código, pronto pra colar numa IA de preferência
+                do usuário. navigator.clipboard.writeText, nenhuma
+                dependência nova. */}
+            <div>
+              <Button size="sm" variant="secondary" onClick={() => copyAIPrompt(selected)}>
+                Copiar prompt pra IA
+              </Button>
             </div>
             <div className="text-xs text-muted">
               Encontrado em {new Date(selected.created_at).toLocaleString()}

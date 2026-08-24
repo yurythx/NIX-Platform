@@ -1,7 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ToastProvider } from "@/components/notifications/ToastProvider";
 import type { ScanFinding } from "@/types/api";
 
 import { FindingsTable } from "./FindingsTable";
@@ -25,16 +26,31 @@ function makeFinding(overrides: Partial<ScanFinding> = {}): ScanFinding {
   };
 }
 
+// renderTable: FindingsTable usa useToast() desde a Fase 13 ("Copiar
+// prompt pra IA") — todo teste precisa de um ToastProvider ancestor,
+// senão o hook lança ("useToast must be used within a ToastProvider").
+function renderTable(props: Parameters<typeof FindingsTable>[0]) {
+  return render(
+    <ToastProvider>
+      <FindingsTable {...props} />
+    </ToastProvider>,
+  );
+}
+
 describe("FindingsTable", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("lista vazia mostra o EmptyState em vez de uma tabela sem linhas", () => {
-    render(<FindingsTable findings={[]} />);
+    renderTable({ findings: [] });
     expect(screen.getByText("Nenhum achado ainda")).toBeInTheDocument();
   });
 
   it("clicar numa linha abre o Dialog com o achado por extenso, inclusive como corrigir", async () => {
     const finding = makeFinding();
     const user = userEvent.setup();
-    render(<FindingsTable findings={[finding]} />);
+    renderTable({ findings: [finding] });
 
     await user.click(screen.getByRole("button", { name: /Ver detalhes do achado CVE-2026-0001/ }));
 
@@ -63,7 +79,7 @@ describe("FindingsTable", () => {
   it("sem tool.url (a ferramenta não permite montar um link), não mostra o link, só o nome", async () => {
     const finding = makeFinding({ tool: { name: "OWASP ZAP" } });
     const user = userEvent.setup();
-    render(<FindingsTable findings={[finding]} />);
+    renderTable({ findings: [finding] });
 
     await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
     const dialog = screen.getByRole("dialog");
@@ -75,7 +91,7 @@ describe("FindingsTable", () => {
   it("teclar Enter numa linha focada também abre o detalhe (acessibilidade de teclado)", async () => {
     const finding = makeFinding({ finding_id: "CVE-2026-9999" });
     const user = userEvent.setup();
-    render(<FindingsTable findings={[finding]} />);
+    renderTable({ findings: [finding] });
 
     screen.getByRole("button", { name: /Ver detalhes do achado CVE-2026-9999/ }).focus();
     await user.keyboard("{Enter}");
@@ -86,12 +102,20 @@ describe("FindingsTable", () => {
   it("showScanLink controla se o link de volta pro scan aparece no Dialog", async () => {
     const finding = makeFinding();
     const user = userEvent.setup();
-    const { rerender } = render(<FindingsTable findings={[finding]} showScanLink={false} />);
+    const { rerender } = render(
+      <ToastProvider>
+        <FindingsTable findings={[finding]} showScanLink={false} />
+      </ToastProvider>,
+    );
 
     await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
     expect(screen.queryByText("Ver o scan completo →")).not.toBeInTheDocument();
 
-    rerender(<FindingsTable findings={[finding]} showScanLink />);
+    rerender(
+      <ToastProvider>
+        <FindingsTable findings={[finding]} showScanLink />
+      </ToastProvider>,
+    );
     expect(screen.getByText("Ver o scan completo →")).toBeInTheDocument();
   });
 
@@ -101,7 +125,7 @@ describe("FindingsTable", () => {
       snippet: "10: func handler() {\n11:   data := input\n12:   exec(data)\n13: }\n14: ",
     });
     const user = userEvent.setup();
-    render(<FindingsTable findings={[finding]} />);
+    renderTable({ findings: [finding] });
 
     await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
     const dialog = screen.getByRole("dialog");
@@ -113,11 +137,50 @@ describe("FindingsTable", () => {
   it("achado sem snippet (achado antigo, ou ferramenta sem linha específica) nunca mostra a seção", async () => {
     const finding = makeFinding({ snippet: undefined });
     const user = userEvent.setup();
-    render(<FindingsTable findings={[finding]} />);
+    renderTable({ findings: [finding] });
 
     await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
     const dialog = screen.getByRole("dialog");
 
     expect(within(dialog).queryByText("Trecho do código")).not.toBeInTheDocument();
+  });
+
+  it("Copiar prompt pra IA (Fase 13) copia o markdown do achado pra área de transferência", async () => {
+    const finding = makeFinding();
+    const user = userEvent.setup();
+    renderTable({ findings: [finding] });
+
+    // Object.defineProperty DEPOIS de userEvent.setup()/render() — não
+    // antes: userEvent.setup() mexe no próprio navigator.clipboard
+    // internamente (suporte a user.copy()/paste()), sobrescrevendo
+    // qualquer stub definido antes dela. vi.stubGlobal("navigator",
+    // {...navigator}) também não serve aqui: navigator é um host object
+    // do jsdom, a maioria das propriedades vive no protótipo (não são
+    // "own enumerable") — um spread copiaria quase nada de útil.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
+    await user.click(screen.getByRole("button", { name: "Copiar prompt pra IA" }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("CVE-2026-0001");
+    expect(copied).toContain("Trivy");
+    expect(await screen.findByText("Prompt copiado")).toBeInTheDocument();
+  });
+
+  it("Copiar prompt pra IA: falha na cópia mostra um toast de erro em vez de travar", async () => {
+    const finding = makeFinding();
+    const user = userEvent.setup();
+    renderTable({ findings: [finding] });
+
+    const writeText = vi.fn().mockRejectedValue(new Error("clipboard indisponível"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
+    await user.click(screen.getByRole("button", { name: "Copiar prompt pra IA" }));
+
+    expect(await screen.findByText("Não foi possível copiar")).toBeInTheDocument();
   });
 });
