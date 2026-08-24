@@ -17,3 +17,25 @@ if (typeof window !== "undefined" && !window.matchMedia) {
     dispatchEvent: () => false,
   });
 }
+
+// jsdom não implementa HTMLDialogElement.showModal()/close() (nem
+// sequer como no-op — a propriedade não existe, o que quebra qualquer
+// teste que abra components/ui/Dialog.tsx, construído sobre o <dialog>
+// nativo). Stub mínimo que reflete a semântica real via o atributo
+// boolean "open" (que jsdom já reflete normalmente em `.open`, como todo
+// atributo IDL padrão) — não um mock vazio, pra Dialog.tsx continuar
+// exercitando sua própria lógica real (`if (open && !el.open)
+// el.showModal()`) nos testes, não um caminho substituto.
+if (typeof HTMLDialogElement !== "undefined") {
+  if (!HTMLDialogElement.prototype.showModal) {
+    HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    };
+  }
+  if (!HTMLDialogElement.prototype.close) {
+    HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+      this.removeAttribute("open");
+      this.dispatchEvent(new Event("close"));
+    };
+  }
+}

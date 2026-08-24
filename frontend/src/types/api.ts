@@ -82,6 +82,22 @@ export interface ScannerFailure {
   hint: string;
 }
 
+// ScannerRunStatus: "running" enquanto o scanner ainda não retornou —
+// funciona mesmo com o job inteiro ainda em "processing"/"queued", o que
+// dá o progresso EM TEMPO REAL (qual teste está rodando agora, quanto
+// falta) pedido explicitamente pelo usuário.
+export type ScannerRunStatus = "running" | "succeeded" | "failed";
+
+export interface ScannerRun {
+  scanner: string;
+  status: ScannerRunStatus;
+  started_at: string;
+  finished_at?: string;
+  duration_ms?: number;
+  findings_count?: number;
+  error?: string;
+}
+
 export interface ScanStatus {
   job_id: string;
   status: JobStatus;
@@ -89,6 +105,12 @@ export interface ScanStatus {
   requested_scanners: string[];
   succeeded_scanners: string[] | null;
   failed_scanners: ScannerFailure[];
+  scanner_runs: ScannerRun[];
+  // progress_percent: fração dos scanners PEDIDOS que já chegaram a um
+  // estado terminal — sempre 100 quando status já é
+  // completed/failed/dead_letter, mesmo pra um scan antigo sem nenhuma
+  // linha em scanner_runs (ver transport/dto.go's scanProgressPercent).
+  progress_percent: number;
   attempts: number;
   created_at: string;
   started_at?: string;

@@ -342,6 +342,24 @@ func TestGetScanStatus_PartialFailure_IncludesScannerAndHint(t *testing.T) {
 	if !bytes.Contains([]byte(got.Hint), []byte("autenticação")) {
 		t.Errorf("FailedScanners[0].Hint = %q, want the credential-specific hint, not the generic fallback", got.Hint)
 	}
+
+	// O job já terminou (completed) — os dois scanners pedidos devem
+	// aparecer em ScannerRuns com status terminal, e o progresso deve
+	// estar em 100% (nenhum ainda "running").
+	if status.ProgressPercent != 100 {
+		t.Errorf("ProgressPercent = %d, want 100 (job already completed)", status.ProgressPercent)
+	}
+	if len(status.ScannerRuns) != 2 {
+		t.Fatalf("ScannerRuns = %+v, want an entry for each of the 2 requested scanners", status.ScannerRuns)
+	}
+	for _, run := range status.ScannerRuns {
+		if run.Status == "running" {
+			t.Errorf("ScannerRuns has %q still \"running\" after the job completed", run.Scanner)
+		}
+		if run.DurationMs == nil {
+			t.Errorf("ScannerRuns[%q].DurationMs = nil, want set once a scanner has a FinishedAt", run.Scanner)
+		}
+	}
 }
 
 // Quando TODOS os scanners falham, o job vira dead_letter só depois de
@@ -401,5 +419,109 @@ func TestListRecentFindings_InvalidLimit_FallsBackToDefaultInsteadOfErroring(t *
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 (an unparseable limit should fall back to the default, not fail the request)", rec.Code)
+	}
+}
+
+// A partir daqui: ListScans — "resultados separados por scan" (pedido do
+// usuário), a lista de execuções recentes que /seguranca usa em vez de
+// só o feed de achados de ListRecentFindings, que mistura todo scan
+// junto.
+
+func TestListScans_IncludesJustCreatedScan(t *testing.T) {
+	pool := testPool(t)
+	const marker = "https://example.com/list-scans-handler-marker.git"
+	scanner := &fakeScanner{name: "trivy", findings: []domain.Finding{{ID: "OK-1", Severity: domain.SeverityLow}}}
+	svc := newTestService(pool, scanner)
+	h := NewHandlers(svc, testLogger())
+
+	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy"}, Target: marker})
+	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
+	createRec := httptest.NewRecorder()
+	h.CreateScan(createRec, createReq)
+	job := decodeEnvelope[scanJobResponse](t, createRec.Body.Bytes())
+
+	jobID, err := uuid.Parse(job.JobID)
+	if err != nil {
+		t.Fatalf("parse job id: %v", err)
+	}
+	if err := svc.ProcessScanJob(context.Background(), jobID, uuid.New()); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/scans?limit=100", nil)
+	rec := httptest.NewRecorder()
+	h.ListScans(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	scans := decodeEnvelope[[]ScanStatusResponse](t, rec.Body.Bytes())
+	found := false
+	for _, s := range scans {
+		if s.JobID != job.JobID {
+			continue
+		}
+		found = true
+		if s.Target != marker {
+			t.Errorf("Target = %q, want %q", s.Target, marker)
+		}
+		if s.Status != "completed" {
+			t.Errorf("Status = %q, want completed", s.Status)
+		}
+	}
+	if !found {
+		t.Errorf("ListScans response did not include the scan just created (job_id=%s)", job.JobID)
+	}
+}
+
+func TestListScans_InvalidLimit_FallsBackToDefaultInsteadOfErroring(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger())
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/scans?limit=not-a-number", nil)
+	rec := httptest.NewRecorder()
+	h.ListScans(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (an unparseable limit should fall back to the default, not fail the request)", rec.Code)
+	}
+}
+
+// scanProgressPercent não precisa de Postgres nenhum — testes puros
+// sobre a struct em memória.
+
+func TestScanProgressPercent_TerminalStatusIsAlways100EvenWithoutScannerRuns(t *testing.T) {
+	// Reproduz o caso real encontrado com dados de verdade deste
+	// ambiente: um job completado ANTES da tabela
+	// scanning_scanner_runs existir (migration 000016) não tem nenhuma
+	// linha de progresso granular — sem este caso especial, apareceria
+	// travado em 0% pra sempre, mesmo já tendo terminado há muito tempo.
+	for _, status := range []string{"completed", "failed", "dead_letter"} {
+		t.Run(status, func(t *testing.T) {
+			s := &application.ScanStatus{
+				Status:            status,
+				RequestedScanners: []string{"trivy", "zap"},
+				ScannerRuns:       nil,
+			}
+			if got := toScanStatusResponse(s).ProgressPercent; got != 100 {
+				t.Errorf("ProgressPercent = %d, want 100 for a terminal status even without ScannerRuns rows", got)
+			}
+		})
+	}
+}
+
+func TestScanProgressPercent_InProgress_ReflectsFinishedScannerRuns(t *testing.T) {
+	s := &application.ScanStatus{
+		Status:            "processing",
+		RequestedScanners: []string{"trivy", "semgrep", "zap"},
+		ScannerRuns: []domain.ScannerRun{
+			{Scanner: "trivy", Status: domain.ScannerRunSucceeded},
+			{Scanner: "semgrep", Status: domain.ScannerRunRunning},
+			// zap ainda nem começou a rodar — nenhuma linha ainda, nem
+			// "running".
+		},
+	}
+	if got := toScanStatusResponse(s).ProgressPercent; got != 33 {
+		t.Errorf("ProgressPercent = %d, want 33 (1 of the 3 requested scanners has a terminal status)", got)
 	}
 }

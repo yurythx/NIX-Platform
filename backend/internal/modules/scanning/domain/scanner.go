@@ -100,6 +100,35 @@ type ScannerFailure struct {
 	Message string `json:"message"`
 }
 
+// ScannerRunStatus é o estado de UM scanner dentro da execução de um job
+// — "running" enquanto scanner.Execute ainda não retornou,
+// "succeeded"/"failed" quando termina. Existe pra dar visibilidade de
+// progresso EM TEMPO REAL de um job ainda "processing": jobs.Status
+// sozinho não distingue "acabei de começar" de "só falta um scanner
+// terminar" — pedido do usuário foi exatamente um painel mostrando qual
+// scanner está rodando agora e quanto falta.
+type ScannerRunStatus string
+
+const (
+	ScannerRunRunning   ScannerRunStatus = "running"
+	ScannerRunSucceeded ScannerRunStatus = "succeeded"
+	ScannerRunFailed    ScannerRunStatus = "failed"
+)
+
+// ScannerRun é o progresso de UM scanner dentro de um job — ver
+// Repository.ListScannerRuns. FindingsCount só é preenchido quando
+// Status == ScannerRunSucceeded (nil enquanto ainda "running", ou se
+// falhou — não haveria uma contagem de achados significativa nesses
+// casos). FinishedAt é nil enquanto Status == ScannerRunRunning.
+type ScannerRun struct {
+	Scanner       string
+	Status        ScannerRunStatus
+	StartedAt     time.Time
+	FinishedAt    *time.Time
+	FindingsCount *int
+	Error         string
+}
+
 // Repository persiste e consulta os achados de uma execução de scan.
 type Repository interface {
 	// SaveFindings grava todo achado de scanID numa única operação,
@@ -120,4 +149,34 @@ type Repository interface {
 	// severidade" sem que quem chama precise já saber um scan_id de
 	// antemão (ListByScanID sozinho não serve pra isso).
 	ListRecent(ctx context.Context, limit int) ([]PersistedFinding, error)
+
+	// StartScannerRun registra que scanner começou a rodar dentro de
+	// jobID — chamado no INÍCIO de cada goroutine de
+	// application.Service.runConcurrently, antes de scanner.Execute, pra
+	// o progresso aparecer assim que o scanner começa, não só quando
+	// termina. Uma redelivery do mesmo job (depois de MarkFailed)
+	// reaproveita a mesma linha (job_id, scanner) — upsert, não insert —
+	// pra sempre refletir a tentativa mais recente, nunca acumular
+	// histórico de tentativas antigas.
+	//
+	// Escrita best-effort do ponto de vista de quem chama: uma falha
+	// aqui nunca derruba o scan em si (ver Service.markScannerRunning) —
+	// isto é só observabilidade, não faz parte da garantia transacional
+	// de achados/eventos que SaveFindings tem.
+	StartScannerRun(ctx context.Context, jobID uuid.UUID, scanner string) error
+
+	// FinishScannerRun registra o desfecho de UM scanner — status,
+	// contagem de achados (só relevante/gravada se status ==
+	// ScannerRunSucceeded) e a mensagem de erro (só relevante se status
+	// == ScannerRunFailed). Mesma escrita best-effort de
+	// StartScannerRun.
+	FinishScannerRun(ctx context.Context, jobID uuid.UUID, scanner string, status ScannerRunStatus, findingsCount int, errMsg string) error
+
+	// ListScannerRuns retorna o progresso de todo scanner de jobID, na
+	// ordem em que começaram a rodar — funciona pra um job em QUALQUER
+	// status, inclusive "processing" (é exatamente esse caso, um job
+	// ainda em andamento, que dá visibilidade real de progresso). Uma
+	// lista vazia (job ainda não chegou a rodar nenhum scanner, ou jobID
+	// desconhecido) não é erro.
+	ListScannerRuns(ctx context.Context, jobID uuid.UUID) ([]ScannerRun, error)
 }

@@ -1,35 +1,46 @@
 import { ErrorState } from "@/components/ui/ErrorState";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@/components/ui/Table";
-import { SeverityBadge } from "@/components/scanning/SeverityBadge";
+import { FindingsTable } from "@/components/scanning/FindingsTable";
+import { ScanList } from "@/components/scanning/ScanList";
 import { TriggerScanForm } from "@/components/scanning/TriggerScanForm";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
-import { remediationFor } from "@/lib/scanning/remediation";
-import type { ScanFinding } from "@/types/api";
+import type { ScanFinding, ScanStatus } from "@/types/api";
 
 // Segurança (Fase 9 do roadmap de segurança —
-// docs/roadmap-secops-orchestrator.md): "achados recentes por
-// severidade", reaproveitando o padrão de Server Component + Table já em
-// uso no resto do dashboard — não um design novo. Busca
-// GET /api/v1/scanning/findings (o feed entre TODOS os scans, não
-// escopado a um scan_id — GET .../scans/{scanID}/findings continua
-// existindo pra quem já sabe o scan_id de um job específico).
+// docs/roadmap-secops-orchestrator.md): originalmente só um feed de
+// achados entre TODOS os scans, sem separação nenhuma por execução.
+// Pedido do usuário: "quero os resultados separados por scan... quero
+// poder clicar neles de forma individual e ver os detalhes". Agora duas
+// seções — Scans recentes (ScanList, cada entrada com seu próprio link
+// pra /seguranca/[scanId], onde o progresso ao vivo e o detalhe de cada
+// achado desse scan específico vivem) e Achados recentes (FindingsTable,
+// a visão AGREGADA entre todos os scans, que continua útil pra achar "o
+// que há de mais grave em qualquer lugar" sem precisar abrir scan por
+// scan — cada linha aqui também clicável, com showScanLink levando de
+// volta pro scan de origem).
 //
-// TriggerScanForm (Client Component, abaixo) veio depois da Fase 9
-// original — perguntado explicitamente pelo usuário como disparar um
-// scan e "mostrar pra aplicação onde atacar" (o alvo do ZAP), já que a
-// primeira versão desta página só listava achados. Server Component pai
-// renderizando um Client Component filho é o padrão normal do App
-// Router — a busca de achados continua acontecendo no servidor.
+// TriggerScanForm (Client Component) dispara um scan novo e já mostra o
+// progresso ao vivo ali mesmo, com um link pra página de detalhe própria
+// desse job — a resposta mais direta a "resultados separados por scan":
+// o resultado de CADA disparo já nasce na sua própria URL, não misturado
+// num feed genérico.
 export default async function SegurancaPage() {
-  let findings: ScanFinding[] | null = null;
-  let errorMessage: string | null = null;
+  let scans: ScanStatus[] = [];
+  let scansError: string | null = null;
+  try {
+    const { data } = await serverApiGet<ScanStatus[]>("v1/scanning/scans?limit=20");
+    scans = data;
+  } catch (err) {
+    scansError = err instanceof ApiError ? err.message : "Falha ao carregar scans recentes";
+  }
+
+  let findings: ScanFinding[] = [];
+  let findingsError: string | null = null;
   try {
     const { data } = await serverApiGet<ScanFinding[]>("v1/scanning/findings?limit=100");
     findings = data;
   } catch (err) {
-    errorMessage = err instanceof ApiError ? err.message : "Falha ao carregar achados";
+    findingsError = err instanceof ApiError ? err.message : "Falha ao carregar achados";
   }
 
   return (
@@ -37,65 +48,30 @@ export default async function SegurancaPage() {
       <div>
         <h1 className="text-xl font-semibold">Segurança</h1>
         <p className="text-sm text-muted">
-          Achados mais graves e recentes entre todas as execuções de scan (Trivy, Semgrep,
-          SonarQube, OWASP ZAP) — os mais críticos primeiro.
+          Dispare um scan (Trivy, Semgrep, SonarQube, OWASP ZAP), acompanhe o progresso e veja os
+          achados de cada execução, separadamente.
         </p>
       </div>
 
       <TriggerScanForm />
 
-      {errorMessage && <ErrorState message={errorMessage} />}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+          Scans recentes
+        </h2>
+        {scansError ? <ErrorState message={scansError} /> : <ScanList scans={scans} />}
+      </div>
 
-      {findings && findings.length === 0 && (
-        <EmptyState
-          title="Nenhum achado ainda"
-          description="Nenhum scan rodou até agora, ou nenhum problema foi encontrado nos scans mais recentes."
-        />
-      )}
-
-      {findings && findings.length > 0 && (
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableHeaderCell>Severidade</TableHeaderCell>
-              <TableHeaderCell>Achado</TableHeaderCell>
-              <TableHeaderCell>Categoria OWASP</TableHeaderCell>
-              <TableHeaderCell>Scanner</TableHeaderCell>
-              <TableHeaderCell>Local</TableHeaderCell>
-              <TableHeaderCell>Como corrigir</TableHeaderCell>
-              <TableHeaderCell>Quando</TableHeaderCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {findings.map((finding) => (
-              <TableRow key={finding.id}>
-                <TableCell>
-                  <SeverityBadge severity={finding.severity} />
-                </TableCell>
-                <TableCell>
-                  <div className="font-medium text-foreground">{finding.finding_id}</div>
-                  <div className="max-w-md truncate text-muted" title={finding.description}>
-                    {finding.description}
-                  </div>
-                </TableCell>
-                <TableCell className="text-muted">{finding.owasp_category || "—"}</TableCell>
-                <TableCell className="text-muted">{finding.scanner}</TableCell>
-                <TableCell className="text-muted">
-                  {finding.file ? (finding.line > 0 ? `${finding.file}:${finding.line}` : finding.file) : "—"}
-                </TableCell>
-                <TableCell className="text-muted">
-                  <div className="max-w-sm truncate" title={remediationFor(finding)}>
-                    {remediationFor(finding)}
-                  </div>
-                </TableCell>
-                <TableCell className="whitespace-nowrap text-muted">
-                  {new Date(finding.created_at).toLocaleString()}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+          Achados recentes (todos os scans)
+        </h2>
+        {findingsError ? (
+          <ErrorState message={findingsError} />
+        ) : (
+          <FindingsTable findings={findings} showScanLink />
+        )}
+      </div>
     </div>
   );
 }

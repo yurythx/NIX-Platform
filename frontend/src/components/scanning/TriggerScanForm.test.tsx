@@ -62,6 +62,11 @@ describe("TriggerScanForm", () => {
             requested_scanners: ["trivy", "semgrep"],
             succeeded_scanners: ["trivy", "semgrep"],
             failed_scanners: [],
+            scanner_runs: [
+              { scanner: "trivy", status: "succeeded", started_at: "2026-08-24T12:00:00Z", finished_at: "2026-08-24T12:00:01Z", duration_ms: 1000, findings_count: 0 },
+              { scanner: "semgrep", status: "succeeded", started_at: "2026-08-24T12:00:00Z", finished_at: "2026-08-24T12:00:01Z", duration_ms: 1000, findings_count: 0 },
+            ],
+            progress_percent: 100,
             attempts: 1,
             created_at: "2026-08-24T12:00:00Z",
           },
@@ -110,6 +115,11 @@ describe("TriggerScanForm", () => {
                 hint: "O ZAP só ataca hosts explicitamente autorizados. Adicione o host à variável de ambiente SCANNING_ZAP_ALLOWED_HOSTS do backend-worker e dispare o scan de novo.",
               },
             ],
+            scanner_runs: [
+              { scanner: "trivy", status: "succeeded", started_at: "2026-08-24T12:00:00Z", finished_at: "2026-08-24T12:00:01Z", duration_ms: 1000, findings_count: 0 },
+              { scanner: "zap", status: "failed", started_at: "2026-08-24T12:00:00Z", finished_at: "2026-08-24T12:00:01Z", duration_ms: 1000, error: "allowlist empty" },
+            ],
+            progress_percent: 100,
             attempts: 1,
             created_at: "2026-08-24T12:00:00Z",
           },
@@ -128,16 +138,20 @@ describe("TriggerScanForm", () => {
     await user.type(screen.getByLabelText("Alvo"), "https://github.com/org/repo.git");
     await user.click(screen.getByRole("button", { name: "Disparar scan" }));
 
-    // Quem achou o erro (scanner), que tipo foi (code) e a mensagem real.
-    expect(await screen.findByText("zap")).toBeInTheDocument();
+    // Quem achou o erro (scanner) — aparece tanto na lista de progresso
+    // por scanner quanto no card de falha, por isso getAllByText (mais
+    // de uma ocorrência é esperado, não um bug).
+    expect((await screen.findAllByText("zap")).length).toBeGreaterThan(0);
+    // Que tipo foi (code) e a mensagem real — só existem no card de falha.
     expect(screen.getByText("VALIDATION_ERROR")).toBeInTheDocument();
     expect(screen.getByText(/no hosts are allowlisted/)).toBeInTheDocument();
     // Como corrigir. (SCANNING_ZAP_ALLOWED_HOSTS sozinho ambiguaria com o
     // texto estático do CardDescription do próprio formulário, que já
     // menciona a mesma variável — o trecho abaixo só existe no hint.)
     expect(screen.getByText(/Adicione o host à variável de ambiente/)).toBeInTheDocument();
-    // trivy teve sucesso — aparece separado, não junto da falha.
-    expect(screen.getByText("trivy")).toBeInTheDocument();
+    // trivy teve sucesso — aparece separado, não junto da falha (também
+    // em mais de um lugar: lista de progresso + badges de sucesso).
+    expect(screen.getAllByText("trivy").length).toBeGreaterThan(0);
   });
 
   it("ao falhar, mostra um toast de erro em vez de travar o formulário", async () => {

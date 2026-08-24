@@ -29,11 +29,20 @@ type fakeScanner struct {
 	name     string
 	findings []domain.Finding
 	err      error
+	// block, quando não nil, faz Execute esperar o canal fechar antes de
+	// retornar — só usado pelos testes de progresso EM ANDAMENTO (ver
+	// TestProcessScanJob_ScannerRuns_ReflectRunningThenTerminalStatus),
+	// pra observar de verdade um scanner com status "running" enquanto
+	// outro já terminou, em vez de só inferir isso.
+	block <-chan struct{}
 }
 
 func (f *fakeScanner) Name() string { return f.name }
 
 func (f *fakeScanner) Execute(ctx context.Context, target string) ([]domain.Finding, error) {
+	if f.block != nil {
+		<-f.block
+	}
 	return f.findings, f.err
 }
 
@@ -561,6 +570,171 @@ func TestProcessScanJob_UnregisteredScanner_IsTreatedAsThatScannerFailing(t *tes
 	}
 }
 
+// A partir daqui: progresso por scanner (ScannerRuns/GetScanStatus) —
+// pedido do usuário de um painel mostrando qual scanner está rodando
+// agora e quanto falta, sem esperar o job inteiro terminar pra saber
+// qualquer coisa.
+
+func TestProcessScanJob_ScannerRuns_RecordTerminalStatusForEachScanner(t *testing.T) {
+	pool := testPool(t)
+	good := &fakeScanner{name: "good-scanner", findings: []domain.Finding{
+		{ID: "OK-1", Severity: domain.SeverityLow},
+		{ID: "OK-2", Severity: domain.SeverityLow},
+	}}
+	bad := &fakeScanner{name: "bad-scanner", err: fmt.Errorf("tool crashed")}
+	svc := newService(pool, good, bad)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"good-scanner", "bad-scanner"}, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	status, err := svc.GetScanStatus(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanStatus: %v", err)
+	}
+	runsByScanner := make(map[string]domain.ScannerRun, len(status.ScannerRuns))
+	for _, run := range status.ScannerRuns {
+		runsByScanner[run.Scanner] = run
+	}
+	if len(runsByScanner) != 2 {
+		t.Fatalf("ScannerRuns = %+v, want an entry for each of the 2 scanners", status.ScannerRuns)
+	}
+
+	goodRun := runsByScanner["good-scanner"]
+	if goodRun.Status != domain.ScannerRunSucceeded {
+		t.Errorf("good-scanner status = %q, want succeeded", goodRun.Status)
+	}
+	if goodRun.FinishedAt == nil {
+		t.Error("good-scanner FinishedAt = nil, want set (it already terminated)")
+	}
+	if goodRun.FindingsCount == nil || *goodRun.FindingsCount != 2 {
+		t.Errorf("good-scanner FindingsCount = %v, want 2", goodRun.FindingsCount)
+	}
+	if goodRun.Error != "" {
+		t.Errorf("good-scanner Error = %q, want empty (it succeeded)", goodRun.Error)
+	}
+
+	badRun := runsByScanner["bad-scanner"]
+	if badRun.Status != domain.ScannerRunFailed {
+		t.Errorf("bad-scanner status = %q, want failed", badRun.Status)
+	}
+	if badRun.FindingsCount != nil {
+		t.Errorf("bad-scanner FindingsCount = %v, want nil (a failed scanner has no meaningful count)", badRun.FindingsCount)
+	}
+	if badRun.Error != "tool crashed" {
+		t.Errorf("bad-scanner Error = %q, want %q", badRun.Error, "tool crashed")
+	}
+}
+
+// Reproduz de verdade (não só infere) o cenário central do pedido do
+// usuário: enquanto um job ainda está em andamento, um scanner mais
+// lento aparece como "running" ao mesmo tempo em que outro, mais rápido,
+// já aparece "succeeded" — a visibilidade de progresso que um job
+// "processing" sozinho nunca deu.
+func TestProcessScanJob_ScannerRuns_ReflectRunningThenTerminalStatus(t *testing.T) {
+	pool := testPool(t)
+	block := make(chan struct{})
+	fast := &fakeScanner{name: "fast-scanner", findings: []domain.Finding{{ID: "OK-1", Severity: domain.SeverityLow}}}
+	slow := &fakeScanner{name: "slow-scanner", block: block}
+	svc := newService(pool, fast, slow)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"fast-scanner", "slow-scanner"}, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- svc.ProcessScanJob(ctx, job.ID, corrID) }()
+
+	// Faz polling (mesmo padrão que a UI usa via GET .../scans/{id}) até
+	// observar slow-scanner "running" — com um teto de tempo generoso
+	// pra nunca deixar o teste travado indefinidamente se o
+	// comportamento regredir.
+	deadline := time.After(5 * time.Second)
+	observedRunning := false
+	for !observedRunning {
+		select {
+		case <-deadline:
+			close(block)
+			<-done
+			t.Fatal("never observed slow-scanner with status \"running\" while the job was in flight")
+		default:
+		}
+		status, err := svc.GetScanStatus(ctx, job.ID)
+		if err != nil {
+			t.Fatalf("GetScanStatus: %v", err)
+		}
+		for _, run := range status.ScannerRuns {
+			if run.Scanner == "slow-scanner" && run.Status == domain.ScannerRunRunning {
+				observedRunning = true
+			}
+		}
+	}
+
+	close(block) // libera slow-scanner pra terminar
+	if err := <-done; err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	status, err := svc.GetScanStatus(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanStatus: %v", err)
+	}
+	for _, run := range status.ScannerRuns {
+		if run.Status == domain.ScannerRunRunning {
+			t.Errorf("after ProcessScanJob returned, scanner %q is still \"running\" — want a terminal status", run.Scanner)
+		}
+	}
+}
+
+// Reproduz o bug real encontrado ao consultar ListRecentScans contra os
+// dados de verdade já persistidos neste ambiente: jobs.result gravado
+// ANTES desta fase tinha failed_scanners como uma lista de NOMES
+// (strings), não domain.ScannerFailure estruturado — decodificar isso
+// com o formato novo quebrava com um erro de unmarshal, derrubando a
+// consulta inteira por causa de UM job velho. Insere a linha direto via
+// SQL (não MarkCompleted, que já grava o formato novo) pra reproduzir de
+// verdade o formato antigo, não só simulá-lo.
+func TestGetScanStatus_LegacyStringFailedScanners_DecodesWithoutError(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+
+	jobID := uuid.New()
+	const q = `
+		INSERT INTO jobs (id, type, status, attempts, payload, result, correlation_id, created_at, started_at, finished_at)
+		VALUES ($1, $2, 'completed', 1,
+			'{"scanners":["trivy","zap"],"target":"https://example.com/repo.git"}',
+			'{"succeeded_scanners":["trivy"],"failed_scanners":["zap"]}',
+			$3, now(), now(), now())
+	`
+	if _, err := pool.Exec(ctx, q, jobID, JobType, uuid.New()); err != nil {
+		t.Fatalf("seed a legacy-format completed job: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM jobs WHERE id = $1`, jobID)
+	})
+
+	status, err := svc.GetScanStatus(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetScanStatus on a legacy-format job: %v", err)
+	}
+	if len(status.SucceededScanners) != 1 || status.SucceededScanners[0] != "trivy" {
+		t.Errorf("SucceededScanners = %v, want [trivy]", status.SucceededScanners)
+	}
+	if len(status.FailedScanners) != 1 || status.FailedScanners[0].Scanner != "zap" {
+		t.Errorf("FailedScanners = %+v, want exactly one entry with Scanner=zap", status.FailedScanners)
+	}
+}
+
 // A partir daqui: ListRecentFindings (Fase 9 — o feed "achados recentes
 // por severidade" que a UI usa).
 
@@ -637,6 +811,18 @@ func (f *fakeRepositoryCapturingLimit) ListByScanID(context.Context, uuid.UUID) 
 func (f *fakeRepositoryCapturingLimit) ListRecent(_ context.Context, limit int) ([]domain.PersistedFinding, error) {
 	f.gotLimit = limit
 	return nil, nil
+}
+
+func (f *fakeRepositoryCapturingLimit) StartScannerRun(context.Context, uuid.UUID, string) error {
+	panic("StartScannerRun should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) FinishScannerRun(context.Context, uuid.UUID, string, domain.ScannerRunStatus, int, string) error {
+	panic("FinishScannerRun should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) ListScannerRuns(context.Context, uuid.UUID) ([]domain.ScannerRun, error) {
+	panic("ListScannerRuns should not be called by ListRecentFindings")
 }
 
 func TestListRecentFindings_LimitClamping(t *testing.T) {

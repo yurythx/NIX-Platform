@@ -117,12 +117,79 @@ func remediationHint(f domain.ScannerFailure) string {
 	}
 }
 
+// ScannerRunResponse é o formato público de domain.ScannerRun — o
+// progresso de UM scanner dentro de um job, incluindo enquanto o job
+// ainda está "processing" (Status == "running"). DurationMs só aparece
+// depois que o scanner termina (FinishedAt != nil) — computado aqui, não
+// persistido, pra nunca poder divergir de FinishedAt-StartedAt.
+type ScannerRunResponse struct {
+	Scanner       string     `json:"scanner"`
+	Status        string     `json:"status"`
+	StartedAt     time.Time  `json:"started_at"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	DurationMs    *int64     `json:"duration_ms,omitempty"`
+	FindingsCount *int       `json:"findings_count,omitempty"`
+	Error         string     `json:"error,omitempty"`
+}
+
+func toScannerRunResponses(list []domain.ScannerRun) []ScannerRunResponse {
+	out := make([]ScannerRunResponse, 0, len(list))
+	for _, r := range list {
+		resp := ScannerRunResponse{
+			Scanner:       r.Scanner,
+			Status:        string(r.Status),
+			StartedAt:     r.StartedAt,
+			FinishedAt:    r.FinishedAt,
+			FindingsCount: r.FindingsCount,
+			Error:         r.Error,
+		}
+		if r.FinishedAt != nil {
+			d := r.FinishedAt.Sub(r.StartedAt).Milliseconds()
+			resp.DurationMs = &d
+		}
+		out = append(out, resp)
+	}
+	return out
+}
+
+// scanProgressPercent é uma métrica simples e honesta de "quanto falta":
+// a fração de scanners PEDIDOS que já chegaram a um estado terminal
+// (succeeded ou failed), não uma estimativa de tempo — os scanners rodam
+// em paralelo e com durações bem diferentes entre si (um git clone
+// rápido vs. um scan ZAP de minutos), então "tempo restante" seria um
+// palpite; "quantos dos N já terminaram" é um fato.
+func scanProgressPercent(s *application.ScanStatus) int {
+	// Um job num status TERMINAL é sempre 100%, mesmo que ScannerRuns
+	// esteja vazio — caso real de um job completado antes desta tabela
+	// existir (scanning_scanner_runs, migration 000016): sem essa
+	// checagem, um job já concluído há muito tempo apareceria travado em
+	// 0% só por não ter nenhuma linha de progresso granular gravada.
+	switch s.Status {
+	case "completed", "failed", "dead_letter":
+		return 100
+	}
+
+	total := len(s.RequestedScanners)
+	if total == 0 {
+		return 0
+	}
+	finished := 0
+	for _, run := range s.ScannerRuns {
+		if run.Status != domain.ScannerRunRunning {
+			finished++
+		}
+	}
+	return finished * 100 / total
+}
+
 // ScanStatusResponse é o formato público de application.ScanStatus —
 // consultado pela UI depois de disparar um scan (ver
 // Handlers.GetScanStatus), pra mostrar não só os achados de quem teve
 // sucesso mas também, pela primeira vez, qual scanner falhou, de que
 // tipo foi o erro e como corrigir — antes desta mudança essa informação
-// só existia no log do worker.
+// só existia no log do worker. ScannerRuns/ProgressPercent dão
+// visibilidade EM ANDAMENTO (mesmo job "processing"), não só o resumo
+// final — o painel de progresso pedido pelo usuário depende disso.
 type ScanStatusResponse struct {
 	JobID             string                   `json:"job_id"`
 	Status            string                   `json:"status"`
@@ -130,6 +197,8 @@ type ScanStatusResponse struct {
 	RequestedScanners []string                 `json:"requested_scanners"`
 	SucceededScanners []string                 `json:"succeeded_scanners"`
 	FailedScanners    []ScannerFailureResponse `json:"failed_scanners"`
+	ScannerRuns       []ScannerRunResponse     `json:"scanner_runs"`
+	ProgressPercent   int                      `json:"progress_percent"`
 	Attempts          int                      `json:"attempts"`
 	CreatedAt         time.Time                `json:"created_at"`
 	StartedAt         *time.Time               `json:"started_at,omitempty"`
@@ -144,9 +213,19 @@ func toScanStatusResponse(s *application.ScanStatus) ScanStatusResponse {
 		RequestedScanners: s.RequestedScanners,
 		SucceededScanners: s.SucceededScanners,
 		FailedScanners:    toScannerFailureResponses(s.FailedScanners),
+		ScannerRuns:       toScannerRunResponses(s.ScannerRuns),
+		ProgressPercent:   scanProgressPercent(s),
 		Attempts:          s.Attempts,
 		CreatedAt:         s.CreatedAt,
 		StartedAt:         s.StartedAt,
 		FinishedAt:        s.FinishedAt,
 	}
+}
+
+func toScanStatusResponses(list []*application.ScanStatus) []ScanStatusResponse {
+	out := make([]ScanStatusResponse, 0, len(list))
+	for _, s := range list {
+		out = append(out, toScanStatusResponse(s))
+	}
+	return out
 }

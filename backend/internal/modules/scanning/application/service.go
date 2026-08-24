@@ -36,6 +36,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
+	"github.com/yurythx/nix-platform/internal/domain/pagination"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 	"github.com/yurythx/nix-platform/internal/platform/audit"
 	"github.com/yurythx/nix-platform/internal/platform/database"
@@ -267,10 +268,16 @@ type ScanStatus struct {
 	RequestedScanners []string
 	SucceededScanners []string
 	FailedScanners    []domain.ScannerFailure
-	Attempts          int
-	CreatedAt         time.Time
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
+	// ScannerRuns dá o progresso de CADA scanner individualmente — ao
+	// contrário de Status (o job como um todo), funciona mesmo enquanto
+	// o job ainda está "processing": é o que permite um painel mostrar
+	// qual scanner está rodando agora e quanto falta, em vez de só
+	// "processing" sem mais detalhe até tudo terminar de uma vez.
+	ScannerRuns []domain.ScannerRun
+	Attempts    int
+	CreatedAt   time.Time
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
 }
 
 // GetScanStatus consulta o estado atual de um job de scan — quem chama
@@ -283,7 +290,14 @@ func (s *Service) GetScanStatus(ctx context.Context, jobID uuid.UUID) (*ScanStat
 	if err != nil {
 		return nil, fmt.Errorf("scanning: get scan status %s: %w", jobID, err)
 	}
+	return s.projectScanStatus(ctx, job)
+}
 
+// projectScanStatus é o miolo compartilhado entre GetScanStatus (um job
+// já carregado por ID) e ListRecentScans (uma página inteira de jobs) —
+// as duas nunca divergem em como um *jobs.Job vira um *ScanStatus.
+func (s *Service) projectScanStatus(ctx context.Context, job *jobs.Job) (*ScanStatus, error) {
+	jobID := job.ID
 	var payload scanJobPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return nil, fmt.Errorf("scanning: decode job %s payload: %w", jobID, err)
@@ -308,7 +322,31 @@ func (s *Service) GetScanStatus(ctx context.Context, jobID uuid.UUID) (*ScanStat
 		}
 		if len(job.Result) > 0 {
 			if err := json.Unmarshal(job.Result, &result); err != nil {
-				return nil, fmt.Errorf("scanning: decode job %s result: %w", jobID, err)
+				// Compatibilidade com jobs concluídos ANTES desta fase:
+				// failed_scanners costumava ser só uma lista de nomes
+				// (strings), não domain.ScannerFailure estruturado — cai
+				// pra esse formato antigo em vez de quebrar a consulta
+				// inteira por causa de um job velho (confirmado contra um
+				// job de verdade deste ambiente, b2a39c9c..., completado
+				// antes desta mudança). A tentativa acima pode ter
+				// deixado result.FailedScanners parcialmente preenchido
+				// com valores zero antes de falhar (um detalhe de como
+				// encoding/json decodifica um array elemento por
+				// elemento) — por isso ATRIBUI abaixo, nunca append,
+				// pra nunca herdar esse lixo parcial.
+				var legacy struct {
+					SucceededScanners []string `json:"succeeded_scanners"`
+					FailedScanners    []string `json:"failed_scanners,omitempty"`
+				}
+				if legacyErr := json.Unmarshal(job.Result, &legacy); legacyErr != nil {
+					return nil, fmt.Errorf("scanning: decode job %s result: %w", jobID, err)
+				}
+				failed := make([]domain.ScannerFailure, len(legacy.FailedScanners))
+				for i, name := range legacy.FailedScanners {
+					failed[i] = domain.ScannerFailure{Scanner: name}
+				}
+				result.SucceededScanners = legacy.SucceededScanners
+				result.FailedScanners = failed
 			}
 		}
 		status.SucceededScanners = result.SucceededScanners
@@ -319,7 +357,50 @@ func (s *Service) GetScanStatus(ctx context.Context, jobID uuid.UUID) (*ScanStat
 		}
 	}
 
+	// Best-effort: funciona pra QUALQUER status (inclusive "processing",
+	// o caso que realmente importa pro painel de progresso) — uma falha
+	// aqui não derruba a resposta inteira, já que ScannerRuns é
+	// informação suplementar, não o resultado principal do job.
+	if runs, err := s.repo.ListScannerRuns(ctx, jobID); err != nil {
+		s.logger.Warn("scanning: failed to load scanner progress (best-effort, status still returned)",
+			slog.String("job_id", jobID.String()), slog.Any("error", err))
+	} else {
+		status.ScannerRuns = runs
+	}
+
 	return status, nil
+}
+
+// maxRecentScans é o teto de ListRecentScans — mesmo espírito de
+// maxRecentFindings logo abaixo (uma consulta "generosa demais" ainda é
+// atendida, só que com o teto em vez do valor pedido).
+const maxRecentScans = 100
+
+// ListRecentScans retorna os jobs de scan mais recentes, mais novo
+// primeiro — o que /seguranca usa pra listar "resultados separados por
+// scan" (cada job/execução como sua própria entrada, em vez de um feed
+// só de achados misturando todo scan junto). Reaproveita o mesmo
+// projeção de GetScanStatus pra cada job da página, então as duas
+// consultas nunca divergem em formato.
+func (s *Service) ListRecentScans(ctx context.Context, limit int) ([]*ScanStatus, error) {
+	if limit <= 0 || limit > maxRecentScans {
+		limit = maxRecentScans
+	}
+
+	jobList, _, err := s.jobsRepo.List(ctx, pagination.New(1, limit, maxRecentScans), JobType)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: list recent scans: %w", err)
+	}
+
+	out := make([]*ScanStatus, 0, len(jobList))
+	for _, job := range jobList {
+		status, err := s.projectScanStatus(ctx, job)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, status)
+	}
+	return out, nil
 }
 
 // decodeFailures decodifica o texto de jobs.error de volta em
@@ -440,7 +521,14 @@ func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, sc
 // nível de timeout aqui, só isolamento: a falha ou lentidão de um nunca
 // afeta os demais, porque cada goroutine roda de forma completamente
 // independente e nenhuma jamais cancela o contexto de outra.
-func (s *Service) runConcurrently(ctx context.Context, scannerNames []string, target string) []scannerOutcome {
+// jobID vira o progresso individual de cada scanner (StartScannerRun/
+// FinishScannerRun, ver markScannerRunning/markScannerFinished abaixo) —
+// o que GetScanStatus expõe pra dar visibilidade em tempo real de qual
+// scanner está rodando agora e qual já terminou, pedido explícito do
+// usuário ("um painel visual dos testes rodando... quero saber qual
+// teste está rodando, quanto falta pra acabar"), sem o qual um job
+// "processing" era uma caixa preta do início ao fim.
+func (s *Service) runConcurrently(ctx context.Context, jobID uuid.UUID, scannerNames []string, target string) []scannerOutcome {
 	outcomes := make([]scannerOutcome, len(scannerNames))
 	var wg sync.WaitGroup
 	for i, name := range scannerNames {
@@ -454,15 +542,45 @@ func (s *Service) runConcurrently(ctx context.Context, scannerNames []string, ta
 				// entre a criação e o processamento (ex.: um deploy). Não
 				// é uma falha transitória do próprio scanner, mas ainda
 				// assim é só a falha DESTE scanner — os demais continuam.
-				outcomes[i] = scannerOutcome{scanner: name, err: fmt.Errorf("scanner %q not registered", name)}
+				err := fmt.Errorf("scanner %q not registered", name)
+				outcomes[i] = scannerOutcome{scanner: name, err: err}
+				s.markScannerRunning(ctx, jobID, name)
+				s.markScannerFinished(ctx, jobID, name, nil, err)
 				return
 			}
+			s.markScannerRunning(ctx, jobID, name)
 			findings, err := scanner.Execute(ctx, target)
 			outcomes[i] = scannerOutcome{scanner: name, findings: findings, err: err}
+			s.markScannerFinished(ctx, jobID, name, findings, err)
 		}(i, name)
 	}
 	wg.Wait()
 	return outcomes
+}
+
+// markScannerRunning/markScannerFinished são escritas best-effort de
+// progresso (ver domain.Repository.StartScannerRun/FinishScannerRun): uma
+// falha aqui só vira um log — nunca derruba o scan em si, porque o
+// progresso é observabilidade, não parte da garantia transacional de
+// achados/eventos que persistCompletion tem.
+func (s *Service) markScannerRunning(ctx context.Context, jobID uuid.UUID, name string) {
+	if err := s.repo.StartScannerRun(ctx, jobID, name); err != nil {
+		s.logger.Warn("scanning: failed to record scanner start (progress tracking only, scan continues)",
+			slog.String("job_id", jobID.String()), slog.String("scanner", name), slog.Any("error", err))
+	}
+}
+
+func (s *Service) markScannerFinished(ctx context.Context, jobID uuid.UUID, name string, findings []domain.Finding, err error) {
+	status := domain.ScannerRunSucceeded
+	errMsg := ""
+	if err != nil {
+		status = domain.ScannerRunFailed
+		errMsg = err.Error()
+	}
+	if writeErr := s.repo.FinishScannerRun(ctx, jobID, name, status, len(findings), errMsg); writeErr != nil {
+		s.logger.Warn("scanning: failed to record scanner finish (progress tracking only, scan continues)",
+			slog.String("job_id", jobID.String()), slog.String("scanner", name), slog.Any("error", writeErr))
+	}
 }
 
 func splitOutcomes(outcomes []scannerOutcome) (succeeded, failed []scannerOutcome) {
@@ -568,13 +686,28 @@ func (s *Service) ProcessScanJob(ctx context.Context, jobID uuid.UUID, correlati
 		return fmt.Errorf("scanning: decode job %s payload: %w", jobID, err)
 	}
 
-	outcomes := s.runConcurrently(ctx, payload.Scanners, payload.Target)
+	// MarkProcessing sozinho, na SUA PRÓPRIA transação, ANTES de
+	// runConcurrently — antes desta mudança, o job ficava "queued" (não
+	// "processing") pelo tempo INTEIRO que os scanners rodavam, porque
+	// MarkProcessing só era chamado dentro da mesma transação que
+	// MarkCompleted/MarkFailed, DEPOIS de runConcurrently já ter
+	// terminado. Um painel de progresso consultando GetScanStatus via
+	// polling via via um job "queued" o tempo todo mesmo com scanners
+	// visivelmente "running" em ScannerRuns — confuso pro pedido do
+	// usuário de saber "qual teste está rodando". CanTransition permite
+	// tanto queued->processing (primeira tentativa) quanto
+	// failed->processing (retry depois de MarkFailed), então isto nunca
+	// rejeita uma transição válida.
+	if err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
+		return s.jobsRepo.MarkProcessing(ctx, tx, jobID)
+	}); err != nil {
+		return fmt.Errorf("scanning: mark job %s processing: %w", jobID, err)
+	}
+
+	outcomes := s.runConcurrently(ctx, jobID, payload.Scanners, payload.Target)
 	succeeded, failed := splitOutcomes(outcomes)
 
 	txErr := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
-		if err := s.jobsRepo.MarkProcessing(ctx, tx, jobID); err != nil {
-			return err
-		}
 		if len(succeeded) == 0 {
 			return s.jobsRepo.MarkFailed(ctx, tx, jobID, encodeFailures(failed))
 		}

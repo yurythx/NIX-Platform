@@ -114,6 +114,25 @@ func (h *Handlers) GetScanStatus(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOK(w, toScanStatusResponse(status))
 }
 
+// ListScans trata GET /api/v1/scanning/scans — a lista de execuções
+// recentes que /seguranca usa pra mostrar "resultados separados por
+// scan" (cada disparo como sua própria entrada, status e progresso
+// próprios) em vez de só o feed de achados misturando todo scan junto
+// (ver ListRecentFindings). Cada entrada é o mesmo ScanStatusResponse de
+// GetScanStatus — clicar numa entrada nesta lista e consultar
+// GET .../scans/{id} depois nunca mostra um formato diferente.
+func (h *Handlers) ListScans(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	scans, err := h.service.ListRecentScans(r.Context(), limit)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, toScanStatusResponses(scans))
+}
+
 // ListRecentFindings trata GET /api/v1/scanning/findings — o feed "achados
 // recentes por severidade" (Fase 9) usado pela UI, que não exige um
 // scan_id de antemão como ListFindings exige.

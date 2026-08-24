@@ -22,6 +22,10 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scans", h.ListScans)
+
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans/{scanID}", h.GetScanStatus)
 
 	r.With(
