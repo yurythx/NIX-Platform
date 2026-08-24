@@ -6,11 +6,12 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
-import { useToast } from "@/components/notifications/ToastProvider";
-import { apiClient, ApiError } from "@/lib/api/client";
-import type { Project, TestJobResponse } from "@/types/api";
+import { SCANNERS } from "@/lib/scanning/scannerRegistry";
+import { useTriggerScan } from "@/lib/scanning/useTriggerScan";
+import type { Project } from "@/types/api";
 
 import { ProjectFindingHistoryPanel } from "./ProjectFindingHistoryPanel";
+import { ScannerPicker } from "./ScannerPicker";
 
 const STATUS_LABEL: Record<string, string> = {
   queued: "Na fila",
@@ -34,46 +35,68 @@ const STATUS_TONE: Record<string, "neutral" | "success" | "danger" | "warning" |
 // que TriggerScanForm já usa pro formulário de scan avulso.
 const DEFAULT_SCANNERS = ["trivy"];
 
+// scannerNamesFor: rótulo de exibição de um conjunto de scanners
+// selecionados (ex.: "Trivy, Gitleaks"), na mesma ordem/nome do registro
+// — nunca a chave crua ("trivy") que o resto da UI já não mostra em
+// lugar nenhum.
+function scannerNamesFor(selected: Record<string, boolean>): string {
+  return SCANNERS.filter((s) => selected[s.key])
+    .map((s) => s.name)
+    .join(", ");
+}
+
 // ProjectCard: Fase 10 (Projeto persistente + upload .zip) — pedido do
 // usuário de nunca precisar digitar a URL/re-anexar o .zip de novo pra
-// rodar o mesmo alvo outra vez. "Rodar de novo" dispara POST
-// /api/v1/scanning/scans com project_id preenchido, reaproveitando os
-// MESMOS scanners do último scan (ou DEFAULT_SCANNERS, na primeira vez) —
-// mesmo endpoint que um scan avulso já usa (ver CreateScan/
-// createScanRequest.ProjectID no backend), nunca um caminho paralelo.
+// rodar o mesmo alvo outra vez. "Rodar de novo" dispara o mesmo endpoint
+// que um scan avulso já usa (useTriggerScan, com projectId em vez de
+// target — ver CreateScan/createScanRequest.ProjectID no backend), nunca
+// um caminho paralelo.
+//
+// § Unificação com TriggerScanForm (auditoria 2026-08): antes, "Rodar de
+// novo" era um botão único que disparava com uma lista de scanners
+// ESCONDIDA (a do último scan, ou só "trivy" na primeira vez) — na
+// prática, a primeira execução de qualquer projeto rodava só Trivy, sem
+// nenhuma UI pra perceber isso ou escolher outra coisa, bem diferente do
+// scan avulso (TriggerScanForm), que sempre deixa escolher livremente. A
+// seleção atual (`selected`) começa pré-marcada com o último conjunto
+// usado (ou o default, na primeira vez) e fica sempre visível como texto
+// — "Rodar de novo" já mostra COM QUAIS scanners vai rodar antes de
+// clicar; "Alterar scanners" expande a mesma grade (ScannerPicker) que o
+// scan avulso usa, pra quem quiser mudar antes de disparar. Um clique
+// continua dando o mesmo resultado rápido de antes; a diferença é que a
+// escolha agora é visível e editável, nunca escondida.
 export function ProjectCard({ project }: { project: Project }) {
-  const { showToast } = useToast();
-  const [running, setRunning] = useState(false);
-  const [jobId, setJobId] = useState<string | null>(null);
+  const initialScanners = project.last_scan?.requested_scanners?.length
+    ? project.last_scan.requested_scanners
+    : DEFAULT_SCANNERS;
+  const [selected, setSelected] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(initialScanners.map((key) => [key, true])),
+  );
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const { trigger, submitting, jobId } = useTriggerScan();
+
+  // OWASP ZAP ataca uma URL de serviço vivo, nunca um repositório git nem
+  // um .zip — um Project SALVO é sempre um dos dois (git ou upload),
+  // nunca um serviço vivo, então ZAP nunca faz sentido aqui. SonarQube
+  // exige um `git clone` (não implementa domain.LocalScanner) — some
+  // também, mas só pra um projeto de UPLOAD, onde não há URL nenhuma pra
+  // clonar (mesma checagem que createScanJob já faz no backend,
+  // antecipada aqui pra nunca deixar escolher algo que o servidor vai
+  // rejeitar).
+  const excludeKeys = project.source_type === "upload" ? ["zap", "sonarqube"] : ["zap"];
+
+  function toggle(key: string) {
+    setSelected((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
 
   async function runAgain() {
-    const scanners = project.last_scan?.requested_scanners?.length
-      ? project.last_scan.requested_scanners
-      : DEFAULT_SCANNERS;
-
-    setRunning(true);
-    try {
-      const { data } = await apiClient.post<TestJobResponse>("v1/scanning/scans", {
-        scanners,
-        project_id: project.id,
-      });
-      setJobId(data.job_id);
-      showToast({
-        title: "Scan disparado",
-        description: `Job ${data.job_id.slice(0, 8)} — acompanhe em "Scans recentes" ou clique abaixo.`,
-        tone: "info",
-      });
-    } catch (err) {
-      showToast({
-        title: "Não foi possível disparar o scan",
-        description: err instanceof ApiError ? err.message : "Erro inesperado",
-        tone: "danger",
-      });
-    } finally {
-      setRunning(false);
-    }
+    const scanners = SCANNERS.filter((s) => selected[s.key]).map((s) => s.key);
+    if (scanners.length === 0) return;
+    await trigger({ scanners, projectId: project.id });
   }
+
+  const scannerCount = Object.values(selected).filter(Boolean).length;
 
   return (
     <Card>
@@ -105,10 +128,37 @@ export function ProjectCard({ project }: { project: Project }) {
           <dd>{new Date(project.created_at).toLocaleString()}</dd>
         </dl>
 
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={submitting}
+              disabled={scannerCount === 0}
+              onClick={runAgain}
+            >
+              Rodar de novo
+            </Button>
+            <span className="text-xs text-muted">
+              {scannerCount > 0 ? `com ${scannerNamesFor(selected)}` : "nenhum scanner selecionado"}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPickerOpen((open) => !open)}
+              className="text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            >
+              {pickerOpen ? "Ocultar scanners ←" : "Alterar scanners"}
+            </button>
+          </div>
+
+          {pickerOpen && (
+            <div className="rounded-lg border border-surface-border bg-black/5 p-3 dark:bg-white/5">
+              <ScannerPicker selected={selected} onToggle={toggle} excludeKeys={excludeKeys} />
+            </div>
+          )}
+        </div>
+
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="secondary" loading={running} onClick={runAgain}>
-            Rodar de novo
-          </Button>
           {project.last_scan && (
             <Link
               href={`/seguranca/${project.last_scan.job_id}`}

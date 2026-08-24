@@ -1,5 +1,6 @@
 import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { Section } from "@/components/ui/Section";
 import { FindingsTable } from "@/components/scanning/FindingsTable";
 import { NewProjectForm } from "@/components/scanning/NewProjectForm";
 import { ProjectCard } from "@/components/scanning/ProjectCard";
@@ -59,7 +60,7 @@ export default async function SegurancaPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div>
         <h1 className="text-xl font-semibold">Segurança</h1>
         <p className="text-sm text-muted">
@@ -70,8 +71,10 @@ export default async function SegurancaPage() {
 
       <TriggerScanForm />
 
-      <div>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Projetos</h2>
+      <Section
+        title="Projetos"
+        description="Salve um alvo pra rodar de novo depois sem digitar a URL (ou reanexar o .zip) toda vez."
+      >
         <div className="flex flex-col gap-4">
           <NewProjectForm />
           {projectsError ? (
@@ -89,25 +92,19 @@ export default async function SegurancaPage() {
             </div>
           )}
         </div>
-      </div>
+      </Section>
 
-      <div>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-          Scans recentes
-        </h2>
+      <Section title="Scans recentes">
         {scansError ? <ErrorState message={scansError} /> : <ScanList scans={scans} />}
-      </div>
+      </Section>
 
-      <div>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-          Achados recentes (todos os scans)
-        </h2>
+      <Section title="Achados recentes" description="Agregado de todos os scans, mais recentes primeiro.">
         {findingsError ? (
           <ErrorState message={findingsError} />
         ) : (
           <FindingsTable findings={findings} showScanLink />
         )}
-      </div>
+      </Section>
     </div>
   );
 }

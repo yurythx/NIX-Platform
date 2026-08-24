@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
+import { Section } from "@/components/ui/Section";
 import {
   Table,
   TableBody,
@@ -55,70 +56,72 @@ export default async function UsuariosPage({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {errorMessage && <ErrorState message={errorMessage} />}
+    <Section title="Usuários" description="Toda conta que já fez login pelo menos uma vez.">
+      <div className="flex flex-col gap-4">
+        {errorMessage && <ErrorState message={errorMessage} />}
 
-      {!errorMessage && users && users.length === 0 && (
-        <EmptyState
-          title="Ainda não há usuários"
-          description="Usuários aparecem aqui assim que fizerem login pela primeira vez."
-        />
-      )}
+        {!errorMessage && users && users.length === 0 && (
+          <EmptyState
+            title="Ainda não há usuários"
+            description="Usuários aparecem aqui assim que fizerem login pela primeira vez."
+          />
+        )}
 
-      {users && users.length > 0 && (
-        <>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell>Nome</TableHeaderCell>
-                <TableHeaderCell>Email</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Visto por último</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {users.map((user) => (
-                <TableRow key={user.id}>
-                  <TableCell>{user.display_name || user.username}</TableCell>
-                  <TableCell>{user.email}</TableCell>
-                  <TableCell>{user.active ? "Ativo" : "Inativo"}</TableCell>
-                  <TableCell>
-                    {user.last_seen_at ? new Date(user.last_seen_at).toLocaleString() : "—"}
-                  </TableCell>
+        {users && users.length > 0 && (
+          <>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Nome</TableHeaderCell>
+                  <TableHeaderCell>Email</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Visto por último</TableHeaderCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHead>
+              <TableBody>
+                {users.map((user) => (
+                  <TableRow key={user.id}>
+                    <TableCell>{user.display_name || user.username}</TableCell>
+                    <TableCell>{user.email}</TableCell>
+                    <TableCell>{user.active ? "Ativo" : "Inativo"}</TableCell>
+                    <TableCell>
+                      {user.last_seen_at ? new Date(user.last_seen_at).toLocaleString() : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
 
-          {meta && meta.total_pages > 1 && (
-            <div className="flex items-center justify-between text-sm text-muted">
-              <span>
-                Página {meta.page} de {meta.total_pages} ({meta.total_items} usuários)
-              </span>
-              <div className="flex gap-2">
-                {page > 1 ? (
-                  <Link href={`/configuracao/usuarios?page=${page - 1}`} className={pageLinkClass}>
-                    Anterior
-                  </Link>
-                ) : (
-                  <span className={pageLinkDisabledClass} aria-disabled="true">
-                    Anterior
-                  </span>
-                )}
-                {meta.total_pages > page ? (
-                  <Link href={`/configuracao/usuarios?page=${page + 1}`} className={pageLinkClass}>
-                    Próxima
-                  </Link>
-                ) : (
-                  <span className={pageLinkDisabledClass} aria-disabled="true">
-                    Próxima
-                  </span>
-                )}
+            {meta && meta.total_pages > 1 && (
+              <div className="flex items-center justify-between text-sm text-muted">
+                <span>
+                  Página {meta.page} de {meta.total_pages} ({meta.total_items} usuários)
+                </span>
+                <div className="flex gap-2">
+                  {page > 1 ? (
+                    <Link href={`/configuracao/usuarios?page=${page - 1}`} className={pageLinkClass}>
+                      Anterior
+                    </Link>
+                  ) : (
+                    <span className={pageLinkDisabledClass} aria-disabled="true">
+                      Anterior
+                    </span>
+                  )}
+                  {meta.total_pages > page ? (
+                    <Link href={`/configuracao/usuarios?page=${page + 1}`} className={pageLinkClass}>
+                      Próxima
+                    </Link>
+                  ) : (
+                    <span className={pageLinkDisabledClass} aria-disabled="true">
+                      Próxima
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
+            )}
+          </>
+        )}
+      </div>
+    </Section>
   );
 }
