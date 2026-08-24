@@ -735,6 +735,53 @@ func TestGetScanStatus_LegacyStringFailedScanners_DecodesWithoutError(t *testing
 	}
 }
 
+// Reproduz o crash real relatado pelo usuário ("não consegui nem acessar
+// a página"): jobs de scan de ANTES da Fase 7 (Orquestração concorrente)
+// guardavam o scanner pedido na chave singular "scanner" (um só, nunca
+// mais de um), não a lista "scanners" de hoje — confirmado contra 3 jobs
+// de verdade deste ambiente (payload tipo
+// {"target":"...","scanner":"trivy"}, sem "scanners" nenhum). Sem
+// nenhum fallback, RequestedScanners chegava nil, virava JSON `null`, e
+// o frontend (que assume sempre lista, nunca null) quebrava com
+// "TypeError: Cannot read properties of null (reading 'join')" — a
+// PÁGINA INTEIRA de /seguranca parava de carregar por causa desses 3
+// jobs antigos, não só o job individual.
+func TestGetScanStatus_LegacySingularScannerPayload_FallsBackCorrectly(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+
+	jobID := uuid.New()
+	const q = `
+		INSERT INTO jobs (id, type, status, attempts, payload, result, correlation_id, created_at, started_at, finished_at)
+		VALUES ($1, $2, 'completed', 1,
+			'{"target":"https://github.com/octocat/Hello-World.git","scanner":"trivy"}',
+			'{"findings_count": 0}',
+			$3, now(), now(), now())
+	`
+	if _, err := pool.Exec(ctx, q, jobID, JobType, uuid.New()); err != nil {
+		t.Fatalf("seed a pre-Fase-7 legacy job: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM jobs WHERE id = $1`, jobID)
+	})
+
+	status, err := svc.GetScanStatus(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetScanStatus on a pre-Fase-7 legacy job: %v", err)
+	}
+	if len(status.RequestedScanners) != 1 || status.RequestedScanners[0] != "trivy" {
+		t.Errorf("RequestedScanners = %v, want [trivy] (from the legacy singular \"scanner\" key)", status.RequestedScanners)
+	}
+	// jobs.result deste job não tem succeeded_scanners/failed_scanners
+	// nenhum (formato ainda mais antigo, só findings_count) — como o
+	// job está completed e nenhuma falha foi registrada, a inferência
+	// correta é que o scanner pedido teve sucesso, não uma lista vazia.
+	if len(status.SucceededScanners) != 1 || status.SucceededScanners[0] != "trivy" {
+		t.Errorf("SucceededScanners = %v, want [trivy] (inferred: completed + no recorded failure)", status.SucceededScanners)
+	}
+}
+
 // A partir daqui: ListRecentFindings (Fase 9 — o feed "achados recentes
 // por severidade" que a UI usa).
 

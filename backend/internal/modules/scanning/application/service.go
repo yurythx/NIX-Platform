@@ -87,6 +87,15 @@ type scanCompletedPayload struct {
 type scanJobPayload struct {
 	Scanners []string `json:"scanners"`
 	Target   string   `json:"target"`
+	// LegacyScanner só existe pra decodificar jobs de ANTES da Fase 7
+	// (Orquestração concorrente): o payload de um job de scan guardava
+	// um scanner só, na chave singular "scanner", não a lista
+	// "scanners" de hoje. Nenhum código novo grava mais nesta chave —
+	// só projectScanStatus lê, como fallback, pra jobs antigos de
+	// verdade que ainda existem neste ambiente não aparecerem com
+	// requested_scanners vazio/nulo (ver TestProjectScanStatus_
+	// LegacySingularScannerPayload_FallsBackCorrectly).
+	LegacyScanner string `json:"scanner,omitempty"`
 }
 
 // jobRefPayload é o corpo do evento EventScanRequested/EventScanFailed —
@@ -302,12 +311,16 @@ func (s *Service) projectScanStatus(ctx context.Context, job *jobs.Job) (*ScanSt
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		return nil, fmt.Errorf("scanning: decode job %s payload: %w", jobID, err)
 	}
+	requestedScanners := payload.Scanners
+	if len(requestedScanners) == 0 && payload.LegacyScanner != "" {
+		requestedScanners = []string{payload.LegacyScanner}
+	}
 
 	status := &ScanStatus{
 		JobID:             job.ID,
 		Status:            string(job.Status),
 		Target:            payload.Target,
-		RequestedScanners: payload.Scanners,
+		RequestedScanners: requestedScanners,
 		Attempts:          job.Attempts,
 		CreatedAt:         job.CreatedAt,
 		StartedAt:         job.StartedAt,
@@ -351,6 +364,19 @@ func (s *Service) projectScanStatus(ctx context.Context, job *jobs.Job) (*ScanSt
 		}
 		status.SucceededScanners = result.SucceededScanners
 		status.FailedScanners = result.FailedScanners
+		if len(status.SucceededScanners) == 0 && len(status.FailedScanners) == 0 && len(requestedScanners) > 0 {
+			// jobs.result de jobs completados ANTES até do formato
+			// legado acima (nem succeeded_scanners nem failed_scanners
+			// gravados — só findings_count, confirmado contra jobs de
+			// verdade deste ambiente) não tem como saber QUAL scanner
+			// teve sucesso a partir do que foi persistido. Mas
+			// status==completed já implica que pelo menos um teve, e
+			// nenhuma falha foi registrada — a inferência mais honesta
+			// é que todo scanner pedido teve sucesso, não deixar a
+			// lista vazia (que a UI leria como "nenhum scanner rodou",
+			// falso pra um job concluído de verdade).
+			status.SucceededScanners = requestedScanners
+		}
 	case jobs.StatusFailed, jobs.StatusDeadLetter:
 		if job.Error != nil && *job.Error != "" {
 			status.FailedScanners = decodeFailures(*job.Error)

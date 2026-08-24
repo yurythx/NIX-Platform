@@ -51,4 +51,21 @@ describe("ScanList", () => {
     render(<ScanList scans={[scan]} />);
     expect(screen.getByText("1 falha(s)")).toBeInTheDocument();
   });
+
+  // Reproduz o crash real relatado pelo usuário ("não consegui nem
+  // acessar a página"): 3 jobs de verdade deste ambiente, de antes da
+  // Fase 7 (Orquestração concorrente), tinham requested_scanners/
+  // failed_scanners nulos no JSON — .join/.length quebravam a página
+  // /seguranca INTEIRA, não só a linha desse job. O backend já foi
+  // corrigido pra nunca mais mandar null (ver transport/dto.go's
+  // nonNilStrings), mas este teste garante que o componente também não
+  // quebra sozinho, caso um payload nulo chegue de outra forma.
+  it("nunca quebra o render quando requested_scanners/failed_scanners vêm nulos", () => {
+    const scan = makeScan();
+    // @ts-expect-error simula o payload real de um job antigo, que o tipo ScanStatus não declara como possível
+    scan.requested_scanners = null;
+    // @ts-expect-error idem
+    scan.failed_scanners = null;
+    expect(() => render(<ScanList scans={[scan]} />)).not.toThrow();
+  });
 });

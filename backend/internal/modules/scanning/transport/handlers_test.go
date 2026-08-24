@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -523,5 +524,36 @@ func TestScanProgressPercent_InProgress_ReflectsFinishedScannerRuns(t *testing.T
 	}
 	if got := toScanStatusResponse(s).ProgressPercent; got != 33 {
 		t.Errorf("ProgressPercent = %d, want 33 (1 of the 3 requested scanners has a terminal status)", got)
+	}
+}
+
+// Reproduz o crash real relatado pelo usuário ("não consegui nem acessar
+// a página"): application.ScanStatus com RequestedScanners/
+// SucceededScanners nil (jobs de scan de antes da Fase 7, sem a chave
+// "scanners" no payload) serializava como JSON `null` pra esses campos —
+// o frontend, que assume sempre lista (nunca null) em todo campo de
+// array desta API, quebrava com "Cannot read properties of null
+// (reading 'join')". toScanStatusResponse precisa SEMPRE devolver `[]`,
+// nunca `null`, pra qualquer campo de lista, mesmo partindo de um
+// application.ScanStatus com slices nil.
+func TestToScanStatusResponse_NeverSerializesNullForListFields(t *testing.T) {
+	s := &application.ScanStatus{
+		Status:            "completed",
+		RequestedScanners: nil,
+		SucceededScanners: nil,
+		FailedScanners:    nil,
+		ScannerRuns:       nil,
+	}
+
+	data, err := json.Marshal(toScanStatusResponse(s))
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	body := string(data)
+	for _, field := range []string{"requested_scanners", "succeeded_scanners", "failed_scanners", "scanner_runs"} {
+		if strings.Contains(body, `"`+field+`":null`) {
+			t.Errorf("response serialized %q as null, want an empty array: %s", field, body)
+		}
 	}
 }

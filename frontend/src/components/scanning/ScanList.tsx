@@ -39,31 +39,38 @@ export function ScanList({ scans }: { scans: ScanStatus[] }) {
 
   return (
     <ul className="flex flex-col divide-y divide-black/5 rounded-lg border border-black/10 dark:divide-white/5 dark:border-white/10">
-      {scans.map((s) => (
-        <li key={s.job_id}>
-          <Link
-            href={`/seguranca/${s.job_id}`}
-            className="flex flex-col gap-1 p-4 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:hover:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-          >
-            <div className="min-w-0">
-              <div className="truncate font-medium text-foreground" title={s.target}>
-                {s.target}
+      {scans.map((s) => {
+        // Defensivo: o backend garante requested_scanners/failed_scanners
+        // como lista (nunca null, ver transport/dto.go's
+        // nonNilStrings), mas alguns jobs de scan de verdade deste
+        // ambiente predatam essa garantia — cai aqui pra nunca quebrar o
+        // render por causa de um job antigo.
+        const requestedScanners = s.requested_scanners ?? [];
+        const failedScanners = s.failed_scanners ?? [];
+        return (
+          <li key={s.job_id}>
+            <Link
+              href={`/seguranca/${s.job_id}`}
+              className="flex flex-col gap-1 p-4 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:hover:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium text-foreground" title={s.target}>
+                  {s.target}
+                </div>
+                <div className="text-xs text-muted">{requestedScanners.join(", ")}</div>
               </div>
-              <div className="text-xs text-muted">{s.requested_scanners.join(", ")}</div>
-            </div>
-            <div className="flex shrink-0 items-center gap-3 text-xs text-muted">
-              {s.status !== "completed" && s.status !== "dead_letter" && (
-                <span>{s.progress_percent}%</span>
-              )}
-              {s.failed_scanners.length > 0 && (
-                <Badge tone="danger">{s.failed_scanners.length} falha(s)</Badge>
-              )}
-              <Badge tone={STATUS_TONE[s.status] ?? "neutral"}>{STATUS_LABEL[s.status] ?? s.status}</Badge>
-              <span className="whitespace-nowrap">{new Date(s.created_at).toLocaleString()}</span>
-            </div>
-          </Link>
-        </li>
-      ))}
+              <div className="flex shrink-0 items-center gap-3 text-xs text-muted">
+                {s.status !== "completed" && s.status !== "dead_letter" && (
+                  <span>{s.progress_percent}%</span>
+                )}
+                {failedScanners.length > 0 && <Badge tone="danger">{failedScanners.length} falha(s)</Badge>}
+                <Badge tone={STATUS_TONE[s.status] ?? "neutral"}>{STATUS_LABEL[s.status] ?? s.status}</Badge>
+                <span className="whitespace-nowrap">{new Date(s.created_at).toLocaleString()}</span>
+              </div>
+            </Link>
+          </li>
+        );
+      })}
     </ul>
   );
 }

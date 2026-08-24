@@ -53,7 +53,7 @@ export default async function ScanDetailPage({
         </Link>
         <h1 className="mt-1 break-all text-xl font-semibold">{status.target}</h1>
         <p className="text-sm text-muted">
-          Disparado em {new Date(status.created_at).toLocaleString()} — {status.requested_scanners.join(", ")}
+          Disparado em {new Date(status.created_at).toLocaleString()} — {(status.requested_scanners ?? []).join(", ")}
         </p>
       </div>
 

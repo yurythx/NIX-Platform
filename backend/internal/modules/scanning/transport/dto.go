@@ -205,13 +205,29 @@ type ScanStatusResponse struct {
 	FinishedAt        *time.Time               `json:"finished_at,omitempty"`
 }
 
+// nonNilStrings garante que o campo nunca serializa como JSON `null` —
+// um []string zero-valor (nil) do Go vira `null` em JSON por padrão, não
+// `[]`, e um cliente HTTP que assume (corretamente, pelo contrato desta
+// API) que um campo de lista SEMPRE é uma lista quebraria em `null`. Bug
+// real: jobs de scan de antes da Fase 7 (Orquestração concorrente) têm
+// um payload sem a chave "scanners" — s.RequestedScanners chegava nil
+// aqui, `/seguranca` inteira parava de carregar (TypeError: Cannot read
+// properties of null (reading 'join')) por causa de 3 jobs antigos de
+// verdade neste ambiente.
+func nonNilStrings(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
+}
+
 func toScanStatusResponse(s *application.ScanStatus) ScanStatusResponse {
 	return ScanStatusResponse{
 		JobID:             s.JobID.String(),
 		Status:            s.Status,
 		Target:            s.Target,
-		RequestedScanners: s.RequestedScanners,
-		SucceededScanners: s.SucceededScanners,
+		RequestedScanners: nonNilStrings(s.RequestedScanners),
+		SucceededScanners: nonNilStrings(s.SucceededScanners),
 		FailedScanners:    toScannerFailureResponses(s.FailedScanners),
 		ScannerRuns:       toScannerRunResponses(s.ScannerRuns),
 		ProgressPercent:   scanProgressPercent(s),
