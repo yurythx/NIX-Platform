@@ -1,8 +1,8 @@
 // Package application implementa os casos de uso do módulo scanning:
-// rodar um CodeScanner registrado contra um alvo e persistir os achados,
-// tanto de forma síncrona (RunScan) quanto assíncrona via o padrão
-// job+outbox+worker (CreateScanJob/ProcessScanJob/HandleScanDeadLetter) já
-// estabelecido por diario_oficial.Service.
+// rodar um ou mais CodeScanner registrados contra um alvo e persistir os
+// achados, tanto de forma síncrona (RunScan) quanto assíncrona via o
+// padrão job+outbox+worker (CreateScanJob/ProcessScanJob/
+// HandleScanDeadLetter) já estabelecido por diario_oficial.Service.
 //
 // Fase 1 do roadmap de segurança (docs/roadmap-secops-orchestrator.md) só
 // construiu a fundação síncrona — sem nenhum scanner real registrado e sem
@@ -16,6 +16,10 @@
 // requisição original. RunScan continua existindo, síncrono, como o modo
 // de chamar um scanner diretamente sem depender de fila nenhuma — útil
 // para testes e para uma futura execução agendada que já roda no worker.
+//
+// Fase 7 (Orquestração concorrente) adicionou a capacidade de um único
+// job rodar VÁRIOS scanners em paralelo contra o mesmo alvo — ver
+// runConcurrently/ProcessScanJob.
 package application
 
 import (
@@ -23,6 +27,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -38,20 +44,20 @@ import (
 
 const (
 	// JobType identifica todo job assíncrono deste módulo em jobs.Job.Type
-	// — um único tipo cobre qualquer scanner registrado (o scanner de fato
-	// executado vive no payload do job, não no tipo), então adicionar um
-	// scanner novo nunca exige um JobType novo.
+	// — um único tipo cobre qualquer combinação de scanners registrados (a
+	// lista de fato executada vive no payload do job, não no tipo), então
+	// adicionar um scanner novo nunca exige um JobType novo.
 	JobType = "scanning.scan"
 
 	// EventScanRequested dispara ProcessScanJob no worker — o mesmo papel
 	// que diario_oficial.job.created tem para aquele módulo.
 	EventScanRequested = "scanning.scan.requested"
 
-	// EventScanCompleted é publicado toda vez que um scan termina com
-	// sucesso, com ou sem achados — tanto pelo caminho síncrono (RunScan)
-	// quanto pelo assíncrono (ProcessScanJob). Quem consumir este evento
-	// (hoje: só o WebSocket de notificação) decide se achados
-	// CRITICAL/HIGH merecem alguma reação adicional.
+	// EventScanCompleted é publicado toda vez que um scan termina com pelo
+	// menos um scanner bem-sucedido, com ou sem achados — tanto pelo
+	// caminho síncrono (RunScan) quanto pelo assíncrono (ProcessScanJob).
+	// Quem consumir este evento (hoje: só o WebSocket de notificação)
+	// decide se achados CRITICAL/HIGH merecem alguma reação adicional.
 	EventScanCompleted = "scanning.scan.completed"
 
 	// EventScanFailed é publicado só quando o RabbitMQ já esgotou os
@@ -64,19 +70,21 @@ const (
 // scanCompletedPayload é o corpo do evento EventScanCompleted — só o
 // necessário para localizar a execução, não os achados inteiros (esses
 // vivem em scan_findings, consultáveis por scan_id via ListFindings).
+// Scanners lista só os que tiveram sucesso — os que falharam (se algum) só
+// aparecem nos metadados de auditoria, não neste evento.
 type scanCompletedPayload struct {
 	ScanID        uuid.UUID `json:"scan_id"`
-	Scanner       string    `json:"scanner"`
+	Scanners      []string  `json:"scanners"`
 	Target        string    `json:"target"`
 	FindingsCount int       `json:"findings_count"`
 }
 
 // scanJobPayload é o corpo persistido em jobs.Job.Payload para um job de
-// scan — o scanner e o alvo que ProcessScanJob precisa pra saber o que
-// executar quando o worker pegar o evento EventScanRequested.
+// scan — a lista de scanners e o alvo que ProcessScanJob precisa pra saber
+// o que executar quando o worker pegar o evento EventScanRequested.
 type scanJobPayload struct {
-	Scanner string `json:"scanner"`
-	Target  string `json:"target"`
+	Scanners []string `json:"scanners"`
+	Target   string   `json:"target"`
 }
 
 // jobRefPayload é o corpo do evento EventScanRequested/EventScanFailed —
@@ -139,11 +147,15 @@ func NewService(
 // persiste os achados e o evento EventScanCompleted atomicamente, e
 // retorna os achados encontrados. Bloqueia até o scanner terminar — para
 // um scanner potencialmente lento chamado a partir de HTTP, prefira
-// CreateScanJob. requestedBy é opcional (nil para execuções sem um
-// usuário autenticado por trás). scanID retornado é o mesmo usado para
-// consultar depois via ListFindings — RunScan gera um novo a cada
-// chamada, já que (ao contrário de CreateScanJob/ProcessScanJob) não há
-// nenhum jobID pré-existente para reaproveitar.
+// CreateScanJob (que também roda vários scanners em paralelo, ver
+// ProcessScanJob; RunScan continua limitado a um só, já que quem chama
+// direto — testes, uma futura execução agendada — controla exatamente
+// qual scanner quer, sem precisar do desenho de job/orquestração).
+// requestedBy é opcional (nil para execuções sem um usuário autenticado
+// por trás). scanID retornado é o mesmo usado para consultar depois via
+// ListFindings — RunScan gera um novo a cada chamada, já que (ao
+// contrário de CreateScanJob/ProcessScanJob) não há nenhum jobID
+// pré-existente para reaproveitar.
 func (s *Service) RunScan(ctx context.Context, scannerName, target string, correlationID uuid.UUID, requestedBy *uuid.UUID) (scanID uuid.UUID, findings []domain.Finding, err error) {
 	scanner, ok := s.scanners[scannerName]
 	if !ok {
@@ -156,7 +168,8 @@ func (s *Service) RunScan(ctx context.Context, scannerName, target string, corre
 	}
 
 	scanID = uuid.New()
-	if err := s.persistCompletion(ctx, scanID, scannerName, target, correlationID, findings); err != nil {
+	outcome := scannerOutcome{scanner: scannerName, findings: findings}
+	if err := s.persistCompletion(ctx, scanID, target, correlationID, []scannerOutcome{outcome}); err != nil {
 		return uuid.Nil, nil, err
 	}
 
@@ -167,23 +180,46 @@ func (s *Service) RunScan(ctx context.Context, scannerName, target string, corre
 			ResourceType:  "scan",
 			ResourceID:    scanID.String(),
 			CorrelationID: &correlationID,
-			Metadata:      map[string]any{"scanner": scannerName, "target": target, "findings_count": len(findings)},
+			Metadata:      map[string]any{"scanners": []string{scannerName}, "target": target, "findings_count": len(findings)},
 		})
 	}
 
 	return scanID, findings, nil
 }
 
-// persistCompletion grava os achados de scanID + o evento
-// EventScanCompleted numa única transação, e loga o resultado — o miolo
+// scannerOutcome é o resultado da execução de um scanner contra um alvo —
+// exatamente um erro OU achados (nunca os dois), usado tanto pelo caminho
+// síncrono (RunScan, sempre uma lista de um) quanto pelo assíncrono
+// (ProcessScanJob via runConcurrently, uma lista de N).
+type scannerOutcome struct {
+	scanner  string
+	findings []domain.Finding
+	err      error
+}
+
+// persistCompletion grava os achados de todo scanner bem-sucedido em
+// outcomes (os que falharam são pulados — sem achado nenhum pra gravar) +
+// o evento EventScanCompleted, tudo numa única transação — o miolo
 // compartilhado entre RunScan e ProcessScanJob, para as duas nunca
-// divergirem em como um scan concluído é registrado.
-func (s *Service) persistCompletion(ctx context.Context, scanID uuid.UUID, scannerName, target string, correlationID uuid.UUID, findings []domain.Finding) error {
+// divergirem em como um scan concluído é registrado. Não é chamado se
+// TODOS os scanners de outcomes falharam (ver ProcessScanJob) — gravar um
+// EventScanCompleted sem nenhum sucesso seria enganoso.
+func (s *Service) persistCompletion(ctx context.Context, scanID uuid.UUID, target string, correlationID uuid.UUID, outcomes []scannerOutcome) error {
+	var succeededNames []string
+	totalFindings := 0
+
 	err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
-		if err := s.repo.SaveFindings(ctx, tx, scanID, scannerName, target, findings); err != nil {
-			return err
+		for _, o := range outcomes {
+			if o.err != nil {
+				continue
+			}
+			if err := s.repo.SaveFindings(ctx, tx, scanID, o.scanner, target, o.findings); err != nil {
+				return err
+			}
+			succeededNames = append(succeededNames, o.scanner)
+			totalFindings += len(o.findings)
 		}
-		payload := scanCompletedPayload{ScanID: scanID, Scanner: scannerName, Target: target, FindingsCount: len(findings)}
+		payload := scanCompletedPayload{ScanID: scanID, Scanners: succeededNames, Target: target, FindingsCount: totalFindings}
 		return s.outboxWriter.Write(ctx, tx, EventScanCompleted, "scan", scanID.String(), correlationID, payload)
 	})
 	if err != nil {
@@ -191,8 +227,8 @@ func (s *Service) persistCompletion(ctx context.Context, scanID uuid.UUID, scann
 	}
 
 	s.logger.Info("scanning: scan completed",
-		slog.String("scan_id", scanID.String()), slog.String("scanner", scannerName),
-		slog.String("target", target), slog.Int("findings", len(findings)))
+		slog.String("scan_id", scanID.String()), slog.Any("scanners", succeededNames),
+		slog.String("target", target), slog.Int("findings", totalFindings))
 	return nil
 }
 
@@ -207,21 +243,32 @@ func (s *Service) ListFindings(ctx context.Context, scanID uuid.UUID) ([]domain.
 }
 
 // CreateScanJob implementa o "Commit" do fluxo assíncrono (mesmo desenho
-// de diario_oficial.Service.CreateTestJob): valida que scannerName está
-// registrado, cria o job e seu evento de outbox disparador atomicamente,
-// e retorna — quem chama (o transport) responde 202. O ID do job também é
-// o scan_id usado depois em ListFindings, para que o cliente HTTP consiga
-// consultar os achados com o mesmo ID que recebeu na criação, sem
-// precisar de um passo extra pra descobrir o scan_id.
-func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, scannerName, target string, requestedBy *uuid.UUID) (*jobs.Job, error) {
-	if _, ok := s.scanners[scannerName]; !ok {
-		return nil, apperrors.NotFound(fmt.Sprintf("scanner %q not registered", scannerName))
+// de diario_oficial.Service.CreateTestJob): valida que todo nome em
+// scannerNames está registrado, cria o job e seu evento de outbox
+// disparador atomicamente, e retorna — quem chama (o transport) responde
+// 202. Passar mais de um nome é a Fase 7 (Orquestração concorrente): os
+// scanners rodam em paralelo no worker (ver ProcessScanJob), não em
+// sequência. O ID do job também é o scan_id usado depois em ListFindings,
+// para que o cliente HTTP consiga consultar os achados de TODOS os
+// scanners pedidos com o mesmo ID que recebeu na criação.
+func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, scannerNames []string, target string, requestedBy *uuid.UUID) (*jobs.Job, error) {
+	if len(scannerNames) == 0 {
+		return nil, apperrors.Validation("at least one scanner is required")
 	}
 	if target == "" {
 		return nil, apperrors.Validation("target is required")
 	}
+	var unknown []string
+	for _, name := range scannerNames {
+		if _, ok := s.scanners[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, apperrors.NotFound(fmt.Sprintf("scanner(s) not registered: %s", strings.Join(unknown, ", ")))
+	}
 
-	job, err := jobs.New(JobType, correlationID, scanJobPayload{Scanner: scannerName, Target: target})
+	job, err := jobs.New(JobType, correlationID, scanJobPayload{Scanners: scannerNames, Target: target})
 	if err != nil {
 		return nil, fmt.Errorf("scanning: build job: %w", err)
 	}
@@ -243,11 +290,79 @@ func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, sc
 			ResourceType:  "job",
 			ResourceID:    job.ID.String(),
 			CorrelationID: &correlationID,
-			Metadata:      map[string]any{"scanner": scannerName, "target": target},
+			Metadata:      map[string]any{"scanners": scannerNames, "target": target},
 		})
 	}
 
 	return job, nil
+}
+
+// runConcurrently executa cada scanner em scannerNames contra target em
+// paralelo (Fase 7 do roadmap — Orquestração concorrente), retornando o
+// resultado de cada um na mesma ordem de scannerNames.
+//
+// O roadmap descreve isto como "goroutines + errgroup" — usa goroutines
+// puras + sync.WaitGroup aqui, deliberadamente sem o pacote errgroup: o
+// comportamento padrão de errgroup.Group.WithContext cancela o ctx do
+// grupo inteiro assim que o primeiro Go() retorna erro, exatamente o
+// oposto do que esta fase pede ("cancelando um scanner que trava sem
+// derrubar os outros"). Evitar errgroup.WithContext aqui não é
+// cosmético: é o que garante essa independência. Cada scanner já limita
+// seu próprio tempo de execução por dentro (CloneTimeout do git,
+// SonarQubeAnalysisTimeout, ZapScanTimeout, ...) — não precisa de mais um
+// nível de timeout aqui, só isolamento: a falha ou lentidão de um nunca
+// afeta os demais, porque cada goroutine roda de forma completamente
+// independente e nenhuma jamais cancela o contexto de outra.
+func (s *Service) runConcurrently(ctx context.Context, scannerNames []string, target string) []scannerOutcome {
+	outcomes := make([]scannerOutcome, len(scannerNames))
+	var wg sync.WaitGroup
+	for i, name := range scannerNames {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			scanner, ok := s.scanners[name]
+			if !ok {
+				// Defensivo: CreateScanJob já validou isto na criação do
+				// job, mas um scanner poderia ter sido desregistrado
+				// entre a criação e o processamento (ex.: um deploy). Não
+				// é uma falha transitória do próprio scanner, mas ainda
+				// assim é só a falha DESTE scanner — os demais continuam.
+				outcomes[i] = scannerOutcome{scanner: name, err: fmt.Errorf("scanner %q not registered", name)}
+				return
+			}
+			findings, err := scanner.Execute(ctx, target)
+			outcomes[i] = scannerOutcome{scanner: name, findings: findings, err: err}
+		}(i, name)
+	}
+	wg.Wait()
+	return outcomes
+}
+
+func splitOutcomes(outcomes []scannerOutcome) (succeeded, failed []scannerOutcome) {
+	for _, o := range outcomes {
+		if o.err != nil {
+			failed = append(failed, o)
+		} else {
+			succeeded = append(succeeded, o)
+		}
+	}
+	return succeeded, failed
+}
+
+func outcomeNames(outcomes []scannerOutcome) []string {
+	names := make([]string, len(outcomes))
+	for i, o := range outcomes {
+		names[i] = o.scanner
+	}
+	return names
+}
+
+func summarizeFailures(failed []scannerOutcome) string {
+	parts := make([]string, len(failed))
+	for i, o := range failed {
+		parts[i] = fmt.Sprintf("%s: %v", o.scanner, o.err)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // ProcessScanJob implementa a execução do lado do worker (mesmo desenho
@@ -257,6 +372,16 @@ func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, sc
 // próprio jobID — não um uuid.New() separado — para que o cliente HTTP
 // consiga consultar ListFindings com o mesmo ID recebido de
 // CreateScanJob.
+//
+// Todo scanner do payload roda em paralelo (runConcurrently, Fase 7).
+// Falha parcial (alguns scanners tiveram sucesso, outros não) marca o job
+// como concluído, não como falho — reprocessar o job inteiro numa
+// redelivery re-executaria também os scanners que JÁ tiveram sucesso,
+// arriscando achados duplicados gravados sob o mesmo scan_id; o(s)
+// scanner(s) que falhou(aram) fica(m) registrado(s) no resultado do job e
+// nos metadados de auditoria, não silenciosamente perdido(s). Só quando
+// TODOS os scanners falham o job inteiro é marcado como falho, pra ser
+// reprocessado (mesma semântica de retry de antes desta fase).
 func (s *Service) ProcessScanJob(ctx context.Context, jobID uuid.UUID, correlationID uuid.UUID) error {
 	current, err := s.jobsRepo.GetByID(ctx, jobID)
 	if err != nil {
@@ -273,58 +398,57 @@ func (s *Service) ProcessScanJob(ctx context.Context, jobID uuid.UUID, correlati
 		return fmt.Errorf("scanning: decode job %s payload: %w", jobID, err)
 	}
 
-	scanner, ok := s.scanners[payload.Scanner]
-	if !ok {
-		// Não é uma falha transitória (o registro de scanners não muda
-		// entre uma tentativa e a próxima dentro do mesmo deploy) — marca
-		// como falho definitivamente em vez de deixar o RabbitMQ
-		// reentregar até esgotar os retries à toa.
-		txErr := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
-			if err := s.jobsRepo.MarkProcessing(ctx, tx, jobID); err != nil {
-				return err
-			}
-			return s.jobsRepo.MarkFailed(ctx, tx, jobID, fmt.Sprintf("scanner %q not registered", payload.Scanner))
-		})
-		if txErr != nil {
-			return fmt.Errorf("scanning: record unregistered scanner outcome: %w", txErr)
-		}
-		s.logger.Error("scanning: job references an unregistered scanner", slog.String("job_id", jobID.String()), slog.String("scanner", payload.Scanner))
-		return nil
-	}
-
-	findings, execErr := scanner.Execute(ctx, payload.Target)
+	outcomes := s.runConcurrently(ctx, payload.Scanners, payload.Target)
+	succeeded, failed := splitOutcomes(outcomes)
 
 	txErr := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		if err := s.jobsRepo.MarkProcessing(ctx, tx, jobID); err != nil {
 			return err
 		}
-		if execErr != nil {
-			return s.jobsRepo.MarkFailed(ctx, tx, jobID, execErr.Error())
+		if len(succeeded) == 0 {
+			return s.jobsRepo.MarkFailed(ctx, tx, jobID, summarizeFailures(failed))
 		}
 		return s.jobsRepo.MarkCompleted(ctx, tx, jobID, struct {
-			FindingsCount int `json:"findings_count"`
-		}{FindingsCount: len(findings)})
+			SucceededScanners []string `json:"succeeded_scanners"`
+			FailedScanners    []string `json:"failed_scanners,omitempty"`
+		}{SucceededScanners: outcomeNames(succeeded), FailedScanners: outcomeNames(failed)})
 	})
 	if txErr != nil {
 		return fmt.Errorf("scanning: record processing outcome: %w", txErr)
 	}
 
-	if execErr != nil {
-		s.logger.Warn("scanning: scan failed, will retry", slog.String("job_id", jobID.String()), slog.Any("error", execErr))
-		return execErr
+	if len(succeeded) == 0 {
+		s.logger.Warn("scanning: all scanners failed, will retry",
+			slog.String("job_id", jobID.String()), slog.String("errors", summarizeFailures(failed)))
+		return fmt.Errorf("scanning: all scanners failed: %s", summarizeFailures(failed))
 	}
 
-	if err := s.persistCompletion(ctx, jobID, payload.Scanner, payload.Target, correlationID, findings); err != nil {
+	if err := s.persistCompletion(ctx, jobID, payload.Target, correlationID, outcomes); err != nil {
 		return err
 	}
 
+	if len(failed) > 0 {
+		s.logger.Warn("scanning: job completed with partial failure",
+			slog.String("job_id", jobID.String()), slog.Any("succeeded", outcomeNames(succeeded)),
+			slog.String("failed", summarizeFailures(failed)))
+	}
+
 	if s.audit != nil {
+		totalFindings := 0
+		for _, o := range succeeded {
+			totalFindings += len(o.findings)
+		}
 		_ = s.audit.Record(ctx, audit.Entry{
 			Action:        audit.ActionScanCompleted,
 			ResourceType:  "scan",
 			ResourceID:    jobID.String(),
 			CorrelationID: &correlationID,
-			Metadata:      map[string]any{"scanner": payload.Scanner, "target": payload.Target, "findings_count": len(findings)},
+			Metadata: map[string]any{
+				"scanners":        outcomeNames(succeeded),
+				"failed_scanners": outcomeNames(failed),
+				"target":          payload.Target,
+				"findings_count":  totalFindings,
+			},
 		})
 	}
 	return nil

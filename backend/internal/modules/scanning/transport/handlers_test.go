@@ -79,7 +79,7 @@ func TestCreateScan_ValidRequest_Returns202(t *testing.T) {
 	pool := testPool(t)
 	h := NewHandlers(newTestService(pool, &fakeScanner{name: "trivy"}), testLogger())
 
-	body, _ := json.Marshal(createScanRequest{Scanner: "trivy", Target: "https://example.com/repo.git"})
+	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy"}, Target: "https://example.com/repo.git"})
 	r := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
@@ -101,7 +101,7 @@ func TestCreateScan_UnknownScanner_Returns404(t *testing.T) {
 	pool := testPool(t)
 	h := NewHandlers(newTestService(pool), testLogger()) // nenhum scanner registrado
 
-	body, _ := json.Marshal(createScanRequest{Scanner: "does-not-exist", Target: "https://example.com/repo.git"})
+	body, _ := json.Marshal(createScanRequest{Scanners: []string{"does-not-exist"}, Target: "https://example.com/repo.git"})
 	r := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
@@ -109,6 +109,45 @@ func TestCreateScan_UnknownScanner_Returns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestCreateScan_MultipleScanners_RunConcurrentlyAndAggregateFindings(t *testing.T) {
+	pool := testPool(t)
+	trivy := &fakeScanner{name: "trivy", findings: []domain.Finding{{ID: "CVE-1", Severity: domain.SeverityHigh, Description: "trivy achou algo"}}}
+	semgrep := &fakeScanner{name: "semgrep", findings: []domain.Finding{{ID: "rule-1", Severity: domain.SeverityMedium, Description: "semgrep achou algo"}}}
+	svc := newTestService(pool, trivy, semgrep)
+	h := NewHandlers(svc, testLogger())
+
+	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy", "semgrep"}, Target: "https://example.com/repo.git"})
+	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
+	createRec := httptest.NewRecorder()
+	h.CreateScan(createRec, createReq)
+	if createRec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body=%s", createRec.Code, createRec.Body.String())
+	}
+	job := decodeEnvelope[scanJobResponse](t, createRec.Body.Bytes())
+
+	jobID, err := uuid.Parse(job.JobID)
+	if err != nil {
+		t.Fatalf("parse job id: %v", err)
+	}
+	if err := svc.ProcessScanJob(context.Background(), jobID, uuid.New()); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/scans/"+job.JobID+"/findings", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("scanID", job.JobID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.ListFindings(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"scanner":"trivy"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"scanner":"semgrep"`)) {
+		t.Errorf("response should contain findings from both scanners, got: %s", rec.Body.String())
 	}
 }
 
@@ -137,7 +176,7 @@ func TestListFindings_KnownScan_ReturnsSnakeCaseFields(t *testing.T) {
 	svc := newTestService(pool, scanner)
 	h := NewHandlers(svc, testLogger())
 
-	body, _ := json.Marshal(createScanRequest{Scanner: "trivy", Target: "https://example.com/repo.git"})
+	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy"}, Target: "https://example.com/repo.git"})
 	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
 	createRec := httptest.NewRecorder()
 	h.CreateScan(createRec, createReq)

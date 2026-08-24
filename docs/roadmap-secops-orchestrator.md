@@ -1,10 +1,9 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
-- **Status:** Fase 1 (Fundação), Fase 3 (Trivy), Fase 4 (Semgrep), Fase 5 (SonarQube) e Fase 6
-  (OWASP ZAP) implementadas — ver detalhes na seção "Fases" abaixo. Todas as fases propostas estão
-  concluídas ou puladas por decisão explícita: Fase 2 (TruffleHog) foi pulada por redundância com
-  o gitleaks já no CI. Fases 7-9 (orquestração concorrente, CLI/CI unificado, UI no frontend) são
-  refinamentos sobre o que já existe, não scanners novos — seguem como planejamento futuro.
+- **Status:** Fase 1 (Fundação), Fase 3 (Trivy), Fase 4 (Semgrep), Fase 5 (SonarQube), Fase 6
+  (OWASP ZAP) e Fase 7 (Orquestração concorrente) implementadas — ver detalhes na seção "Fases"
+  abaixo. Fase 2 (TruffleHog) foi pulada por redundância com o gitleaks já no CI. Fases 8-9
+  (CLI/CI unificado, UI no frontend) seguem como planejamento futuro.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -290,10 +289,32 @@ ferramentas estarem prontas para gerar valor.
   ataques). Ao contrário de trivy/semgrep/sonar-scanner (processos rodados dentro do worker), o ZAP
   roda como um serviço de vida longa; o worker fala com a API dele via HTTP.
 
-**Fase 7 — Orquestração concorrente**
-- Rodar scanners independentes em paralelo via goroutines + `errgroup`, com timeout por
-  `context.Context` cancelando um scanner que trava sem derrubar os outros — o mesmo raciocínio
-  que já rege o circuit breaker existente, estendido para paralelismo.
+**Fase 7 — Orquestração concorrente — ✅ implementada**
+- `POST /api/v1/scanning/scans` aceita `scanners` como uma **lista**, não mais um único nome — pedir
+  mais de um (ex.: `["trivy","semgrep","sonarqube"]`) dispara todos em paralelo contra o mesmo
+  alvo, sob o mesmo job/`scan_id`. Achados de todos os scanners bem-sucedidos ficam consultáveis
+  juntos via `GET /api/v1/scanning/scans/{scanID}/findings`, cada um com seu próprio `scanner` no
+  achado (já existia essa coluna — nenhuma migration nova precisou entrar).
+- **Desvio deliberado do texto literal do roadmap**: `ProcessScanJob` usa `goroutines` +
+  `sync.WaitGroup`, não o pacote `errgroup` como o texto original sugeria. Motivo: o comportamento
+  padrão de `errgroup.Group.WithContext` cancela o contexto do grupo INTEIRO assim que o primeiro
+  `Go()` retorna erro — exatamente o oposto do que esta fase pede ("cancelando um scanner que trava
+  sem derrubar os outros"). Evitar esse cancelamento cruzado não é cosmético, é o que garante a
+  independência entre scanners. Cada scanner já limita seu próprio tempo de execução por dentro
+  (`CloneTimeout`, `SonarQubeAnalysisTimeout`, `ZapScanTimeout`) — não precisava de mais um nível de
+  timeout aqui.
+- **Falha parcial não é reprocessada**: se `N-1` de `N` scanners tiverem sucesso, o job é marcado
+  `completed` (não `failed`) — reprocessar o job inteiro numa redelivery do RabbitMQ re-executaria
+  também os scanners que JÁ tiveram sucesso, arriscando achados duplicados gravados sob o mesmo
+  `scan_id`. O(s) scanner(s) que falhou(aram) fica(m) registrado(s) no `result` do job e nos
+  metadados de auditoria (`failed_scanners`), nunca silenciosamente perdido(s). Só quando TODOS os
+  scanners de um job falham é que o job inteiro é marcado `failed` para retry — mesma semântica de
+  antes desta fase, agora generalizada pra N scanners em vez de 1.
+- Testado com um scanner que bloqueia deliberadamente (prova de paralelismo real, não só "roda sem
+  erro"), sucesso total, falha parcial (achados do scanner bem-sucedido persistidos, nada do que
+  falhou) e falha total (job marcado pra retry) — `application/service_test.go`, mais um teste de
+  ponta a ponta na camada de transporte confirmando os dois `scanner` distintos aparecendo juntos
+  na resposta HTTP.
 
 **Fase 8 — CLI + CI/CD**
 - Um subcomando novo (`cmd/secscan`, mesmo padrão de `cmd/api`/`cmd/worker`) chamável como

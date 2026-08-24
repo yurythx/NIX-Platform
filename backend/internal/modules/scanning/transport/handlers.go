@@ -2,7 +2,8 @@
 // disparar um scan assíncrono (POST) e consultar seus achados (GET). Nunca
 // executa um CodeScanner diretamente — CreateScanJob só cria o job e seu
 // evento de outbox disparador; a execução de fato acontece no worker (ver
-// scanning/worker).
+// scanning/worker), rodando todo scanner pedido em paralelo (Fase 7 —
+// Orquestração concorrente).
 package transport
 
 import (
@@ -29,9 +30,11 @@ func NewHandlers(service *application.Service, logger *slog.Logger) *Handlers {
 	return &Handlers{service: service, logger: logger}
 }
 
+// createScanRequest aceita um ou mais scanners — mais de um dispara todos
+// em paralelo contra o mesmo alvo, sob o mesmo job/scan_id (Fase 7).
 type createScanRequest struct {
-	Scanner string `json:"scanner"`
-	Target  string `json:"target"`
+	Scanners []string `json:"scanners"`
+	Target   string   `json:"target"`
 }
 
 type scanJobResponse struct {
@@ -60,7 +63,7 @@ func (h *Handlers) CreateScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	job, err := h.service.CreateScanJob(r.Context(), correlationID, req.Scanner, req.Target, requestedBy)
+	job, err := h.service.CreateScanJob(r.Context(), correlationID, req.Scanners, req.Target, requestedBy)
 	if err != nil {
 		httputil.WriteError(w, r, h.logger, err)
 		return

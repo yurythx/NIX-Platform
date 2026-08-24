@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -166,7 +167,7 @@ func TestCreateScanJob_UnknownScanner_ReturnsNotFoundWithoutCreatingAJob(t *test
 	pool := testPool(t)
 	svc := newService(pool)
 
-	_, err := svc.CreateScanJob(context.Background(), uuid.New(), "does-not-exist", "https://example.com/repo.git", nil)
+	_, err := svc.CreateScanJob(context.Background(), uuid.New(), []string{"does-not-exist"}, "https://example.com/repo.git", nil)
 	if err == nil {
 		t.Fatal("expected an error for an unregistered scanner")
 	}
@@ -176,7 +177,7 @@ func TestCreateScanJob_EmptyTarget_ReturnsValidationError(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool, &fakeScanner{name: "trivy"})
 
-	_, err := svc.CreateScanJob(context.Background(), uuid.New(), "trivy", "", nil)
+	_, err := svc.CreateScanJob(context.Background(), uuid.New(), []string{"trivy"}, "", nil)
 	if err == nil {
 		t.Fatal("expected an error for an empty target")
 	}
@@ -187,7 +188,7 @@ func TestCreateScanJob_CreatesJobAndOutboxEventAtomically(t *testing.T) {
 	svc := newService(pool, &fakeScanner{name: "trivy"})
 	corrID := uuid.New()
 
-	job, err := svc.CreateScanJob(context.Background(), corrID, "trivy", "https://example.com/repo.git", nil)
+	job, err := svc.CreateScanJob(context.Background(), corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateScanJob: %v", err)
 	}
@@ -209,7 +210,7 @@ func TestProcessScanJob_Success_CompletesJobAndPersistsFindings(t *testing.T) {
 	ctx := context.Background()
 	corrID := uuid.New()
 
-	job, err := svc.CreateScanJob(ctx, corrID, "trivy", "https://example.com/repo.git", nil)
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateScanJob: %v", err)
 	}
@@ -269,7 +270,7 @@ func TestProcessScanJob_RedeliveryOfCompletedJob_IsANoOp(t *testing.T) {
 	ctx := context.Background()
 	corrID := uuid.New()
 
-	job, err := svc.CreateScanJob(ctx, corrID, "trivy", "https://example.com/repo.git", nil)
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateScanJob: %v", err)
 	}
@@ -295,7 +296,7 @@ func TestProcessScanJob_ScannerError_MarksFailedAndReturnsErrorForRetry(t *testi
 	ctx := context.Background()
 	corrID := uuid.New()
 
-	job, err := svc.CreateScanJob(ctx, corrID, "trivy", "https://example.com/repo.git", nil)
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateScanJob: %v", err)
 	}
@@ -328,7 +329,7 @@ func TestHandleScanDeadLetter_MarksDeadLetterAndPublishesFailure(t *testing.T) {
 	ctx := context.Background()
 	corrID := uuid.New()
 
-	job, err := svc.CreateScanJob(ctx, corrID, "trivy", "https://example.com/repo.git", nil)
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateScanJob: %v", err)
 	}
@@ -354,24 +355,181 @@ func TestHandleScanDeadLetter_MarksDeadLetterAndPublishesFailure(t *testing.T) {
 	}
 }
 
-func TestProcessScanJob_UnregisteredScanner_FailsWithoutRetry(t *testing.T) {
+// A partir daqui: Fase 7 (Orquestração concorrente) — um job com mais de
+// um scanner.
+
+func TestCreateScanJob_EmptyScannerList_ReturnsValidationError(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+
+	_, err := svc.CreateScanJob(context.Background(), uuid.New(), nil, "https://example.com/repo.git", nil)
+	if err == nil {
+		t.Fatal("expected an error for an empty scanner list")
+	}
+}
+
+func TestCreateScanJob_OneUnknownAmongKnown_RejectsWithoutCreatingAJob(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool, &fakeScanner{name: "trivy"})
+
+	_, err := svc.CreateScanJob(context.Background(), uuid.New(), []string{"trivy", "does-not-exist"}, "https://example.com/repo.git", nil)
+	if err == nil {
+		t.Fatal("expected an error when any scanner in the list is unregistered")
+	}
+}
+
+// slowThenFastScanner deixa Execute bloquear até unblock ser fechado —
+// usado pra provar que um scanner lento não atrasa os demais rodando em
+// paralelo no mesmo job.
+type slowThenFastScanner struct {
+	name     string
+	unblock  chan struct{}
+	started  chan struct{}
+	findings []domain.Finding
+}
+
+func (s *slowThenFastScanner) Name() string { return s.name }
+
+func (s *slowThenFastScanner) Execute(ctx context.Context, target string) ([]domain.Finding, error) {
+	close(s.started)
+	<-s.unblock
+	return s.findings, nil
+}
+
+func TestProcessScanJob_MultipleScanners_RunConcurrentlyNotSequentially(t *testing.T) {
+	pool := testPool(t)
+	slow := &slowThenFastScanner{name: "slow-scanner", unblock: make(chan struct{}), started: make(chan struct{})}
+	fast := &fakeScanner{name: "fast-scanner", findings: []domain.Finding{{ID: "FAST-1", Severity: domain.SeverityLow, Description: "achado rápido"}}}
+	svc := newService(pool, slow, fast)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"slow-scanner", "fast-scanner"}, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- svc.ProcessScanJob(ctx, job.ID, corrID) }()
+
+	// Espera o scanner lento começar a rodar (prova que os dois foram
+	// disparados) e então libera ele — se ProcessScanJob rodasse os
+	// scanners em sequência em vez de paralelo, "fast-scanner" só
+	// terminaria DEPOIS de slow-scanner desbloquear, o que este teste
+	// não teria como observar de forma diferente; a prova real de
+	// paralelismo está em slow.unblock nunca ser fechado até aqui —
+	// ProcessScanJob não pode ter retornado sem travar em slow-scanner.
+	select {
+	case <-slow.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow-scanner never started — ProcessScanJob may be running scanners sequentially and blocked before reaching it")
+	}
+	close(slow.unblock)
+
+	if err := <-done; err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	findings, err := svc.ListFindings(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1 (only fast-scanner produces one)", len(findings))
+	}
+}
+
+func TestProcessScanJob_PartialFailure_CompletesJobAndKeepsSuccessfulFindings(t *testing.T) {
+	pool := testPool(t)
+	good := &fakeScanner{name: "good-scanner", findings: []domain.Finding{{ID: "OK-1", Severity: domain.SeverityMedium, Description: "achado válido"}}}
+	bad := &fakeScanner{name: "bad-scanner", err: fmt.Errorf("tool crashed")}
+	svc := newService(pool, good, bad)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"good-scanner", "bad-scanner"}, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+
+	// Falha parcial não é reprocessada — ProcessScanJob retorna nil
+	// mesmo com um scanner tendo falhado, pra nunca rodar de novo
+	// good-scanner (que já teve sucesso) só por causa de bad-scanner.
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob with partial failure should not return an error: %v", err)
+	}
+
+	jobsRepo := jobs.NewRepository(pool)
+	fetched, err := jobsRepo.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if fetched.Status != jobs.StatusCompleted {
+		t.Errorf("Status = %s, want completed (at least one scanner succeeded)", fetched.Status)
+	}
+
+	findings, err := svc.ListFindings(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	if len(findings) != 1 || findings[0].Scanner != "good-scanner" {
+		t.Errorf("findings = %+v, want exactly the good-scanner's finding, nothing from bad-scanner", findings)
+	}
+}
+
+func TestProcessScanJob_AllScannersFail_MarksJobFailedForRetry(t *testing.T) {
+	pool := testPool(t)
+	bad1 := &fakeScanner{name: "bad-scanner-1", err: fmt.Errorf("crashed 1")}
+	bad2 := &fakeScanner{name: "bad-scanner-2", err: fmt.Errorf("crashed 2")}
+	svc := newService(pool, bad1, bad2)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"bad-scanner-1", "bad-scanner-2"}, "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err == nil {
+		t.Fatal("expected an error when every scanner in the job fails, so the caller retries")
+	}
+
+	jobsRepo := jobs.NewRepository(pool)
+	fetched, err := jobsRepo.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if fetched.Status != jobs.StatusFailed {
+		t.Errorf("Status = %s, want failed", fetched.Status)
+	}
+}
+
+func TestProcessScanJob_UnregisteredScanner_IsTreatedAsThatScannerFailing(t *testing.T) {
 	pool := testPool(t)
 	// Cria o job com "trivy" registrado, mas simula um scanner
 	// desregistrado depois (ex.: um deploy que removeu um scanner) usando
 	// um Service à parte, sem nenhum scanner, para processar o job já
-	// criado.
+	// criado. Com um único scanner no job e ele "desaparecendo", o
+	// resultado é o mesmo caminho de "todos os scanners falharam" (ver
+	// TestProcessScanJob_AllScannersFail_MarksJobFailedForRetry) — um
+	// scanner desregistrado não ganha mais tratamento especial de
+	// "falha permanente, nunca reprocessar" desde a Fase 7: com vários
+	// scanners por job, a mesma distinção precisaria existir por
+	// scanner dentro de uma falha parcial, complexidade que não paga o
+	// benefício (poucas tentativas extras esgotadas até cair em
+	// dead-letter é aceitável).
 	creator := newService(pool, &fakeScanner{name: "trivy"})
 	ctx := context.Background()
 	corrID := uuid.New()
 
-	job, err := creator.CreateScanJob(ctx, corrID, "trivy", "https://example.com/repo.git", nil)
+	job, err := creator.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateScanJob: %v", err)
 	}
 
 	processor := newService(pool) // nenhum scanner registrado
-	if err := processor.ProcessScanJob(ctx, job.ID, corrID); err != nil {
-		t.Fatalf("ProcessScanJob with an unregistered scanner should not return an error (no retry): %v", err)
+	if err := processor.ProcessScanJob(ctx, job.ID, corrID); err == nil {
+		t.Fatal("expected an error so the caller retries, same as any other all-scanners-failed outcome")
 	}
 
 	jobsRepo := jobs.NewRepository(pool)

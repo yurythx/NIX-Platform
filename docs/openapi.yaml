@@ -375,13 +375,21 @@ paths:
       summary: Dispara um scan assíncrono contra um alvo
       operationId: createScan
       description: >
-        Não executa o scanner em si. Cria um job, o persiste junto com um
-        evento de outbox em uma única transação, e retorna imediatamente —
-        o worker o processa (clona o alvo via git e roda o scanner
-        registrado), e o frontend é notificado via WebSocket quando ele
+        Não executa o(s) scanner(s) em si. Cria um job, o persiste junto com
+        um evento de outbox em uma única transação, e retorna imediatamente
+        — o worker o processa (clona o alvo via git e roda cada scanner
+        pedido), e o frontend é notificado via WebSocket quando ele
         concluir ou falhar. `job_id` retornado é o mesmo `scan_id` usado em
         `GET /api/v1/scanning/scans/{scanID}/findings`. Sujeito a rate
         limiting por chamador. Aceita `Idempotency-Key`.
+
+        `scanners` aceita mais de um nome — todos rodam em PARALELO contra
+        o mesmo alvo, sob o mesmo job/`scan_id` (Fase 7 — Orquestração
+        concorrente). Um scanner que falha não afeta os demais: o job é
+        marcado concluído se PELO MENOS UM tiver sucesso (achados só dos
+        que tiveram sucesso; os que falharam ficam registrados no
+        resultado do job e na auditoria) — só falha por completo, sujeito
+        a retry, se TODOS falharem.
       security:
         - bearerAuth: [scanning:manage]
       parameters:
@@ -392,13 +400,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [scanner, target]
+              required: [scanners, target]
               properties:
-                scanner:
-                  type: string
-                  description: Nome de um CodeScanner registrado.
-                  enum: ["trivy", "semgrep", "sonarqube", "zap"]
-                  example: "trivy"
+                scanners:
+                  type: array
+                  minItems: 1
+                  description: Um ou mais nomes de CodeScanner registrado — todos rodam em paralelo.
+                  items:
+                    type: string
+                    enum: ["trivy", "semgrep", "sonarqube", "zap"]
+                  example: ["trivy", "semgrep"]
                 target:
                   type: string
                   description: >
@@ -440,12 +451,12 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "404":
-          description: "`scanner` não está registrado."
+          description: Um ou mais nomes em `scanners` não estão registrados — nenhum job é criado nesse caso, nem para os nomes válidos.
           content:
             application/json:
               example:
                 data: null
-                error: { code: "NOT_FOUND", message: "scanner \"trivy\" not registered" }
+                error: { code: "NOT_FOUND", message: "scanner(s) not registered: does-not-exist" }
         "409":
           $ref: "#/components/responses/IdempotencyConflict"
         "429":
