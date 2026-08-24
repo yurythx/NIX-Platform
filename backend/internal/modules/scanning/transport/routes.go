@@ -45,4 +45,17 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/findings", h.ListRecentFindings)
+
+	// Fase 10 — Projeto como entidade própria + upload .zip. Criar um
+	// projeto é scanning:manage (a mesma permissão que já exige disparar
+	// um scan avulso); listar é scanning:read, mesmo princípio do resto
+	// deste módulo.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningManage),
+		httpserver.RateLimit(logger, limiter, RateLimitKey),
+	).Post("/scanning/projects", h.CreateProject)
+
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/projects", h.ListProjects)
 }

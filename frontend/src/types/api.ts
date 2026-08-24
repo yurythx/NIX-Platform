@@ -79,6 +79,20 @@ export interface ScanFinding {
   tool: FindingTool;
 }
 
+// GET/POST /api/v1/scanning/projects (Fase 10 — Projeto persistente +
+// upload .zip). Target vem vazio pra um projeto "upload" (nunca teve alvo
+// git) — use source_type, não a ausência de target, pra decidir como
+// exibir o card. LastScan é opcional: nil pra um projeto ainda nunca
+// escaneado.
+export interface Project {
+  id: string;
+  name: string;
+  source_type: "git" | "upload";
+  target?: string;
+  created_at: string;
+  last_scan?: ScanStatus;
+}
+
 // GET /api/v1/scanning/scans/{scanID}/packages — inventário (Fase 11 —
 // Syft), sempre vazio pra um scan que não pediu o scanner "syft". Nunca
 // aparece em ScanFinding: Syft não produz achado, produz inventário (ver

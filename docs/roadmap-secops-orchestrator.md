@@ -6,8 +6,8 @@
   ser redundante). **Fases 10-13 (abaixo) são uma extensão nova**, adaptação de uma segunda
   proposta externa ("Orquestrador de Segurança de Código On-Premise", estilo GitGuard) pra esta
   mesma arquitetura, com 3 decisões explícitas do usuário registradas na seção "Reconciliação" logo
-  abaixo. **Fase 11 (Gitleaks + Syft) já implementada e verificada ao vivo; Fases 10/12/13 ainda
-  não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
+  abaixo. **Fases 10 (Projeto + upload .zip) e 11 (Gitleaks + Syft) já implementadas e verificadas
+  ao vivo; Fases 12/13 ainda não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
   container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks e Syft migrados e
   verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`/`syft-scanner`, volume
   compartilhado `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker,
@@ -515,35 +515,88 @@ faz upload ainda roda dentro do worker). Syft (Fase 11, sidecar `syft-scanner`) 
 este padrão desde o design, sem precisar de uma migração depois — mesmo `Dockerfile`/UID-fixo/
 healthcheck que Trivy/Gitleaks.
 
-### Fase 10 — Projeto como entidade própria + upload `.zip` — 🔲 não implementada
+### Fase 10 — Projeto como entidade própria + upload `.zip` — ✅ implementada
 
-- Migration nova: `scanning_projects` (id, name, target, created_at) — tabela própria do módulo
-  `scanning`, mesmo princípio de `scan_findings`/`scanning_scanner_runs` (nunca uma coluna a mais
-  na tabela `jobs` genérica compartilhada com `diario_oficial`).
-- `scanJobPayload` (`application/service.go`) ganha `ProjectID *uuid.UUID` opcional — um scan
-  disparado "avulso" (sem projeto, o fluxo atual) continua funcionando sem mudança; um scan
-  disparado a partir da tela de um projeto carrega o `ProjectID`, e o histórico desse projeto é
-  "todo job cujo payload tem esse `project_id`" (mesmo padrão de consulta que `ListRecentScans` já
-  usa, um filtro a mais).
-- `POST /api/v1/scanning/projects` cria um projeto (nome + alvo git, validado pelo MESMO
-  `parseGitTarget`/`validateHost` que scan avulso já usa — nenhuma validação nova). Alvo git
-  continua só `https://` público (decisão 2 acima).
-- **Upload `.zip`, a peça genuinamente nova**: `POST /api/v1/scanning/projects` aceita também
-  `multipart/form-data` com um arquivo `.zip` em vez de um alvo git — o handler extrai pra um
-  diretório TEMPORÁRIO (mesmo ciclo de vida do clone: existe só durante o scan, apaga depois),
-  valida que a extração não escreve fora do diretório de destino (defesa contra "zip slip" — um
-  `../../etc/cron.d/x` dentro do `.zip`, a mesma classe de ataque que `validateHost` já previne pro
-  caso do git/SSRF, adaptada pra path em vez de host) e roda `TrivyScanner.ExecuteLocal`/
-  `SemgrepScanner.ExecuteLocal`/`GitleaksScanner.ExecuteLocal` (Fase 11) direto nele — os MESMOS
-  métodos que `cmd/secscan` já usa pra ler um diretório local, reaproveitados, não duplicados. Um
-  projeto criado por upload nunca tem alvo git — `sonarqube`/`zap` ficam indisponíveis pra ele (o
-  primeiro exige `git clone` pra derivar a project key, o segundo nem se aplica, ataca um serviço
-  vivo).
-- Frontend: `/seguranca` ganha uma terceira seção "Projetos" (cards, mesmo padrão de
-  `ToolFindingsCards`/`IntegrationCard` — nunca uma tabela nova), cada card com nome + alvo + status
-  do último scan + botão "Rodar de novo" (dispara `POST /api/v1/scanning/scans` com o `ProjectID` já
-  preenchido, sem pedir a URL de novo). Formulário de criação com duas abas (URL git / upload
-  `.zip`), exatamente como a proposta pede na seção 5.A.
+- Migration `scanning_projects` (id, name, source_type, target, upload_zip, created_at) — tabela
+  própria do módulo `scanning`, mesmo princípio de `scan_findings`/`scanning_scanner_runs` (nunca
+  uma coluna a mais na tabela `jobs` genérica compartilhada com `diario_oficial`).
+- `scanJobPayload` (`application/service.go`) ganhou `ProjectID *uuid.UUID` opcional — um scan
+  avulso (sem projeto) continua funcionando sem mudança nenhuma; um scan disparado a partir de um
+  projeto carrega o `ProjectID`, e `ListProjectScans` filtra `ListRecentScans` (mesma consulta, mesmo
+  teto `maxRecentScans`) por esse campo em memória, em vez de uma consulta nova no banco — o volume
+  de scans desta plataforma nunca justificou um índice dedicado só pra isto.
+- `POST /api/v1/scanning/projects` cria um projeto — **ajuste real feito durante a implementação**:
+  o texto original desta fase previa validar o alvo git com `parseGitTarget`/`validateHost` (as
+  mesmas funções que a Fase 3 usa) NA CRIAÇÃO do projeto. Isso exigiria `application` importar
+  `infrastructure` (essas funções são privadas de `git_clone.go`), quebrando a Inversão de
+  Dependência que todo o resto desta camada respeita (`domain.Repository`/`domain.CodeScanner` etc.
+  — `application` nunca depende de `infrastructure`). Em vez disso, `CreateProjectGit` valida só
+  que target não é vazio — a MESMA validação preguiçosa que um scan avulso já tinha (`CreateScanJob`
+  nunca validou formato de URL na criação, só na hora de escanear); o formato completo continua
+  verificado de verdade só no worker, no momento do clone, exatamente como já era pro fluxo avulso —
+  nunca duplicado, nunca divergente.
+- **Upload `.zip`** — `POST /api/v1/scanning/projects` também aceita `multipart/form-data` (campo
+  de texto "name" + arquivo "file"). `ZipExtractor` (`infrastructure/zip_extract.go`, atrás da
+  interface `domain.ZipExtractor` — mesma Inversão de Dependência acima) extrai pra um diretório
+  TEMPORÁRIO dentro do volume `scanning_workspace` compartilhado (mesmo ciclo de vida do clone git:
+  existe só durante o scan, `defer cleanup()` no worker) — defende contra "zip slip"
+  (`../../etc/cron.d/x` ou um caminho absoluto dentro do `.zip`; um path absoluto na prática já cai
+  dentro do diretório de destino por como `filepath.Join` funciona, verificado com um teste, não só
+  assumido) e contra "zip bomb" (tamanho descomprimido real, medido via `io.LimitReader`, nunca o
+  campo `UncompressedSize64` do cabeçalho — não confiável, o próprio arquivo declara esse valor).
+  Roda `TrivyScanner.ExecuteLocal`/`SemgrepScanner.ExecuteLocal`/`GitleaksScanner.ExecuteLocal`/
+  `SyftScanner.ExecuteLocal`+`InventoryLocal` contra esse diretório — **segundo ajuste real**: com
+  Trivy/Gitleaks/Syft já containerizados (Fase 11/Containerização), o binário deles SAIU da imagem
+  do `backend-worker` — `ExecuteLocal` rodando `os/exec` local ali dentro simplesmente não
+  funcionaria (binário inexistente). Os três `ExecuteLocal`/`InventoryLocal` agora escolhem
+  dinamicamente: com o sidecar configurado (o caso real de produção), chamam a MESMA função HTTP que
+  `Execute`/`Inventory` já usa (`scanRemote`/`inventoryRemote`), só que contra um diretório que já
+  existe em vez de um que acabou de ser clonado; sem sidecar configurado (`cmd/secscan`, que roda em
+  CI/dev com os binários instalados separadamente), continuam rodando o binário local via `os/exec`,
+  sem mudança nenhuma pro CLI standalone. `domain.LocalScanner`/`domain.LocalInventoryProvider` são
+  as duas interfaces novas (mesmo padrão de `InventoryProvider`, type assertion no `Service`) que
+  formalizam isso — `createScanJob` rejeita, na CRIAÇÃO do job (não só descoberto depois no worker),
+  qualquer scanner pedido pra um projeto upload que não implemente `LocalScanner` (SonarQube exige
+  `git clone` pra derivar a project key; ZAP ataca uma URL viva, nunca um diretório).
+- **`ProcessScanJob` — orquestração de fato**: quando `payload.ProjectID != nil`, o worker rebusca o
+  `domain.Project` pra saber o `SourceType` de verdade. Um projeto GIT segue o caminho de sempre
+  (`runConcurrently`, clona `payload.Target`); um projeto UPLOAD extrai o `.zip`
+  (`ZipExtractor.ExtractZip`) e roda `runConcurrentlyLocal` (o par de `runConcurrently` — chama
+  `ExecuteLocal`/`InventoryLocal` em vez de `Execute`/`Inventory`) contra o diretório extraído. O
+  "alvo" gravado em `scan_findings.target`/mostrado na UI pra um scan de upload é o rótulo sintético
+  `upload:<nome do projeto>` (`uploadTarget`), computado JÁ NA CRIAÇÃO do job (não só depois que ele
+  termina) — pra `GetScanStatus`/`ListScans` nunca mostrarem um alvo vazio enquanto o job ainda está
+  "queued"/"processing".
+- `GET /api/v1/scanning/scans/{scanID}/packages` e o resto do pipeline de achados/inventário (Fase
+  11) funcionam sem nenhuma mudança pro caso de upload — `persistCompletion` já era agnóstico a
+  como os achados/pacotes foram produzidos.
+- Frontend: `/seguranca` ganhou uma seção "Projetos" (`NewProjectForm` com duas abas — URL git /
+  upload `.zip`, exatamente como a proposta original pedia na seção 5.A — e um grid de
+  `ProjectCard`, mesmo padrão visual de `ToolFindingsCards`/`IntegrationCard`, nunca uma tabela
+  nova). Cada card mostra nome, alvo (só pra projeto git), status do último scan (embutido pelo
+  backend em `GET /api/v1/scanning/projects`'s `last_scan`, sem uma segunda viagem por projeto) e
+  "Rodar de novo" — dispara `POST /api/v1/scanning/scans` com `project_id` preenchido (o MESMO
+  endpoint que um scan avulso já usa, só ganhou um campo novo em `createScanRequest`), reaproveitando
+  os scanners do último scan (ou um default sensato na primeira vez), sem pedir a URL/reanexar o
+  `.zip` de novo.
+- **Achado real corrigindo o proxy BFF do frontend**: `app/api/backend/[...path]/route.ts`
+  encaminhava todo corpo de requisição via `req.text()` — correto pra JSON, mas um upload
+  `multipart/form-data` carrega bytes binários, e `.text()` decodifica como UTF-8, corrompendo
+  qualquer byte que não seja uma sequência UTF-8 válida (troca por `U+FFFD`). Trocado pra
+  `req.arrayBuffer()`, que encaminha os bytes exatamente como chegaram — correto tanto pro upload
+  quanto pro JSON de sempre (texto sobrevive ileso a um round-trip por bytes). `apiClient` ganhou
+  `postForm` (`lib/api/client.ts`), que nunca fixa `Content-Type` — um valor explícito (mesmo
+  "errado") nunca é sobrescrito pelo `fetch`, então fixar `application/json` ali quebraria o boundary
+  multipart que o browser precisa gerar sozinho a partir do `FormData`.
+- Verificado ao vivo, ponta a ponta: projeto git criado via API real, scan disparado a partir dele
+  (`project_id`, sem repetir a URL) — 3 achados reais do Gitleaks, `last_scan` aparecendo embutido em
+  `GET .../projects` logo em seguida. Projeto upload criado via `multipart/form-data` de verdade
+  (`curl -F`) com um `.zip` real contendo `package.json`+um arquivo com uma chave — scan disparado
+  com Trivy+Gitleaks+Syft juntos: os três sucedendo, `target` mostrando
+  `upload:livecheck-upload-project` desde a criação do job, diretório de extração confirmado limpo
+  depois (nunca fica lixo no disco do worker). `/seguranca` carregado autenticado de verdade (sessão
+  NextAuth real) mostrando os dois projetos como cards, com "Rodar de novo"/"Ver último scan"
+  renderizados.
 
 ### Fase 11 — Gitleaks e Syft como `CodeScanner` novos — ✅ implementada
 
@@ -552,9 +605,12 @@ healthcheck que Trivy/Gitleaks.
   `Execute` clona via `cloneShallow` pro volume `scanning_workspace` compartilhado (reaproveita a
   validação de SSRF já compartilhada) e chama o sidecar `cmd/gitleaks-sidecar`
   (`Dockerfile.gitleaks-sidecar`, serviço `gitleaks-scanner`) via HTTP, nunca rodando o binário
-  dentro do próprio worker; `ExecuteLocal` roda o binário local via `os/exec`, sem rede — usado só
-  por `cmd/secscan`/upload `.zip` (Fase 10, ainda não implementada), continua sem chamador de
-  produção por ora, mesmo como `TrivyScanner.ExecuteLocal` antes da Fase 8 existir. Roda
+  dentro do próprio worker; `ExecuteLocal` prefere o MESMO sidecar (via `scanRemote`, contra um
+  diretório já extraído em vez de clonado) quando configurado — o caso real de produção, usado pela
+  Fase 10 (projeto criado por upload `.zip`) — e só cai pro binário local via `os/exec` sem sidecar
+  nenhum configurado (`cmd/secscan`, que roda em CI/dev com o binário instalado separadamente); ver
+  a Fase 10 abaixo pro motivo exato desse ajuste (o binário `gitleaks` não vive mais na imagem do
+  worker desde a containerização). Roda
   `gitleaks detect --source {path} --no-git --report-format json --report-path /dev/stdout
   --exit-code 0` — `--exit-code 0` (não estava no texto original desta fase, ajuste real feito
   durante a implementação): gitleaks sai com 1 por padrão quando ACHA um segredo, o que não é uma

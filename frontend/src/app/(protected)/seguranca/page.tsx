@@ -1,10 +1,13 @@
 import { ErrorState } from "@/components/ui/ErrorState";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { FindingsTable } from "@/components/scanning/FindingsTable";
+import { NewProjectForm } from "@/components/scanning/NewProjectForm";
+import { ProjectCard } from "@/components/scanning/ProjectCard";
 import { ScanList } from "@/components/scanning/ScanList";
 import { TriggerScanForm } from "@/components/scanning/TriggerScanForm";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
-import type { ScanFinding, ScanStatus } from "@/types/api";
+import type { Project, ScanFinding, ScanStatus } from "@/types/api";
 
 // Segurança (Fase 9 do roadmap de segurança —
 // docs/roadmap-secops-orchestrator.md): originalmente só um feed de
@@ -43,17 +46,50 @@ export default async function SegurancaPage() {
     findingsError = err instanceof ApiError ? err.message : "Falha ao carregar achados";
   }
 
+  // projects (Fase 10 — Projeto persistente + upload .zip): best-effort,
+  // mesmo princípio das outras duas buscas acima — uma falha aqui não
+  // deveria impedir o resto da página (scans/achados) de renderizar.
+  let projects: Project[] = [];
+  let projectsError: string | null = null;
+  try {
+    const { data } = await serverApiGet<Project[]>("v1/scanning/projects?limit=20");
+    projects = data;
+  } catch (err) {
+    projectsError = err instanceof ApiError ? err.message : "Falha ao carregar projetos";
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-xl font-semibold">Segurança</h1>
         <p className="text-sm text-muted">
-          Dispare um scan (Trivy, Semgrep, SonarQube, OWASP ZAP), acompanhe o progresso e veja os
-          achados de cada execução, separadamente.
+          Dispare um scan (Trivy, Gitleaks, Syft, Semgrep, SonarQube, OWASP ZAP), acompanhe o
+          progresso e veja os achados de cada execução, separadamente.
         </p>
       </div>
 
       <TriggerScanForm />
+
+      <div>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Projetos</h2>
+        <div className="flex flex-col gap-4">
+          <NewProjectForm />
+          {projectsError ? (
+            <ErrorState message={projectsError} />
+          ) : projects.length === 0 ? (
+            <EmptyState
+              title="Nenhum projeto ainda"
+              description="Crie um acima pra rodar o mesmo alvo de novo depois sem digitar a URL (ou reanexar o .zip) toda vez."
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {projects.map((p) => (
+                <ProjectCard key={p.id} project={p} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       <div>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">

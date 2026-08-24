@@ -1,6 +1,8 @@
 package application
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -12,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/infrastructure"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
@@ -45,6 +48,40 @@ func (f *fakeScanner) Execute(ctx context.Context, target string) ([]domain.Find
 	}
 	return f.findings, f.err
 }
+
+// fakeLocalScanner é um fakeScanner que também implementa
+// domain.LocalScanner (e domain.LocalInventoryProvider) — usado pelos
+// testes de Fase 10 (projeto criado por upload .zip), que nunca clonam
+// nada, só escaneiam um diretório já extraído. gotDir grava o dir
+// recebido por ExecuteLocal, prova de que um diretório de verdade
+// (extraído do .zip) foi passado, não um alvo git vazio.
+type fakeLocalScanner struct {
+	fakeScanner
+	gotDir   string
+	packages []domain.Package
+	// goModContent grava o conteúdo de "go.mod" lido DE DENTRO de
+	// ExecuteLocal — precisa acontecer ali, não depois que ProcessScanJob
+	// já retornou: o diretório de extração é temporário e some assim que
+	// ProcessScanJob termina (mesmo ciclo de vida do clone git), então ler
+	// depois sempre daria "no such file or directory", mesmo com a
+	// extração tendo funcionado perfeitamente.
+	goModContent string
+}
+
+func (f *fakeLocalScanner) ExecuteLocal(ctx context.Context, dir string) ([]domain.Finding, error) {
+	f.gotDir = dir
+	if content, err := os.ReadFile(dir + "/go.mod"); err == nil {
+		f.goModContent = string(content)
+	}
+	return f.findings, f.err
+}
+
+func (f *fakeLocalScanner) InventoryLocal(ctx context.Context, dir string) ([]domain.Package, error) {
+	return f.packages, nil
+}
+
+var _ domain.LocalScanner = (*fakeLocalScanner)(nil)
+var _ domain.LocalInventoryProvider = (*fakeLocalScanner)(nil)
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -80,7 +117,11 @@ func newService(pool *pgxpool.Pool, scanners ...domain.CodeScanner) *Service {
 	repo := infrastructure.NewPostgresRepository(pool)
 	jobsRepo := jobs.NewRepository(pool)
 	outboxWriter := outbox.NewWriter("nix.test")
-	return NewService(pool, repo, jobsRepo, outboxWriter, nil, testLogger(), scanners...)
+	// "" como baseDir do ZipExtractor: mesmo padrão de cloneShallow, cai
+	// no diretório temporário padrão do SO — correto pra teste, onde não
+	// existe volume compartilhado nenhum de verdade.
+	zipExtractor := infrastructure.NewZipExtractor("", testLogger())
+	return NewService(pool, repo, jobsRepo, outboxWriter, nil, zipExtractor, testLogger(), scanners...)
 }
 
 func TestRunScan_UnknownScanner_ReturnsNotFound(t *testing.T) {
@@ -916,4 +957,248 @@ func TestListRecentFindings_LimitClamping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A partir daqui: Fase 10 — Projeto como entidade própria + upload .zip
+// (ver docs/roadmap-secops-orchestrator.md, seção "Extensão").
+
+func TestCreateProjectGit_RequiresNameAndTarget(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+
+	if _, err := svc.CreateProjectGit(ctx, "", "https://example.com/repo.git"); err == nil {
+		t.Error("expected an error for an empty name")
+	}
+	if _, err := svc.CreateProjectGit(ctx, "test-project-empty-target", ""); err == nil {
+		t.Error("expected an error for an empty target")
+	}
+}
+
+func TestCreateProjectGit_And_ListProjects_RoundTrip(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+
+	created, err := svc.CreateProjectGit(ctx, "test-project-roundtrip", "https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("CreateProjectGit: %v", err)
+	}
+	if created.SourceType != domain.ProjectSourceGit {
+		t.Errorf("SourceType = %q, want %q", created.SourceType, domain.ProjectSourceGit)
+	}
+
+	fetched, err := svc.GetProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if fetched.Name != "test-project-roundtrip" || fetched.Target != "https://example.com/repo.git" {
+		t.Errorf("fetched project = %+v, unexpected fields", fetched)
+	}
+
+	projects, err := svc.ListProjects(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	var found bool
+	for _, p := range projects {
+		if p.ID == created.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("ListProjects did not include the project just created")
+	}
+}
+
+func TestGetProject_UnknownID_ReturnsNotFound(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+
+	_, err := svc.GetProject(context.Background(), uuid.New())
+	if err == nil {
+		t.Fatal("expected an error for an unknown project ID")
+	}
+	appErr, ok := apperrors.As(err)
+	if !ok || appErr.Code != apperrors.CodeNotFound {
+		t.Errorf("err = %v, want a NOT_FOUND apperrors.Error", err)
+	}
+}
+
+func TestCreateProjectUpload_RequiresNameAndBytesAndSizeLimit(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+
+	if _, err := svc.CreateProjectUpload(ctx, "", []byte("pretend zip bytes")); err == nil {
+		t.Error("expected an error for an empty name")
+	}
+	if _, err := svc.CreateProjectUpload(ctx, "test-project-empty-zip", nil); err == nil {
+		t.Error("expected an error for empty zip bytes")
+	}
+	oversized := make([]byte, maxUploadZipBytes+1)
+	if _, err := svc.CreateProjectUpload(ctx, "test-project-oversized-zip", oversized); err == nil {
+		t.Error("expected an error for a zip file over the size limit")
+	}
+}
+
+func TestCreateProjectUpload_And_GetProject_RoundTrip(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+
+	zipBytes := []byte("pretend zip bytes, never parsed at project-creation time")
+	created, err := svc.CreateProjectUpload(ctx, "test-project-upload-roundtrip", zipBytes)
+	if err != nil {
+		t.Fatalf("CreateProjectUpload: %v", err)
+	}
+	if created.SourceType != domain.ProjectSourceUpload {
+		t.Errorf("SourceType = %q, want %q", created.SourceType, domain.ProjectSourceUpload)
+	}
+	if created.Target != "" {
+		t.Errorf("Target = %q, want empty for an upload-based project", created.Target)
+	}
+
+	fetched, err := svc.GetProject(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if string(fetched.UploadZip) != string(zipBytes) {
+		t.Errorf("UploadZip round-tripped = %q, want %q", fetched.UploadZip, zipBytes)
+	}
+}
+
+func TestCreateProjectScanJob_UnknownProject_ReturnsNotFound(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool, &fakeLocalScanner{fakeScanner: fakeScanner{name: "trivy"}})
+
+	_, err := svc.CreateProjectScanJob(context.Background(), uuid.New(), []string{"trivy"}, uuid.New(), nil)
+	if err == nil {
+		t.Fatal("expected an error for an unknown project ID")
+	}
+	appErr, ok := apperrors.As(err)
+	if !ok || appErr.Code != apperrors.CodeNotFound {
+		t.Errorf("err = %v, want a NOT_FOUND apperrors.Error", err)
+	}
+}
+
+// TestCreateProjectScanJob_UploadProject_RejectsScannerWithoutLocalSupport
+// cobre a validação feita NA CRIAÇÃO do job (createScanJob), não só
+// descoberta depois no worker: um projeto criado por upload nunca tem
+// alvo git, então um scanner sem domain.LocalScanner (SonarQube exige
+// git clone pra derivar a project key; ZAP ataca uma URL viva) é
+// rejeitado aqui — fakeScanner (sem ExecuteLocal) representa esse caso.
+func TestCreateProjectScanJob_UploadProject_RejectsScannerWithoutLocalSupport(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool, &fakeScanner{name: "sonarqube"}, &fakeLocalScanner{fakeScanner: fakeScanner{name: "trivy"}})
+	ctx := context.Background()
+
+	project, err := svc.CreateProjectUpload(ctx, "test-project-reject-unsupported", []byte("pretend zip"))
+	if err != nil {
+		t.Fatalf("CreateProjectUpload: %v", err)
+	}
+
+	_, err = svc.CreateProjectScanJob(ctx, uuid.New(), []string{"sonarqube"}, project.ID, nil)
+	if err == nil {
+		t.Fatal("expected an error for a scanner that does not support upload-based projects")
+	}
+	appErr, ok := apperrors.As(err)
+	if !ok || appErr.Code != apperrors.CodeValidation {
+		t.Errorf("err = %v, want a VALIDATION_ERROR apperrors.Error", err)
+	}
+
+	// "trivy" (fakeLocalScanner, implementa LocalScanner) continua indo
+	// em frente normalmente — a rejeição é POR SCANNER, nunca o projeto
+	// upload inteiro fica bloqueado só porque outro scanner pedido junto
+	// não suporta.
+	if _, err := svc.CreateProjectScanJob(ctx, uuid.New(), []string{"trivy"}, project.ID, nil); err != nil {
+		t.Errorf("CreateProjectScanJob with a LocalScanner-capable scanner: %v, want success", err)
+	}
+}
+
+func TestProcessScanJob_UploadProject_ExtractsZipAndRunsLocalScanners(t *testing.T) {
+	pool := testPool(t)
+	scanner := &fakeLocalScanner{
+		fakeScanner: fakeScanner{name: "trivy", findings: []domain.Finding{
+			{ID: "CVE-2026-UPLOAD", OWASPCategory: "A06:2021-Vulnerable and Outdated Components", Severity: domain.SeverityHigh, Description: "achado num projeto de upload"},
+		}},
+		packages: []domain.Package{{Name: "left-pad", Version: "1.3.0", Type: "npm"}},
+	}
+	svc := newService(pool, scanner)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	zipBytes := buildTestZip(t, map[string]string{"go.mod": "module example.com/upload\n"})
+	project, err := svc.CreateProjectUpload(ctx, "test-project-process-upload", zipBytes)
+	if err != nil {
+		t.Fatalf("CreateProjectUpload: %v", err)
+	}
+
+	job, err := svc.CreateProjectScanJob(ctx, corrID, []string{"trivy"}, project.ID, nil)
+	if err != nil {
+		t.Fatalf("CreateProjectScanJob: %v", err)
+	}
+
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	if scanner.gotDir == "" {
+		t.Fatal("ExecuteLocal never received a directory — the .zip was never extracted")
+	}
+	if scanner.goModContent != "module example.com/upload\n" {
+		t.Errorf("go.mod content read from inside ExecuteLocal = %q, want the .zip's exact content", scanner.goModContent)
+	}
+	// A extração é temporária — ProcessScanJob precisa limpar o
+	// diretório depois de terminar (mesmo ciclo de vida do clone git via
+	// cloneShallow), nunca deixar código de upload no disco do worker
+	// além do necessário.
+	if _, statErr := os.Stat(scanner.gotDir); !os.IsNotExist(statErr) {
+		t.Errorf("extraction dir %q still exists after ProcessScanJob, want it cleaned up", scanner.gotDir)
+	}
+
+	jobsRepo := jobs.NewRepository(pool)
+	fetched, err := jobsRepo.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if fetched.Status != jobs.StatusCompleted {
+		t.Errorf("Status = %s, want completed", fetched.Status)
+	}
+
+	findings, err := svc.ListFindings(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ListFindings: %v", err)
+	}
+	if len(findings) != 1 || findings[0].ID != "CVE-2026-UPLOAD" {
+		t.Fatalf("findings = %+v, want the one finding ExecuteLocal returned", findings)
+	}
+	if findings[0].Target != "upload:test-project-process-upload" {
+		t.Errorf("finding Target = %q, want the synthetic \"upload:<project name>\" target", findings[0].Target)
+	}
+}
+
+// buildTestZip monta um .zip em memória a partir de um mapa
+// nome->conteúdo — mesmo helper de infrastructure/zip_extract_test.go,
+// duplicado aqui porque os dois vivem em pacotes Go diferentes
+// (application vs. infrastructure) e este teste não deveria importar
+// infrastructure só por causa de um helper de teste.
+func buildTestZip(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for name, content := range files {
+		f, err := w.Create(name)
+		if err != nil {
+			t.Fatalf("zip.Create(%q): %v", name, err)
+		}
+		if _, err := f.Write([]byte(content)); err != nil {
+			t.Fatalf("write zip entry %q: %v", name, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close zip writer: %v", err)
+	}
+	return buf.Bytes()
 }

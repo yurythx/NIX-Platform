@@ -336,3 +336,43 @@ func toScanStatusResponses(list []*application.ScanStatus) []ScanStatusResponse 
 	}
 	return out
 }
+
+// ProjectResponse é o formato público de um domain.Project (Fase 10).
+// Target vem vazio pra um projeto criado por upload (nunca teve um alvo
+// git) — o frontend usa SourceType, não a ausência de Target, pra decidir
+// como exibir o card (ver lib/scanning conventions). LastScan é opcional:
+// nil pra um projeto ainda nunca escaneado, ou quando quem monta a
+// resposta não buscou o histórico (ver toProjectResponse/handlers.go's
+// ListProjects) — nunca um campo que o cliente precise tratar como
+// sempre presente.
+type ProjectResponse struct {
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	SourceType string              `json:"source_type"`
+	Target     string              `json:"target,omitempty"`
+	CreatedAt  time.Time           `json:"created_at"`
+	LastScan   *ScanStatusResponse `json:"last_scan,omitempty"`
+}
+
+func toProjectResponse(p domain.Project, lastScan *application.ScanStatus) ProjectResponse {
+	resp := ProjectResponse{
+		ID:         p.ID.String(),
+		Name:       p.Name,
+		SourceType: string(p.SourceType),
+		Target:     p.Target,
+		CreatedAt:  p.CreatedAt,
+	}
+	if lastScan != nil {
+		r := toScanStatusResponse(lastScan)
+		resp.LastScan = &r
+	}
+	return resp
+}
+
+func toProjectResponses(projects []domain.Project, lastScanByProject map[string]*application.ScanStatus) []ProjectResponse {
+	out := make([]ProjectResponse, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, toProjectResponse(p, lastScanByProject[p.ID.String()]))
+	}
+	return out
+}

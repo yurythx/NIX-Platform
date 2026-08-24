@@ -281,3 +281,36 @@ type Package struct {
 type InventoryProvider interface {
 	Inventory(ctx context.Context, target string) ([]Package, error)
 }
+
+// LocalScanner (Fase 8 — cmd/secscan; Fase 10 — projeto criado por upload
+// .zip) é implementado por um CodeScanner que também sabe escanear um
+// diretório JÁ presente em disco, sem clonar nada — hoje: Trivy, Semgrep,
+// Gitleaks. Não é implementado por SonarQube (precisa de um `git clone`
+// pra derivar a project key que o servidor exige) nem por ZAP (ataca uma
+// URL viva, nunca um diretório) — um scan de projeto por upload que pede
+// um desses dois é rejeitado na criação do job (ver
+// application.Service.CreateScanJob), nunca silenciosamente ignorado. Um
+// type assertion (scanner.(LocalScanner)) decide por scanner, mesmo
+// padrão de InventoryProvider acima.
+type LocalScanner interface {
+	ExecuteLocal(ctx context.Context, dir string) ([]Finding, error)
+}
+
+// LocalInventoryProvider é o par local de InventoryProvider — hoje só
+// Syft. Existe pra que um projeto criado por upload também ganhe um
+// inventário (Fase 11), não só achados.
+type LocalInventoryProvider interface {
+	InventoryLocal(ctx context.Context, dir string) ([]Package, error)
+}
+
+// ZipExtractor extrai os bytes de um .zip (Fase 10 — Project.UploadZip)
+// pra um diretório novo dentro do volume compartilhado — o par de
+// cloneShallow (git_clone.go) pro caso de upload em vez de git. Fica como
+// uma interface aqui (não uma função livre em infrastructure chamada
+// direto) pra que application.Service dependa só de domain, nunca de
+// infrastructure — mesma Inversão de Dependência que já vale pro resto
+// desta camada (Repository, CodeScanner, ...). Implementado em
+// infrastructure/zip_extract.go.
+type ZipExtractor interface {
+	ExtractZip(zipBytes []byte) (dir string, cleanup func(), err error)
+}

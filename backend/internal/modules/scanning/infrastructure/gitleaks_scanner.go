@@ -71,6 +71,7 @@ func NewGitleaksScanner(gitleaksPath, serviceURL, workspaceDir string, cloneTime
 }
 
 var _ domain.CodeScanner = (*GitleaksScanner)(nil)
+var _ domain.LocalScanner = (*GitleaksScanner)(nil)
 
 func (g *GitleaksScanner) Name() string { return GitleaksScannerName }
 
@@ -92,11 +93,17 @@ func (g *GitleaksScanner) Execute(ctx context.Context, target string) ([]domain.
 	return g.scanRemote(ctx, dir)
 }
 
-// ExecuteLocal roda `gitleaks detect` direto contra dir, sem clonar nada e
-// sem depender do sidecar — usado pela Fase 8 (cmd/secscan) e pela Fase 10
-// (projeto criado por upload .zip). Nunca remove dir: quem chama é dono do
-// diretório.
+// ExecuteLocal escaneia dir sem clonar nada — usado pela Fase 8
+// (cmd/secscan) e pela Fase 10 (projeto criado por upload .zip). Nunca
+// remove dir: quem chama é dono do diretório. Mesma escolha entre sidecar
+// e binário local que TrivyScanner.ExecuteLocal faz, pelo mesmo motivo (o
+// binário `gitleaks` também não vive na imagem do worker desde a
+// containerização) — ver o comentário lá.
 func (g *GitleaksScanner) ExecuteLocal(ctx context.Context, dir string) ([]domain.Finding, error) {
+	if g.serviceURL != "" {
+		return g.scanRemote(ctx, dir)
+	}
+
 	cmd := exec.CommandContext(ctx, g.gitleaksPath, "detect",
 		"--source", dir,
 		"--no-git",

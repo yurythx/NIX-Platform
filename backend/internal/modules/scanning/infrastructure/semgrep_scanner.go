@@ -52,6 +52,7 @@ func NewSemgrepScanner(semgrepPath, config string, cloneTimeout time.Duration, l
 }
 
 var _ domain.CodeScanner = (*SemgrepScanner)(nil)
+var _ domain.LocalScanner = (*SemgrepScanner)(nil)
 
 func (s *SemgrepScanner) Name() string { return SemgrepScannerName }
 

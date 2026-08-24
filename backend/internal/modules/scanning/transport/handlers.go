@@ -7,17 +7,22 @@
 package transport
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/application"
+	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 	"github.com/yurythx/nix-platform/internal/platform/auth"
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
+	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/logging"
 	"github.com/yurythx/nix-platform/pkg/httputil"
 )
@@ -39,9 +44,14 @@ func NewHandlers(service *application.Service, logger *slog.Logger, sonarQubePub
 
 // createScanRequest aceita um ou mais scanners — mais de um dispara todos
 // em paralelo contra o mesmo alvo, sob o mesmo job/scan_id (Fase 7).
+// ProjectID (Fase 10) é opcional — quando presente, dispara um scan a
+// partir de um domain.Project já existente ("Rodar de novo" no frontend)
+// em vez de um alvo avulso; Target é ignorado nesse caso (o alvo vem do
+// próprio projeto).
 type createScanRequest struct {
-	Scanners []string `json:"scanners"`
-	Target   string   `json:"target"`
+	Scanners  []string `json:"scanners"`
+	Target    string   `json:"target"`
+	ProjectID string   `json:"project_id,omitempty"`
 }
 
 type scanJobResponse struct {
@@ -70,7 +80,20 @@ func (h *Handlers) CreateScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	job, err := h.service.CreateScanJob(r.Context(), correlationID, req.Scanners, req.Target, requestedBy)
+	var (
+		job *jobs.Job
+		err error
+	)
+	if req.ProjectID != "" {
+		projectID, parseErr := uuid.Parse(req.ProjectID)
+		if parseErr != nil {
+			httputil.WriteError(w, r, h.logger, apperrors.BadRequest("project_id must be a valid UUID"))
+			return
+		}
+		job, err = h.service.CreateProjectScanJob(r.Context(), correlationID, req.Scanners, projectID, requestedBy)
+	} else {
+		job, err = h.service.CreateScanJob(r.Context(), correlationID, req.Scanners, req.Target, requestedBy)
+	}
 	if err != nil {
 		httputil.WriteError(w, r, h.logger, err)
 		return
@@ -172,6 +195,107 @@ func (h *Handlers) ListRecentFindings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteOK(w, toFindingResponses(findings, h.sonarQubePublicURL))
+}
+
+// maxUploadRequestBytes limita o corpo INTEIRO de uma requisição
+// multipart (o .zip + qualquer overhead de form) — folga acima do teto
+// do próprio .zip (application.maxUploadZipBytes) pra sobrar espaço pro
+// resto do multipart sem apertar o limite do arquivo em si.
+const maxUploadRequestBytes = 55 * 1024 * 1024 // 55MB
+
+// createProjectGitRequest é o corpo JSON aceito por POST
+// /api/v1/scanning/projects quando o projeto aponta pra um alvo git —
+// multipart/form-data é o outro formato aceito (ver CreateProject), pra
+// upload de um .zip.
+type createProjectGitRequest struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
+}
+
+// CreateProject trata POST /api/v1/scanning/projects (Fase 10) — aceita
+// dois formatos de corpo, escolhidos pelo Content-Type: application/json
+// {name, target} pra um projeto git, ou multipart/form-data (campo de
+// texto "name" + arquivo "file") pra um projeto criado por upload de um
+// .zip. Nunca dispara nenhum scan — só cria o registro; o disparo em si
+// continua sendo POST /api/v1/scanning/scans com project_id preenchido
+// (ver CreateScan), o mesmo endpoint que um scan avulso já usa.
+func (h *Handlers) CreateProject(w http.ResponseWriter, r *http.Request) {
+	var (
+		project *domain.Project
+		err     error
+	)
+
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		project, err = h.createProjectFromUpload(w, r)
+	} else {
+		var req createProjectGitRequest
+		if decodeErr := httputil.DecodeJSON(w, r, &req); decodeErr != nil {
+			httputil.WriteError(w, r, h.logger, decodeErr)
+			return
+		}
+		project, err = h.service.CreateProjectGit(r.Context(), req.Name, req.Target)
+	}
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteCreated(w, toProjectResponse(*project, nil))
+}
+
+// createProjectFromUpload lê o campo de texto "name" e o arquivo "file"
+// de um corpo multipart/form-data — o outro caminho de CreateProject.
+func (h *Handlers) createProjectFromUpload(w http.ResponseWriter, r *http.Request) (*domain.Project, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
+	if err := r.ParseMultipartForm(maxUploadRequestBytes); err != nil {
+		return nil, apperrors.BadRequest(fmt.Sprintf("invalid multipart/form-data body: %v", err))
+	}
+
+	name := r.FormValue("name")
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		return nil, apperrors.BadRequest(`missing "file" field with the .zip upload`)
+	}
+	defer file.Close()
+
+	zipBytes, err := io.ReadAll(file)
+	if err != nil {
+		return nil, apperrors.BadRequest(fmt.Sprintf("failed to read uploaded file: %v", err))
+	}
+
+	return h.service.CreateProjectUpload(r.Context(), name, zipBytes)
+}
+
+// ListProjects trata GET /api/v1/scanning/projects (Fase 10) — cada
+// projeto vem com o status do último scan embutido (LastScan), quando
+// já rodou algum, pra "/seguranca" mostrar isso direto no card sem uma
+// segunda viagem por projeto.
+func (h *Handlers) ListProjects(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	projects, err := h.service.ListProjects(r.Context(), limit)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	lastScanByProject := make(map[string]*application.ScanStatus, len(projects))
+	for _, p := range projects {
+		scans, err := h.service.ListProjectScans(r.Context(), p.ID)
+		if err != nil {
+			// Best-effort: histórico de scan é um complemento do card, não
+			// o projeto em si — uma falha aqui não deveria impedir a
+			// listagem inteira de projetos de responder.
+			h.logger.Warn("scanning: failed to load last scan for project (best-effort)",
+				slog.String("project_id", p.ID.String()), slog.Any("error", err))
+			continue
+		}
+		if len(scans) > 0 {
+			lastScanByProject[p.ID.String()] = scans[0]
+		}
+	}
+
+	httputil.WriteOK(w, toProjectResponses(projects, lastScanByProject))
 }
 
 // correlationIDFromRequest reaproveita o request id (§50) como o

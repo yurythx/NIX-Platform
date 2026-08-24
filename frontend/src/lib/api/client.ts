@@ -27,10 +27,16 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<{ data: T; meta?: unknown }> {
+  // Um corpo FormData (Fase 10 — postForm, upload de .zip) nunca ganha um
+  // Content-Type fixo aqui: o browser precisa gerar esse header sozinho,
+  // com o boundary multipart correto — um Content-Type: application/json
+  // explícito (mesmo que "errado") NUNCA é sobrescrito pelo fetch, então
+  // fixá-lo aqui quebraria toda requisição multipart.
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const res = await fetch(`/api/backend/${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(init?.headers ?? {}),
     },
   });
@@ -64,6 +70,14 @@ export const apiClient = {
       method: "POST",
       body: body !== undefined ? JSON.stringify(body) : undefined,
     }),
+  // postForm: caminho separado de post() pra um corpo multipart/form-data
+  // (Fase 10 — projeto criado por upload .zip) — nunca passa por
+  // JSON.stringify, e nunca define Content-Type manualmente: o browser
+  // precisa gerar esse header sozinho a partir do FormData, incluindo o
+  // boundary multipart, que request() (Content-Type: application/json
+  // fixo) sobrescreveria e quebraria a requisição inteira.
+  postForm: <T>(path: string, form: FormData) =>
+    request<T>(path, { method: "POST", body: form, headers: {} }),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, {
       method: "PATCH",

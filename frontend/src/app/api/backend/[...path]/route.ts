@@ -44,8 +44,15 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
       "Content-Type": req.headers.get("content-type") ?? "application/json",
       "X-Request-ID": requestId,
     },
-    // GET/HEAD não podem carregar um corpo.
-    body: ["GET", "HEAD"].includes(req.method) ? undefined : await req.text(),
+    // GET/HEAD não podem carregar um corpo. arrayBuffer(), não text():
+    // um corpo multipart/form-data com upload de arquivo (Fase 10 —
+    // projeto criado por .zip) carrega bytes binários — .text() decodifica
+    // como UTF-8 e corrompe qualquer byte que não seja uma sequência UTF-8
+    // válida (troca por U+FFFD), inutilizando o .zip do outro lado.
+    // arrayBuffer() encaminha os bytes exatamente como chegaram, correto
+    // tanto pra esse caso quanto pro JSON de sempre (texto também
+    // sobrevive ileso a um round-trip por bytes).
+    body: ["GET", "HEAD"].includes(req.method) ? undefined : await req.arrayBuffer(),
   };
 
   let backendResponse: Response;

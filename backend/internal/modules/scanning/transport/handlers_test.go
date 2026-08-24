@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,7 +70,10 @@ func newTestService(pool *pgxpool.Pool, scanners ...domain.CodeScanner) *applica
 	repo := infrastructure.NewPostgresRepository(pool)
 	jobsRepo := jobs.NewRepository(pool)
 	outboxWriter := outbox.NewWriter("nix.test")
-	return application.NewService(pool, repo, jobsRepo, outboxWriter, nil, testLogger(), scanners...)
+	// "" como baseDir do ZipExtractor: mesmo padrão de cloneShallow, cai
+	// no diretório temporário padrão do SO — correto pra teste.
+	zipExtractor := infrastructure.NewZipExtractor("", testLogger())
+	return application.NewService(pool, repo, jobsRepo, outboxWriter, nil, zipExtractor, testLogger(), scanners...)
 }
 
 func decodeEnvelope[T any](t *testing.T, body []byte) T {
@@ -569,5 +573,144 @@ func TestToScanStatusResponse_NeverSerializesNullForListFields(t *testing.T) {
 		if strings.Contains(body, `"`+field+`":null`) {
 			t.Errorf("response serialized %q as null, want an empty array: %s", field, body)
 		}
+	}
+}
+
+// A partir daqui: Fase 10 — Projeto como entidade própria + upload .zip.
+
+func TestCreateProject_GitTarget_Returns201(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
+
+	body, _ := json.Marshal(createProjectGitRequest{Name: "test-project-handler-git", Target: "https://example.com/repo.git"})
+	r := httptest.NewRequest(http.MethodPost, "/scanning/projects", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.CreateProject(rec, r)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeEnvelope[ProjectResponse](t, rec.Body.Bytes())
+	if got.ID == "" || got.SourceType != "git" || got.Target != "https://example.com/repo.git" {
+		t.Errorf("response = %+v, unexpected fields", got)
+	}
+}
+
+func TestCreateProject_MissingName_Returns422(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
+
+	body, _ := json.Marshal(createProjectGitRequest{Target: "https://example.com/repo.git"})
+	r := httptest.NewRequest(http.MethodPost, "/scanning/projects", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.CreateProject(rec, r)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// buildMultipartUploadRequest monta um corpo multipart/form-data (campo
+// de texto "name" + arquivo "file") — o formato que CreateProject aceita
+// pro caminho de upload .zip.
+func buildMultipartUploadRequest(t *testing.T, name, filename string, fileContent []byte) *http.Request {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if name != "" {
+		if err := w.WriteField("name", name); err != nil {
+			t.Fatalf("WriteField(name): %v", err)
+		}
+	}
+	if filename != "" {
+		fw, err := w.CreateFormFile("file", filename)
+		if err != nil {
+			t.Fatalf("CreateFormFile: %v", err)
+		}
+		if _, err := fw.Write(fileContent); err != nil {
+			t.Fatalf("write form file content: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/scanning/projects", &buf)
+	r.Header.Set("Content-Type", w.FormDataContentType())
+	return r
+}
+
+func TestCreateProject_ZipUpload_Returns201(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
+
+	r := buildMultipartUploadRequest(t, "test-project-handler-upload", "project.zip", []byte("pretend zip bytes"))
+	rec := httptest.NewRecorder()
+
+	h.CreateProject(rec, r)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeEnvelope[ProjectResponse](t, rec.Body.Bytes())
+	if got.ID == "" || got.SourceType != "upload" || got.Target != "" {
+		t.Errorf("response = %+v, unexpected fields", got)
+	}
+}
+
+func TestCreateProject_ZipUpload_MissingFile_Returns400(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
+
+	r := buildMultipartUploadRequest(t, "test-project-handler-upload-no-file", "", nil)
+	rec := httptest.NewRecorder()
+
+	h.CreateProject(rec, r)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListProjects_IncludesJustCreatedProject(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
+
+	createBody, _ := json.Marshal(createProjectGitRequest{Name: "test-project-handler-list", Target: "https://example.com/repo.git"})
+	createReq := httptest.NewRequest(http.MethodPost, "/scanning/projects", bytes.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	h.CreateProject(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d, want 201, body=%s", createRec.Code, createRec.Body.String())
+	}
+	created := decodeEnvelope[ProjectResponse](t, createRec.Body.Bytes())
+
+	listReq := httptest.NewRequest(http.MethodGet, "/scanning/projects", nil)
+	listRec := httptest.NewRecorder()
+	h.ListProjects(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListProjects status = %d, want 200, body=%s", listRec.Code, listRec.Body.String())
+	}
+	got := decodeEnvelope[[]ProjectResponse](t, listRec.Body.Bytes())
+	var found bool
+	for _, p := range got {
+		if p.ID == created.ID {
+			found = true
+			// Projeto recém-criado nunca rodou scan nenhum ainda —
+			// LastScan precisa vir omitido (nil), nunca um
+			// ScanStatusResponse vazio inventado.
+			if p.LastScan != nil {
+				t.Errorf("LastScan = %+v, want nil for a project that was never scanned", p.LastScan)
+			}
+		}
+	}
+	if !found {
+		t.Error("ListProjects did not include the project just created")
 	}
 }

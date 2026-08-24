@@ -91,6 +91,7 @@ func NewTrivyScanner(trivyPath, serviceURL, workspaceDir string, cloneTimeout ti
 }
 
 var _ domain.CodeScanner = (*TrivyScanner)(nil)
+var _ domain.LocalScanner = (*TrivyScanner)(nil)
 
 func (t *TrivyScanner) Name() string { return TrivyScannerName }
 
@@ -112,14 +113,27 @@ func (t *TrivyScanner) Execute(ctx context.Context, target string) ([]domain.Fin
 	return t.scanRemote(ctx, dir)
 }
 
-// ExecuteLocal roda `trivy fs` direto contra dir, sem clonar nada e sem
-// depender do sidecar — usado pela Fase 8 (cmd/secscan), onde o
-// repositório já está no disco (um checkout local, ou o próprio CI que
-// já fez `actions/checkout`) e o binário `trivy` já é esperado estar
-// disponível localmente, sem rede nenhuma envolvida. Nunca remove dir:
-// quem chama é dono do diretório (ao contrário de Execute, que é dono do
-// diretório temporário que ele mesmo criou via cloneShallow).
+// ExecuteLocal escaneia dir sem clonar nada — usado pela Fase 8
+// (cmd/secscan) e pela Fase 10 (projeto criado por upload .zip, já
+// extraído dentro do volume compartilhado antes desta chamada). Nunca
+// remove dir: quem chama é dono do diretório (ao contrário de Execute,
+// que é dono do diretório temporário que ele mesmo criou via
+// cloneShallow).
+//
+// Dois caminhos, escolhidos pela MESMA condição que Execute usa pra
+// decidir entre sidecar e binário local: com serviceURL configurado (o
+// caso real do worker em produção, desde a containerização do Trivy — o
+// binário `trivy` SAIU da imagem do worker, só o sidecar tem), reaproveita
+// a mesma chamada HTTP que Execute usa (scanRemote), só que contra um
+// diretório que já existe em vez de um que acabou de ser clonado. Sem
+// serviceURL (cmd/secscan, um binário standalone que roda em CI/dev com o
+// `trivy` instalado separadamente, sem sidecar nenhum por perto): continua
+// rodando o binário local via os/exec, sem rede.
 func (t *TrivyScanner) ExecuteLocal(ctx context.Context, dir string) ([]domain.Finding, error) {
+	if t.serviceURL != "" {
+		return t.scanRemote(ctx, dir)
+	}
+
 	// --scanners vuln,misconfig: deliberadamente sem "secret" (ver
 	// comentário do tipo acima).
 	cmd := exec.CommandContext(ctx, t.trivyPath, "fs", "--format", "json", "--scanners", "vuln,misconfig", "--quiet", dir)

@@ -87,6 +87,16 @@ type scanCompletedPayload struct {
 type scanJobPayload struct {
 	Scanners []string `json:"scanners"`
 	Target   string   `json:"target"`
+	// ProjectID (Fase 10) é preenchido quando este scan foi disparado a
+	// partir de um domain.Project — nil pro fluxo avulso de sempre
+	// (target digitado na hora, sem projeto nenhum por trás). Um projeto
+	// GIT continua preenchendo Target normalmente (ProcessScanJob nem
+	// precisa saber que existe um projeto, exceto pra registrar o
+	// histórico); um projeto UPLOAD deixa Target vazio — é esse par
+	// (ProjectID != nil && Target == "") que ProcessScanJob usa pra
+	// decidir extrair o .zip em vez de clonar um alvo git (ver
+	// runConcurrentlyLocal).
+	ProjectID *uuid.UUID `json:"project_id,omitempty"`
 	// LegacyScanner só existe pra decodificar jobs de ANTES da Fase 7
 	// (Orquestração concorrente): o payload de um job de scan guardava
 	// um scanner só, na chave singular "scanner", não a lista
@@ -119,6 +129,13 @@ type Service struct {
 	outboxWriter *outbox.Writer
 	audit        *audit.Writer
 	scanners     map[string]domain.CodeScanner
+	// zipExtractor extrai um Project.UploadZip (Fase 10) pro volume
+	// compartilhado — só usado por ProcessScanJob quando um job de scan
+	// pertence a um projeto criado por upload. domain.ZipExtractor, não
+	// *infrastructure.ZipExtractor: application nunca importa
+	// infrastructure (Inversão de Dependência), mesmo princípio que já
+	// vale pra domain.Repository/domain.CodeScanner.
+	zipExtractor domain.ZipExtractor
 	logger       *slog.Logger
 }
 
@@ -133,6 +150,7 @@ func NewService(
 	jobsRepo *jobs.Repository,
 	outboxWriter *outbox.Writer,
 	auditWriter *audit.Writer,
+	zipExtractor domain.ZipExtractor,
 	logger *slog.Logger,
 	scanners ...domain.CodeScanner,
 ) *Service {
@@ -149,6 +167,7 @@ func NewService(
 		jobsRepo:     jobsRepo,
 		outboxWriter: outboxWriter,
 		audit:        auditWriter,
+		zipExtractor: zipExtractor,
 		scanners:     byName,
 		logger:       logger,
 	}
@@ -299,9 +318,13 @@ func (s *Service) ListPackages(ctx context.Context, scanID uuid.UUID) ([]domain.
 // texto de apresentação, não um dado que faça sentido persistir junto do
 // job.
 type ScanStatus struct {
-	JobID             uuid.UUID
-	Status            string
-	Target            string
+	JobID  uuid.UUID
+	Status string
+	Target string
+	// ProjectID (Fase 10) — nil pra um scan avulso, preenchido quando
+	// este job foi disparado a partir de um domain.Project (ver
+	// scanJobPayload.ProjectID). ListProjectScans filtra por este campo.
+	ProjectID         *uuid.UUID
 	RequestedScanners []string
 	SucceededScanners []string
 	FailedScanners    []domain.ScannerFailure
@@ -348,6 +371,7 @@ func (s *Service) projectScanStatus(ctx context.Context, job *jobs.Job) (*ScanSt
 		JobID:             job.ID,
 		Status:            string(job.Status),
 		Target:            payload.Target,
+		ProjectID:         payload.ProjectID,
 		RequestedScanners: requestedScanners,
 		Attempts:          job.Attempts,
 		CreatedAt:         job.CreatedAt,
@@ -457,6 +481,27 @@ func (s *Service) ListRecentScans(ctx context.Context, limit int) ([]*ScanStatus
 	return out, nil
 }
 
+// ListProjectScans retorna as execuções mais recentes de UM projeto, mais
+// nova primeiro (Fase 10) — filtra dentro de ListRecentScans (mesma
+// consulta, mesmo teto maxRecentScans) por ScanStatus.ProjectID, em vez de
+// uma consulta nova no banco: scanJobPayload.ProjectID vive dentro do
+// JSONB do payload de jobs.Job, não numa coluna própria (o volume de
+// scans desta plataforma nunca justificou um índice dedicado só pra
+// isto). Uma lista vazia (projeto nunca escaneado) não é erro.
+func (s *Service) ListProjectScans(ctx context.Context, projectID uuid.UUID) ([]*ScanStatus, error) {
+	scans, err := s.ListRecentScans(ctx, maxRecentScans)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*ScanStatus, 0)
+	for _, sc := range scans {
+		if sc.ProjectID != nil && *sc.ProjectID == projectID {
+			out = append(out, sc)
+		}
+	}
+	return out, nil
+}
+
 // decodeFailures decodifica o texto de jobs.error de volta em
 // []domain.ScannerFailure — o formato que encodeFailures grava desde
 // esta fase. Tolerante a texto que NÃO está nesse formato (o fallback
@@ -504,33 +549,177 @@ func (s *Service) ListRecentFindings(ctx context.Context, limit int) ([]domain.P
 	return findings, nil
 }
 
-// CreateScanJob implementa o "Commit" do fluxo assíncrono (mesmo desenho
-// de diario_oficial.Service.CreateTestJob): valida que todo nome em
-// scannerNames está registrado, cria o job e seu evento de outbox
-// disparador atomicamente, e retorna — quem chama (o transport) responde
-// 202. Passar mais de um nome é a Fase 7 (Orquestração concorrente): os
-// scanners rodam em paralelo no worker (ver ProcessScanJob), não em
-// sequência. O ID do job também é o scan_id usado depois em ListFindings,
-// para que o cliente HTTP consiga consultar os achados de TODOS os
-// scanners pedidos com o mesmo ID que recebeu na criação.
-func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, scannerNames []string, target string, requestedBy *uuid.UUID) (*jobs.Job, error) {
-	if len(scannerNames) == 0 {
-		return nil, apperrors.Validation("at least one scanner is required")
+// maxUploadZipBytes limita o tamanho do PRÓPRIO arquivo .zip aceito ao
+// criar um projeto por upload (Fase 10) — diferente de
+// infrastructure.maxZipUncompressedBytes (o teto do conteúdo
+// DESCOMPRIMIDO, aplicado só na hora de escanear). Este teto aqui protege
+// a gravação em si: Project.UploadZip vive numa coluna BYTEA do Postgres,
+// e um blob sem limite nenhum seria seu próprio problema de capacidade,
+// bem antes de qualquer scan rodar.
+const maxUploadZipBytes = 50 * 1024 * 1024 // 50MB
+
+// CreateProjectGit cria um domain.Project (Fase 10) apontando pra um alvo
+// git — mesma filosofia de validação "preguiçosa" que um scan avulso já
+// usa: só confere que target não é vazio aqui; o formato completo
+// (https://, host não-privado) só é validado de verdade na hora de
+// escanear (git_clone.go's parseGitTarget/validateHost, dentro do
+// worker) — nunca duplicado aqui, pra nunca divergir entre as duas
+// validações.
+func (s *Service) CreateProjectGit(ctx context.Context, name, target string) (*domain.Project, error) {
+	if name == "" {
+		return nil, apperrors.Validation("name is required")
 	}
 	if target == "" {
 		return nil, apperrors.Validation("target is required")
 	}
-	var unknown []string
+
+	p := domain.Project{ID: uuid.New(), Name: name, SourceType: domain.ProjectSourceGit, Target: target, CreatedAt: time.Now()}
+	if err := s.repo.CreateProject(ctx, p); err != nil {
+		return nil, fmt.Errorf("scanning: create project: %w", err)
+	}
+	return &p, nil
+}
+
+// CreateProjectUpload cria um domain.Project (Fase 10) a partir dos bytes
+// de um .zip — nunca extraído nem validado como zip aqui (isso só
+// acontece de verdade na hora de escanear, ZipExtractor.ExtractZip,
+// dentro do worker), mesmo princípio de CreateProjectGit acima: valida só
+// o suficiente pra rejeitar entrada obviamente inválida cedo (vazio,
+// grande demais), sem duplicar a validação de conteúdo que já vive em
+// outro lugar.
+func (s *Service) CreateProjectUpload(ctx context.Context, name string, zipBytes []byte) (*domain.Project, error) {
+	if name == "" {
+		return nil, apperrors.Validation("name is required")
+	}
+	if len(zipBytes) == 0 {
+		return nil, apperrors.Validation("zip file is required")
+	}
+	if len(zipBytes) > maxUploadZipBytes {
+		return nil, apperrors.Validation(fmt.Sprintf("zip file exceeds the %dMB limit", maxUploadZipBytes/(1024*1024)))
+	}
+
+	p := domain.Project{ID: uuid.New(), Name: name, SourceType: domain.ProjectSourceUpload, UploadZip: zipBytes, CreatedAt: time.Now()}
+	if err := s.repo.CreateProject(ctx, p); err != nil {
+		return nil, fmt.Errorf("scanning: create project: %w", err)
+	}
+	return &p, nil
+}
+
+// maxProjectsList é o teto de ListProjects — mesmo espírito de
+// maxRecentScans/maxRecentFindings.
+const maxProjectsList = 100
+
+// ListProjects retorna os projetos mais recentes primeiro.
+func (s *Service) ListProjects(ctx context.Context, limit int) ([]domain.Project, error) {
+	if limit <= 0 || limit > maxProjectsList {
+		limit = maxProjectsList
+	}
+	projects, err := s.repo.ListProjects(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: list projects: %w", err)
+	}
+	return projects, nil
+}
+
+// GetProject busca um projeto por ID.
+func (s *Service) GetProject(ctx context.Context, id uuid.UUID) (domain.Project, error) {
+	p, err := s.repo.GetProject(ctx, id)
+	if err != nil {
+		return domain.Project{}, err
+	}
+	return p, nil
+}
+
+// CreateScanJob implementa o "Commit" do fluxo assíncrono avulso (sem
+// projeto por trás) — mesmo desenho de diario_oficial.Service.
+// CreateTestJob. Ver createScanJob pro que as duas variantes (esta e
+// CreateProjectScanJob) compartilham.
+func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, scannerNames []string, target string, requestedBy *uuid.UUID) (*jobs.Job, error) {
+	if target == "" {
+		return nil, apperrors.Validation("target is required")
+	}
+	return s.createScanJob(ctx, correlationID, scannerNames, target, nil, requestedBy)
+}
+
+// CreateProjectScanJob dispara um scan a partir de um domain.Project já
+// existente (Fase 10) — "Rodar de novo" no frontend, sem pedir a URL/o
+// .zip de novo. Resolve target a partir do projeto: um projeto GIT usa
+// project.Target (o job resultante fica indistinguível de um scan avulso
+// pro resto do pipeline, exceto por carregar ProjectID pro histórico); um
+// projeto UPLOAD deixa Target vazio de propósito — é esse sinal que
+// ProcessScanJob usa pra extrair o .zip em vez de clonar (ver
+// runConcurrentlyLocal).
+func (s *Service) CreateProjectScanJob(ctx context.Context, correlationID uuid.UUID, scannerNames []string, projectID uuid.UUID, requestedBy *uuid.UUID) (*jobs.Job, error) {
+	project, err := s.repo.GetProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	target := project.Target
+	if project.SourceType == domain.ProjectSourceUpload {
+		// Nunca fica vazio, nem enquanto o job ainda está "queued": sem
+		// isto, GetScanStatus/ListScans mostrariam Target="" pra um scan
+		// de upload até ele terminar (só ProcessScanJob saberia o nome
+		// "upload:<projeto>" de verdade) — computado aqui, na criação,
+		// pra aparecer certo desde o primeiro instante.
+		target = uploadTarget(project.Name)
+	}
+	return s.createScanJob(ctx, correlationID, scannerNames, target, &project, requestedBy)
+}
+
+// uploadTarget é o "alvo" sintético gravado pra um scan de projeto
+// UPLOAD — nunca um alvo git de verdade, só um rótulo consistente
+// (scan_findings.target, ScanStatus.Target, jobs.payload.target) que
+// identifica de qual projeto esse scan veio, já que não existe URL
+// nenhuma pra mostrar.
+func uploadTarget(projectName string) string {
+	return "upload:" + projectName
+}
+
+// createScanJob é o miolo compartilhado por CreateScanJob (avulso) e
+// CreateProjectScanJob (Fase 10): valida que todo nome em scannerNames
+// está registrado (e, pra um projeto UPLOAD, que cada um também
+// implementa domain.LocalScanner — SonarQube/ZAP são rejeitados aqui,
+// nunca silenciosamente ignorados nem descobertos como falha só depois
+// que o worker já tentou), cria o job e seu evento de outbox disparador
+// atomicamente, e retorna — quem chama (o transport) responde 202. O ID
+// do job também é o scan_id usado depois em ListFindings, para que o
+// cliente HTTP consiga consultar os achados de TODOS os scanners pedidos
+// com o mesmo ID que recebeu na criação.
+func (s *Service) createScanJob(ctx context.Context, correlationID uuid.UUID, scannerNames []string, target string, project *domain.Project, requestedBy *uuid.UUID) (*jobs.Job, error) {
+	if len(scannerNames) == 0 {
+		return nil, apperrors.Validation("at least one scanner is required")
+	}
+
+	isUpload := project != nil && project.SourceType == domain.ProjectSourceUpload
+
+	var unknown, unsupported []string
 	for _, name := range scannerNames {
-		if _, ok := s.scanners[name]; !ok {
+		scanner, ok := s.scanners[name]
+		if !ok {
 			unknown = append(unknown, name)
+			continue
+		}
+		if isUpload {
+			if _, ok := scanner.(domain.LocalScanner); !ok {
+				unsupported = append(unsupported, name)
+			}
 		}
 	}
 	if len(unknown) > 0 {
 		return nil, apperrors.NotFound(fmt.Sprintf("scanner(s) not registered: %s", strings.Join(unknown, ", ")))
 	}
+	if len(unsupported) > 0 {
+		return nil, apperrors.Validation(fmt.Sprintf(
+			"scanner(s) not supported for an upload-based project (need a git clone or a live URL): %s",
+			strings.Join(unsupported, ", ")))
+	}
 
-	job, err := jobs.New(JobType, correlationID, scanJobPayload{Scanners: scannerNames, Target: target})
+	payload := scanJobPayload{Scanners: scannerNames, Target: target}
+	if project != nil {
+		payload.ProjectID = &project.ID
+	}
+
+	job, err := jobs.New(JobType, correlationID, payload)
 	if err != nil {
 		return nil, fmt.Errorf("scanning: build job: %w", err)
 	}
@@ -546,13 +735,17 @@ func (s *Service) CreateScanJob(ctx context.Context, correlationID uuid.UUID, sc
 	}
 
 	if s.audit != nil {
+		metadata := map[string]any{"scanners": scannerNames, "target": target}
+		if project != nil {
+			metadata["project_id"] = project.ID.String()
+		}
 		_ = s.audit.Record(ctx, audit.Entry{
 			UserID:        requestedBy,
 			Action:        audit.ActionScanRequested,
 			ResourceType:  "job",
 			ResourceID:    job.ID.String(),
 			CorrelationID: &correlationID,
-			Metadata:      map[string]any{"scanners": scannerNames, "target": target},
+			Metadata:      metadata,
 		})
 	}
 
@@ -637,6 +830,90 @@ func inventoryFor(ctx context.Context, scanner domain.CodeScanner, target string
 		return nil
 	}
 	return packages
+}
+
+// runConcurrentlyLocal é o par de runConcurrently pro caso de um projeto
+// criado por upload (Fase 10): em vez de scanner.Execute(ctx, target)
+// (que clonaria um alvo git), chama scanner.(domain.LocalScanner).
+// ExecuteLocal(ctx, dir) contra um diretório JÁ extraído — dir precisa
+// vir de ZipExtractor.ExtractZip, chamado uma vez só por quem chama esta
+// função (ProcessScanJob), não aqui: todo scanner deste job compartilha o
+// MESMO diretório, então a extração acontece uma única vez pro job
+// inteiro, nunca uma vez por scanner.
+//
+// Um scanner sem LocalScanner chegando aqui seria um bug de wiring —
+// createScanJob já rejeita isso na CRIAÇÃO do job (ver "unsupported"
+// acima) — mas o mesmo cenário defensivo de runConcurrently (scanner
+// desregistrado entre a criação e o processamento) se aplica igual aqui,
+// por isso a checagem continua, nunca um type assertion que entra em
+// pânico.
+func (s *Service) runConcurrentlyLocal(ctx context.Context, jobID uuid.UUID, scannerNames []string, dir string) []scannerOutcome {
+	outcomes := make([]scannerOutcome, len(scannerNames))
+	var wg sync.WaitGroup
+	for i, name := range scannerNames {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			scanner, ok := s.scanners[name]
+			if !ok {
+				err := fmt.Errorf("scanner %q not registered", name)
+				outcomes[i] = scannerOutcome{scanner: name, err: err}
+				s.markScannerRunning(ctx, jobID, name)
+				s.markScannerFinished(ctx, jobID, name, nil, err)
+				return
+			}
+			s.markScannerRunning(ctx, jobID, name)
+			local, ok := scanner.(domain.LocalScanner)
+			if !ok {
+				err := fmt.Errorf("scanner %q does not support scanning a local directory (upload-based project)", name)
+				outcomes[i] = scannerOutcome{scanner: name, err: err}
+				s.markScannerFinished(ctx, jobID, name, nil, err)
+				return
+			}
+			findings, err := local.ExecuteLocal(ctx, dir)
+			packages := inventoryForLocal(ctx, scanner, dir, &err)
+			outcomes[i] = scannerOutcome{scanner: name, findings: findings, packages: packages, err: err}
+			s.markScannerFinished(ctx, jobID, name, findings, err)
+		}(i, name)
+	}
+	wg.Wait()
+	return outcomes
+}
+
+// inventoryForLocal é o par local de inventoryFor — mesma lógica, só que
+// via domain.LocalInventoryProvider.InventoryLocal em vez de
+// InventoryProvider.Inventory.
+func inventoryForLocal(ctx context.Context, scanner domain.CodeScanner, dir string, err *error) []domain.Package {
+	if *err != nil {
+		return nil
+	}
+	inv, ok := scanner.(domain.LocalInventoryProvider)
+	if !ok {
+		return nil
+	}
+	packages, invErr := inv.InventoryLocal(ctx, dir)
+	if invErr != nil {
+		*err = invErr
+		return nil
+	}
+	return packages
+}
+
+// failAllScanners marca todo scanner de scannerNames como falho com o
+// MESMO err — usado só quando algo impede QUALQUER scanner de sequer
+// começar (Fase 10: falha ao extrair o .zip do projeto, ou o projeto
+// sumiu entre a criação do job e o processamento) — sem isto, nenhuma
+// linha apareceria em scanning_scanner_runs pra explicar por que o job
+// falhou, e o painel de progresso ficaria vazio em vez de mostrar CADA
+// scanner pedido com o motivo real.
+func (s *Service) failAllScanners(ctx context.Context, jobID uuid.UUID, scannerNames []string, err error) []scannerOutcome {
+	outcomes := make([]scannerOutcome, len(scannerNames))
+	for i, name := range scannerNames {
+		s.markScannerRunning(ctx, jobID, name)
+		s.markScannerFinished(ctx, jobID, name, nil, err)
+		outcomes[i] = scannerOutcome{scanner: name, err: err}
+	}
+	return outcomes
 }
 
 // markScannerRunning/markScannerFinished são escritas best-effort de
@@ -785,7 +1062,36 @@ func (s *Service) ProcessScanJob(ctx context.Context, jobID uuid.UUID, correlati
 		return fmt.Errorf("scanning: mark job %s processing: %w", jobID, err)
 	}
 
-	outcomes := s.runConcurrently(ctx, jobID, payload.Scanners, payload.Target)
+	// Fase 10 — projeto criado por upload .zip: ProjectID preenchido (ver
+	// scanJobPayload.ProjectID) faz este job re-buscar o domain.Project
+	// pra saber o SourceType de verdade — um projeto GIT segue o caminho
+	// de sempre abaixo (clona payload.Target normalmente, runConcurrently
+	// sem nenhuma mudança de comportamento); um projeto UPLOAD não tem
+	// alvo git nenhum pra clonar, então extrai o .zip do projeto pro
+	// volume compartilhado e escaneia esse diretório (runConcurrentlyLocal)
+	// em vez de clonar. payload.Target já vem certo dos dois jeitos desde
+	// createScanJob/CreateProjectScanJob (o alvo git, ou o rótulo
+	// sintético "upload:<projeto>" — ver uploadTarget) — persistCompletion
+	// abaixo usa esse mesmo valor sempre, nunca recomputado aqui.
+	var outcomes []scannerOutcome
+	if payload.ProjectID != nil {
+		project, err := s.repo.GetProject(ctx, *payload.ProjectID)
+		if err != nil {
+			outcomes = s.failAllScanners(ctx, jobID, payload.Scanners, fmt.Errorf("scanning: load project %s: %w", *payload.ProjectID, err))
+		} else if project.SourceType == domain.ProjectSourceUpload {
+			dir, cleanup, extractErr := s.zipExtractor.ExtractZip(project.UploadZip)
+			if extractErr != nil {
+				outcomes = s.failAllScanners(ctx, jobID, payload.Scanners, extractErr)
+			} else {
+				defer cleanup()
+				outcomes = s.runConcurrentlyLocal(ctx, jobID, payload.Scanners, dir)
+			}
+		} else {
+			outcomes = s.runConcurrently(ctx, jobID, payload.Scanners, payload.Target)
+		}
+	} else {
+		outcomes = s.runConcurrently(ctx, jobID, payload.Scanners, payload.Target)
+	}
 	succeeded, failed := splitOutcomes(outcomes)
 
 	txErr := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {

@@ -57,4 +57,42 @@ describe("apiClient", () => {
     );
     await expect(apiClient.get("v1/integrations")).rejects.toBeInstanceOf(ApiError);
   });
+
+  // Fase 10 (projeto criado por upload .zip): postForm nunca pode fixar
+  // Content-Type: application/json — isso sobrescreveria o
+  // multipart/form-data; boundary=... que o browser precisa gerar
+  // sozinho a partir do FormData, quebrando o parsing do lado do
+  // servidor (o boundary some).
+  it("postForm never sets a Content-Type header, letting the browser generate the multipart boundary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ data: { id: "1" }, error: null }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const form = new FormData();
+    form.set("name", "test-project");
+    await apiClient.postForm("v1/scanning/projects", form);
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBeUndefined();
+    expect(init.body).toBe(form);
+  });
+
+  it("post() (JSON body) keeps setting Content-Type: application/json, unaffected by postForm's exception", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: null, error: null }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiClient.post("v1/scanning/scans", { target: "https://example.com/repo.git" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
 });

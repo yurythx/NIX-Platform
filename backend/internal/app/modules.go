@@ -94,7 +94,12 @@ func buildModules(deps *Dependencies) *Modules {
 		deps.Config.Scanning.ZapURL, deps.Config.Scanning.ZapAPIKey, deps.Config.Scanning.ZapAllowedHosts,
 		deps.Config.Scanning.ZapScanTimeout, deps.Logger,
 	)
-	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner, gitleaksScanner, syftScanner, semgrepScanner, sonarScanner, zapScanner)
+	// zipExtractor (Fase 10 — projeto criado por upload .zip) usa o MESMO
+	// ScanningWorkspaceDir que os scanners containerizados usam pro
+	// clone git — o diretório extraído precisa ficar visível pros
+	// sidecars (trivy-scanner/gitleaks-scanner) igual um clone ficaria.
+	zipExtractor := scanningInfra.NewZipExtractor(deps.Config.Scanning.ScanningWorkspaceDir, deps.Logger)
+	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, zipExtractor, deps.Logger, trivyScanner, gitleaksScanner, syftScanner, semgrepScanner, sonarScanner, zapScanner)
 	m.Scanning.Service = scanningSvc
 	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger, deps.Config.Scanning.SonarQubePublicURL)
 

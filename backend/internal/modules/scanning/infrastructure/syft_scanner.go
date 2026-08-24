@@ -70,6 +70,8 @@ func NewSyftScanner(syftPath, serviceURL, workspaceDir string, cloneTimeout time
 
 var _ domain.CodeScanner = (*SyftScanner)(nil)
 var _ domain.InventoryProvider = (*SyftScanner)(nil)
+var _ domain.LocalScanner = (*SyftScanner)(nil)
+var _ domain.LocalInventoryProvider = (*SyftScanner)(nil)
 
 func (s *SyftScanner) Name() string { return SyftScannerName }
 
@@ -78,6 +80,15 @@ func (s *SyftScanner) Name() string { return SyftScannerName }
 // Inventory, chamado separadamente pelo Service (application.inventoryFor)
 // quando SyftScanner participa de um scan.
 func (s *SyftScanner) Execute(context.Context, string) ([]domain.Finding, error) {
+	return nil, nil
+}
+
+// ExecuteLocal, mesmo raciocínio de Execute acima — nunca produz achado.
+// Implementado só pra satisfazer domain.LocalScanner (Fase 10 — projeto
+// criado por upload .zip): sem isto, o Service rejeitaria "syft" como
+// scanner inválido pra um projeto de upload, mesmo Syft já suportando
+// perfeitamente esse caso via InventoryLocal.
+func (s *SyftScanner) ExecuteLocal(context.Context, string) ([]domain.Finding, error) {
 	return nil, nil
 }
 
@@ -98,11 +109,18 @@ func (s *SyftScanner) Inventory(ctx context.Context, target string) ([]domain.Pa
 	return s.inventoryRemote(ctx, dir)
 }
 
-// InventoryLocal roda `syft scan dir:` direto contra dir, sem clonar nada
-// e sem depender do sidecar — mesmo papel de TrivyScanner.ExecuteLocal
-// (cmd/secscan, Fase 10/upload .zip). Nunca remove dir: quem chama é dono
-// do diretório.
+// InventoryLocal escaneia dir sem clonar nada — mesmo papel de
+// TrivyScanner.ExecuteLocal (cmd/secscan, Fase 10/upload .zip). Nunca
+// remove dir: quem chama é dono do diretório. Mesma escolha entre
+// sidecar e binário local que TrivyScanner.ExecuteLocal/
+// GitleaksScanner.ExecuteLocal fazem, pelo mesmo motivo (o binário
+// `syft` também não vive na imagem do worker — só no sidecar) — ver o
+// comentário em trivy_scanner.go.
 func (s *SyftScanner) InventoryLocal(ctx context.Context, dir string) ([]domain.Package, error) {
+	if s.serviceURL != "" {
+		return s.inventoryRemote(ctx, dir)
+	}
+
 	cmd := exec.CommandContext(ctx, s.syftPath, "scan", "dir:"+dir, "-o", "json")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
