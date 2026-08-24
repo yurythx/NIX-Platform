@@ -139,14 +139,17 @@ func runGitClone(ctx context.Context, repoURL, ref, dir string) error {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return apperrors.DependencyUnavailable(fmt.Sprintf("scanning: git clone failed: %s", firstLine(stderr.String())))
+		return apperrors.DependencyUnavailable(fmt.Sprintf("scanning: git clone failed: %s", extractErrorLine(stderr.String())))
 	}
 	return nil
 }
 
-// firstLine evita despejar um stderr de várias linhas (potencialmente com
-// detalhe interno do binário) inteiro numa mensagem de erro voltada ao
-// cliente HTTP — só a primeira linha, o resto fica só no log.
+// firstLine evita despejar um corpo de resposta HTTP de várias linhas
+// (potencialmente JSON, potencialmente grande) inteiro numa mensagem de
+// erro voltada ao cliente — só a primeira linha, o resto fica só no log.
+// Usado só pelos dois casos de corpo de resposta HTTP (sonar_scanner.go,
+// zap_scanner.go): ali a "primeira linha" já costuma ser o próprio corpo
+// inteiro (JSON de uma linha só) ou algo razoável, sem o problema abaixo.
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
@@ -156,4 +159,32 @@ func firstLine(s string) string {
 		return "unknown error"
 	}
 	return s
+}
+
+// extractErrorLine escolhe a linha mais útil do stderr de um subprocesso
+// (git, trivy, semgrep, sonar-scanner) para reportar num erro voltado ao
+// cliente HTTP. `git clone`, em especial, sempre imprime
+// "Cloning into '...'..." como a PRIMEIRA linha mesmo quando falha, com o
+// motivo real ("fatal: ...") numa linha seguinte — usar só a primeira
+// linha (como firstLine faz) reportaria sempre essa linha inútil e nunca
+// o motivo de verdade. Preferimos a primeira linha que pareça mesmo um
+// erro (contém "fatal:" ou "error:", sem diferenciar maiúsculas de
+// minúsculas — cobre a saída de git, trivy e semgrep); na ausência de
+// uma, a ÚLTIMA linha não vazia costuma ser a mais específica (mensagens
+// de progresso/contexto vêm antes, a causa raiz por último).
+func extractErrorLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "fatal:") || strings.Contains(lower, "error:") {
+			return line
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return "unknown error"
 }

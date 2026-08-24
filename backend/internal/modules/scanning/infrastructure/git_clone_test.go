@@ -117,3 +117,63 @@ func TestValidateHost_ResolutionFailure_IsRejected(t *testing.T) {
 		t.Error("validateHost with a failed DNS lookup = nil error, want rejection")
 	}
 }
+
+// Formatos reproduzidos de verdade contra os binários reais (não
+// inventados): "git clone" contra um repositório inexistente sempre
+// imprime "Cloning into '...'..." na primeira linha mesmo ao falhar, com
+// o motivo real numa linha seguinte — o bug que extractErrorLine existe
+// pra corrigir (firstLine reportava só a primeira linha inútil). trivy e
+// semgrep, na falha de scan em si (não de clone), já imprimem uma única
+// linha só — extractErrorLine precisa continuar funcionando igual pra
+// esses casos.
+func TestExtractErrorLine(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "git clone: motivo real na segunda linha, não na primeira",
+			in:   "Cloning into '/tmp/nix-scan-4127283254'...\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+			want: "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+		},
+		{
+			name: "trivy: já vem numa linha só",
+			in:   "2026-08-24T08:16:32-04:00\tFATAL\tFatal error\trun error: fs scan error: scan error: scan failed: failed analysis: analyze with traversal: walk dir error: unknown error with /this/path/does/not/exist: lstat /this/path/does/not/exist: no such file or directory\n",
+			want: "2026-08-24T08:16:32-04:00\tFATAL\tFatal error\trun error: fs scan error: scan error: scan failed: failed analysis: analyze with traversal: walk dir error: unknown error with /this/path/does/not/exist: lstat /this/path/does/not/exist: no such file or directory",
+		},
+		{
+			name: "semgrep: já vem numa linha só",
+			in:   "[ERROR] Invalid scanning root: /this/path/does/not/exist\n",
+			want: "[ERROR] Invalid scanning root: /this/path/does/not/exist",
+		},
+		{
+			name: "sonar-scanner: já vem numa linha só",
+			in:   "ERROR Failed to query server version: java.net.ConnectException\n",
+			want: "ERROR Failed to query server version: java.net.ConnectException",
+		},
+		{
+			name: "sem linha com fatal:/error:, cai pra última linha não vazia",
+			in:   "some progress line\nanother progress line\nthe actual reason it broke\n",
+			want: "the actual reason it broke",
+		},
+		{
+			name: "stderr vazio",
+			in:   "",
+			want: "unknown error",
+		},
+		{
+			name: "só espaço em branco",
+			in:   "   \n\n  ",
+			want: "unknown error",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractErrorLine(tc.in); got != tc.want {
+				t.Errorf("extractErrorLine(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

@@ -86,7 +86,7 @@ func (s *SemgrepScanner) scanSource(ctx context.Context, dir string) ([]domain.F
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("scanning: semgrep: scan failed: %s", firstLine(stderr.String())))
+		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("scanning: semgrep: scan failed: %s", extractErrorLine(stderr.String())))
 	}
 	return parseSemgrepReport(stdout.Bytes(), dir)
 }

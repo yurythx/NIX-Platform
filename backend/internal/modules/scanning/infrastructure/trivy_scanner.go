@@ -86,7 +86,7 @@ func (t *TrivyScanner) scanFS(ctx context.Context, dir string) ([]domain.Finding
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("scanning: trivy: scan failed: %s", firstLine(stderr.String())))
+		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("scanning: trivy: scan failed: %s", extractErrorLine(stderr.String())))
 	}
 	return parseTrivyReport(stdout.Bytes())
 }

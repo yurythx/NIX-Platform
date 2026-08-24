@@ -148,7 +148,7 @@ func (s *SonarScanner) runScanner(ctx context.Context, dir, projectKey string) e
 		// Verificado contra o servidor real: sonar-scanner grava ERROR
 		// em stderr (INFO fica em stdout), diferente da convenção que
 		// TrivyScanner/SemgrepScanner já seguiam — mesmo assim.
-		return apperrors.DependencyUnavailable(fmt.Sprintf("scanning: sonarqube: scan failed: %s", firstLine(stderr.String())))
+		return apperrors.DependencyUnavailable(fmt.Sprintf("scanning: sonarqube: scan failed: %s", extractErrorLine(stderr.String())))
 	}
 	return nil
 }
