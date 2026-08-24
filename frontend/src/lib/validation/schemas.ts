@@ -32,6 +32,19 @@ export const integrationStatusPayloadSchema = z.object({
   status: z.enum(["unknown", "online", "offline", "degraded", "disabled"]),
 });
 
+// Payload do evento scanning.scan.completed — espelha
+// application.scanCompletedPayload no backend. Não usa
+// jobEventPayloadSchema (job_id): este evento carrega scan_id, não
+// job_id (scanning.scan.failed, esse sim, carrega job_id — ver
+// jobRefPayload no backend — e por isso continua usando o schema
+// genérico de job).
+export const scanCompletedPayloadSchema = z.object({
+  scan_id: z.string(),
+  scanners: z.array(z.string()),
+  target: z.string(),
+  findings_count: z.number(),
+});
+
 /** Faz o parse e valida uma mensagem bruta de WebSocket; retorna null para
  * qualquer entrada malformada em vez de lançar exceção, para que uma
  * mensagem ruim nunca derrube o pipeline de notificações inteiro. */

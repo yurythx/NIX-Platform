@@ -195,7 +195,7 @@ Com os containers saudáveis:
 | `/dashboard` | autenticada | Visão geral — só isso: status das integrações e atalhos. |
 | `/integracoes` | autenticada | Lista toda integração configurada — cada uma leva pra sua página de detalhe. |
 | `/integracoes/{key}` | autenticada | Página de detalhe genérica (rota dinâmica) de uma integração — status e teste de conectividade. `{key}` é o mesmo valor que a integração tem no backend (`diario-oficial`, e cada integração nova que for adicionada). |
-| `/seguranca` | autenticada | Achados mais graves/recentes entre todos os scans (Trivy, Semgrep, SonarQube, ZAP) — Fase 9 do roadmap de segurança. |
+| `/seguranca` | autenticada | Dispara um scan novo (um ou mais scanners) e lista os achados mais graves/recentes entre todos os scans (Trivy, Semgrep, SonarQube, ZAP) — Fase 9 do roadmap de segurança. |
 | `/configuracao` | autenticada | Aba "Sistema" — configuração dinâmica (feature flags, `nix-admin`). |
 | `/configuracao/usuarios` | autenticada | Aba "Usuários" — diretório de usuários. |
 

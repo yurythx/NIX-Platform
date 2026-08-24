@@ -2,6 +2,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@/components/ui/Table";
 import { SeverityBadge } from "@/components/scanning/SeverityBadge";
+import { TriggerScanForm } from "@/components/scanning/TriggerScanForm";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
 import type { ScanFinding } from "@/types/api";
@@ -14,12 +15,12 @@ import type { ScanFinding } from "@/types/api";
 // escopado a um scan_id — GET .../scans/{scanID}/findings continua
 // existindo pra quem já sabe o scan_id de um job específico).
 //
-// Deliberadamente fora de escopo desta fase: nenhum formulário pra
-// disparar um scan novo por aqui — o roadmap pediu "listar", não
-// "disparar"; POST /api/v1/scanning/scans já existe e funciona (usado
-// hoje via API/CLI — cmd/secscan, Fase 8), um botão "novo scan" na UI é
-// uma extensão natural, mas não construída agora pra não inventar UI sem
-// pedido explícito.
+// TriggerScanForm (Client Component, abaixo) veio depois da Fase 9
+// original — perguntado explicitamente pelo usuário como disparar um
+// scan e "mostrar pra aplicação onde atacar" (o alvo do ZAP), já que a
+// primeira versão desta página só listava achados. Server Component pai
+// renderizando um Client Component filho é o padrão normal do App
+// Router — a busca de achados continua acontecendo no servidor.
 export default async function SegurancaPage() {
   let findings: ScanFinding[] | null = null;
   let errorMessage: string | null = null;
@@ -39,6 +40,8 @@ export default async function SegurancaPage() {
           SonarQube, OWASP ZAP) — os mais críticos primeiro.
         </p>
       </div>
+
+      <TriggerScanForm />
 
       {errorMessage && <ErrorState message={errorMessage} />}
 

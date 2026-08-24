@@ -366,14 +366,26 @@ ferramentas estarem prontas para gerar valor.
   primeiro saber o `scan_id`. Endpoint novo: `GET /api/v1/scanning/findings?limit=N` (default 50,
   teto rígido 200), consultando `scan_findings` sem filtro de `scan_id`, mesma ordenação por
   severidade/data. RBAC reaproveitada (`scanning:read`, já existente).
-- **Deliberadamente fora de escopo**: nenhum formulário pra disparar um scan novo pela UI — o
-  roadmap pediu "listar", `POST /api/v1/scanning/scans` já funciona (via API/`cmd/secscan`), um
-  botão "novo scan" é uma extensão natural mas não construída agora, pra não inventar UI sem pedido
-  explícito.
+- **`TriggerScanForm`, adicionado logo em seguida a pedido explícito do usuário** ("como
+  mostraremos pra aplicação onde atacaremos?"): a versão original desta fase só listava achados,
+  deliberadamente sem formulário de disparo. Um Client Component (`components/scanning/
+  TriggerScanForm.tsx`) embutido na mesma página Server Component — seleção de scanner(s) via
+  `Toggle` + campo de alvo via `Input`, `POST /api/v1/scanning/scans` pelo mesmo `apiClient`/proxy
+  BFF que `IntegrationCard` já usa pro botão "Testar conexão". Explica no próprio texto do
+  formulário a diferença de formato de alvo (URL git pros três primeiros scanners, URL http(s) de
+  um serviço rodando pro ZAP) e que o ZAP só ataca um host já na allowlist
+  (`SCANNING_ZAP_ALLOWED_HOSTS`).
+- `NotificationCenter` ganhou tratamento para `scanning.scan.completed`/`scanning.scan.failed` —
+  um gap real encontrado ao verificar o disparo pela UI: esses eventos já eram publicados desde a
+  Fase 1, mas o frontend nunca tinha um toast pra eles. `scanning.scan.completed` tem tratamento
+  próprio (como `integration.status.changed`) porque seu payload carrega `scan_id`, não `job_id`
+  como o schema genérico de evento de job espera.
 - Verificado de ponta a ponta contra o app de verdade: login real via NextAuth (fluxo de
   credenciais, não simulado), scan real disparado via API, página `/seguranca` buscada autenticada
   — achados reais (CVEs do OWASP/NodeGoat) renderizados com selo de severidade correto (43 CRITICAL,
-  57 HIGH confirmados na resposta HTML).
+  57 HIGH confirmados na resposta HTML) — e, depois, o formulário de disparo verificado pelo MESMO
+  caminho que o clique do usuário percorre (proxy BFF autenticado por cookie de sessão, não um
+  bearer token direto), criando um job real de verdade.
 
 ## Mapeamento OWASP Top 10 — o que já é real hoje vs. o que este roadmap adiciona
 

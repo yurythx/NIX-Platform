@@ -9,6 +9,7 @@ import type { ToastTone } from "@/components/ui/Toast";
 import {
   integrationStatusPayloadSchema,
   jobEventPayloadSchema,
+  scanCompletedPayloadSchema,
   type EventEnvelope,
 } from "@/lib/validation/schemas";
 import type { ConnectionState } from "@/lib/websocket/client";
@@ -18,6 +19,10 @@ const eventCopy: Partial<Record<string, { title: string; tone: "success" | "dang
   "diario_oficial.job.failed": { title: "Verificação do Diário Oficial falhou", tone: "danger" },
   "integration.test.completed": { title: "Teste de integração concluído", tone: "success" },
   "notification.created": { title: "Nova notificação", tone: "info" },
+  // scanning.scan.completed NÃO entra aqui — payload é scan_id, não
+  // job_id (ver scanCompletedPayloadSchema), então tem tratamento
+  // próprio abaixo, igual integration.status.changed.
+  "scanning.scan.failed": { title: "Scan de segurança falhou", tone: "danger" },
 };
 
 /** Montado uma única vez no layout do dashboard — não renderiza nada além
@@ -39,6 +44,30 @@ export function NotificationCenter({
           const tone: ToastTone = result.data.status === "online" ? "success" : "danger";
           const notification = {
             title: `Integração ${result.data.key} agora está ${result.data.status}`,
+            tone,
+          };
+          showToast(notification);
+          pushHistory(notification);
+        }
+        return;
+      }
+
+      if (event.type === "scanning.scan.completed") {
+        const result = scanCompletedPayloadSchema.safeParse(event.payload);
+        if (result.success) {
+          const { scanners, findings_count } = result.data;
+          // "success" (nada encontrado) vs "info" (achou algo — vale
+          // conferir em /seguranca; não "danger" aqui, porque ToastTone
+          // só tem info/success/danger e a severidade de cada achado já
+          // é o que de fato importa — esta notificação só avisa que o
+          // scan terminou, não julga o resultado).
+          const tone: ToastTone = findings_count === 0 ? "success" : "info";
+          const notification = {
+            title: `Scan concluído (${scanners.join(", ")})`,
+            description:
+              findings_count === 0
+                ? "Nenhum achado."
+                : `${findings_count} achado(s) — veja em Segurança.`,
             tone,
           };
           showToast(notification);
