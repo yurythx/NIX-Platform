@@ -22,6 +22,10 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scans/{scanID}", h.GetScanStatus)
+
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans/{scanID}/findings", h.ListFindings)
 
 	// Fase 9 (UI no frontend): achados recentes entre TODOS os scans, não

@@ -5,6 +5,7 @@ import { SeverityBadge } from "@/components/scanning/SeverityBadge";
 import { TriggerScanForm } from "@/components/scanning/TriggerScanForm";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
+import { remediationFor } from "@/lib/scanning/remediation";
 import type { ScanFinding } from "@/types/api";
 
 // Segurança (Fase 9 do roadmap de segurança —
@@ -61,6 +62,7 @@ export default async function SegurancaPage() {
               <TableHeaderCell>Categoria OWASP</TableHeaderCell>
               <TableHeaderCell>Scanner</TableHeaderCell>
               <TableHeaderCell>Local</TableHeaderCell>
+              <TableHeaderCell>Como corrigir</TableHeaderCell>
               <TableHeaderCell>Quando</TableHeaderCell>
             </TableRow>
           </TableHead>
@@ -80,6 +82,11 @@ export default async function SegurancaPage() {
                 <TableCell className="text-muted">{finding.scanner}</TableCell>
                 <TableCell className="text-muted">
                   {finding.file ? (finding.line > 0 ? `${finding.file}:${finding.line}` : finding.file) : "—"}
+                </TableCell>
+                <TableCell className="text-muted">
+                  <div className="max-w-sm truncate" title={remediationFor(finding)}>
+                    {remediationFor(finding)}
+                  </div>
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted">
                   {new Date(finding.created_at).toLocaleString()}

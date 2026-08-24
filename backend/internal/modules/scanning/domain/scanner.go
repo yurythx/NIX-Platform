@@ -82,6 +82,24 @@ type PersistedFinding struct {
 	CreatedAt time.Time
 }
 
+// ScannerFailure descreve a falha de UM scanner dentro da execução de um
+// job (ProcessScanJob) — Scanner identifica QUAL ferramenta falhou, Code é
+// a mesma taxonomia de internal/domain/errors.Code (ex.:
+// "DEPENDENCY_UNAVAILABLE", "VALIDATION_ERROR") pra classificar o TIPO de
+// erro sem que quem exibe isso precise fazer parsing de string livre, e
+// Message é a descrição legível já produzida pelo scanner/adapter (ex.:
+// "scanning: git clone failed: fatal: ..."). Usado tanto no resultado de
+// um job parcialmente concluído (alguns scanners falharam, outros não,
+// ver application.Service.ProcessScanJob) quanto no motivo registrado de
+// um job totalmente falho/dead-letter — a mesma estrutura nos dois
+// lugares, pra GetScanStatus nunca precisar de dois formatos diferentes
+// dependendo do status do job.
+type ScannerFailure struct {
+	Scanner string `json:"scanner"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // Repository persiste e consulta os achados de uma execução de scan.
 type Repository interface {
 	// SaveFindings grava todo achado de scanID numa única operação,

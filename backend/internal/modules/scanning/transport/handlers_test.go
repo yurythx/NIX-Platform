@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/application"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/infrastructure"
@@ -231,6 +232,162 @@ func TestListRecentFindings_IncludesJustCreatedFinding(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte(`"finding_id":"HANDLER-MARKER-1"`)) {
 		t.Errorf("response should include the finding just created, got: %s", rec.Body.String())
+	}
+}
+
+// A partir daqui: GetScanStatus — a resposta ao pedido do usuário de
+// saber "qual ferramenta achou o erro" e "que tipo de erro/como
+// corrigir" pra um scan que falhou, algo que antes só existia no log do
+// worker.
+
+func TestGetScanStatus_InvalidScanID_Returns400(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger())
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/scans/not-a-uuid", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("scanID", "not-a-uuid")
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+
+	h.GetScanStatus(rec, r)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestGetScanStatus_UnknownScanID_Returns404(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger())
+
+	unknown := uuid.New().String()
+	r := httptest.NewRequest(http.MethodGet, "/scanning/scans/"+unknown, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("scanID", unknown)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+
+	h.GetScanStatus(rec, r)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func getScanStatus(t *testing.T, h *Handlers, jobID string) ScanStatusResponse {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/scanning/scans/"+jobID, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("scanID", jobID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+
+	h.GetScanStatus(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	return decodeEnvelope[ScanStatusResponse](t, rec.Body.Bytes())
+}
+
+// Reproduz o bug real que motivou GetScanStatus: um alvo cujo git clone
+// falha (mesma forma de erro confirmada contra o binário git de verdade
+// nesta sessão — motivo em "fatal: ...", não na primeira linha de
+// stderr) precisa aparecer com o scanner certo, o Code certo
+// (DEPENDENCY_UNAVAILABLE) e um Hint que não seja o genérico — a
+// mensagem bate no case "git clone failed" de remediationHint.
+func TestGetScanStatus_PartialFailure_IncludesScannerAndHint(t *testing.T) {
+	pool := testPool(t)
+	ok := &fakeScanner{name: "trivy", findings: []domain.Finding{{ID: "CVE-1", Severity: domain.SeverityHigh, Description: "achado real"}}}
+	broken := &fakeScanner{name: "semgrep", err: apperrors.DependencyUnavailable(
+		"scanning: git clone failed: fatal: could not read Username for 'https://github.com': No such device or address")}
+	svc := newTestService(pool, ok, broken)
+	h := NewHandlers(svc, testLogger())
+
+	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy", "semgrep"}, Target: "https://example.com/repo.git"})
+	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
+	createRec := httptest.NewRecorder()
+	h.CreateScan(createRec, createReq)
+	job := decodeEnvelope[scanJobResponse](t, createRec.Body.Bytes())
+
+	jobID, err := uuid.Parse(job.JobID)
+	if err != nil {
+		t.Fatalf("parse job id: %v", err)
+	}
+	if err := svc.ProcessScanJob(context.Background(), jobID, uuid.New()); err != nil {
+		t.Fatalf("ProcessScanJob (partial failure should not return an error): %v", err)
+	}
+
+	status := getScanStatus(t, h, job.JobID)
+	if status.Status != "completed" {
+		t.Errorf("Status = %q, want completed (partial failure still completes the job)", status.Status)
+	}
+	if len(status.SucceededScanners) != 1 || status.SucceededScanners[0] != "trivy" {
+		t.Errorf("SucceededScanners = %v, want [trivy]", status.SucceededScanners)
+	}
+	if len(status.FailedScanners) != 1 {
+		t.Fatalf("FailedScanners = %v, want exactly 1 entry", status.FailedScanners)
+	}
+	got := status.FailedScanners[0]
+	if got.Scanner != "semgrep" {
+		t.Errorf("FailedScanners[0].Scanner = %q, want semgrep", got.Scanner)
+	}
+	if got.Code != "DEPENDENCY_UNAVAILABLE" {
+		t.Errorf("FailedScanners[0].Code = %q, want DEPENDENCY_UNAVAILABLE", got.Code)
+	}
+	if !bytes.Contains([]byte(got.Message), []byte("fatal: could not read Username")) {
+		t.Errorf("FailedScanners[0].Message = %q, want it to contain the real git error", got.Message)
+	}
+	if !bytes.Contains([]byte(got.Hint), []byte("autenticação")) {
+		t.Errorf("FailedScanners[0].Hint = %q, want the credential-specific hint, not the generic fallback", got.Hint)
+	}
+}
+
+// Quando TODOS os scanners falham, o job vira dead_letter só depois de
+// esgotar os retries — este teste simula isso chamando
+// HandleScanDeadLetter diretamente (mesmo padrão de
+// application/service_test.go), e confirma que GetScanStatus consegue
+// decodificar o motivo estruturado de volta, não só o texto genérico
+// "max retries exceeded" que HandleScanDeadLetter gravava antes da
+// correção.
+func TestGetScanStatus_DeadLetter_PreservesRealFailureReason(t *testing.T) {
+	pool := testPool(t)
+	broken := &fakeScanner{name: "zap", err: apperrors.DependencyUnavailable(
+		"zap: no hosts are allowlisted (SCANNING_ZAP_ALLOWED_HOSTS is empty) — refusing to scan any target")}
+	svc := newTestService(pool, broken)
+	h := NewHandlers(svc, testLogger())
+
+	body, _ := json.Marshal(createScanRequest{Scanners: []string{"zap"}, Target: "https://example.com"})
+	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
+	createRec := httptest.NewRecorder()
+	h.CreateScan(createRec, createReq)
+	job := decodeEnvelope[scanJobResponse](t, createRec.Body.Bytes())
+
+	jobID, err := uuid.Parse(job.JobID)
+	if err != nil {
+		t.Fatalf("parse job id: %v", err)
+	}
+	if err := svc.ProcessScanJob(context.Background(), jobID, uuid.New()); err == nil {
+		t.Fatal("expected ProcessScanJob to fail when the only scanner fails")
+	}
+	if err := svc.HandleScanDeadLetter(context.Background(), jobID, uuid.New()); err != nil {
+		t.Fatalf("HandleScanDeadLetter: %v", err)
+	}
+
+	status := getScanStatus(t, h, job.JobID)
+	if status.Status != "dead_letter" {
+		t.Errorf("Status = %q, want dead_letter", status.Status)
+	}
+	if len(status.FailedScanners) != 1 {
+		t.Fatalf("FailedScanners = %v, want exactly 1 entry", status.FailedScanners)
+	}
+	got := status.FailedScanners[0]
+	if got.Scanner != "zap" || got.Code != "DEPENDENCY_UNAVAILABLE" {
+		t.Errorf("FailedScanners[0] = %+v, want scanner=zap code=DEPENDENCY_UNAVAILABLE", got)
+	}
+	if !bytes.Contains([]byte(got.Hint), []byte("SCANNING_ZAP_ALLOWED_HOSTS")) {
+		t.Errorf("FailedScanners[0].Hint = %q, want the allowlist-specific hint", got.Hint)
 	}
 }
 

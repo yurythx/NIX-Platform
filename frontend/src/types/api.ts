@@ -66,3 +66,31 @@ export interface ScanFinding {
   line: number;
   created_at: string;
 }
+
+// GET /api/v1/scanning/scans/{scanID} — consultado pela UI logo depois de
+// disparar um scan (TriggerScanForm), via polling até status virar
+// terminal, pra saber qual scanner falhou, de que tipo foi o erro (code,
+// a mesma taxonomia de internal/domain/errors.Code do backend) e como
+// corrigir (hint, já pronto em texto — calculado no backend a partir de
+// code/scanner/message, ver transport/dto.go's remediationHint). Antes
+// desta consulta existir, essa informação só aparecia no log do
+// backend-worker.
+export interface ScannerFailure {
+  scanner: string;
+  code: string;
+  message: string;
+  hint: string;
+}
+
+export interface ScanStatus {
+  job_id: string;
+  status: JobStatus;
+  target: string;
+  requested_scanners: string[];
+  succeeded_scanners: string[] | null;
+  failed_scanners: ScannerFailure[];
+  attempts: number;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+}

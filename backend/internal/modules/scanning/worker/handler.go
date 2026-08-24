@@ -56,7 +56,7 @@ func DeadLetterHandler(svc *application.Service, logger *slog.Logger) events.Mes
 			return nil
 		}
 
-		if err := svc.HandleScanDeadLetter(ctx, jobID, event.CorrelationID, "max retries exceeded"); err != nil {
+		if err := svc.HandleScanDeadLetter(ctx, jobID, event.CorrelationID); err != nil {
 			logger.Error("scanning dlq: failed to record dead letter outcome", slog.String("job_id", payload.JobID), slog.Any("error", err))
 			return nil
 		}

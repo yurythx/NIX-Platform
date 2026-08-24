@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -242,6 +243,103 @@ func (s *Service) ListFindings(ctx context.Context, scanID uuid.UUID) ([]domain.
 	return findings, nil
 }
 
+// ScanStatus é a projeção de um job de scan pensada pra consumo HTTP (ver
+// GetScanStatus/transport.GetScanStatus) — o mesmo Status/Attempts/
+// timestamps que jobs.Job já guarda, mais os campos específicos de
+// scanning (scanners pedidos, quais tiveram sucesso, o detalhe
+// estruturado de quem falhou e por quê) decodificados de dentro de
+// Payload/Result/Error — só esta package sabe o formato scanning-specific
+// desses três campos genéricos.
+//
+// Existe porque, antes desta mudança, um scan que falhava (parcial ou
+// totalmente) não tinha NENHUMA superfície HTTP pra consultar o motivo:
+// só aparecia no log do worker. FailedScanners é o que responde
+// diretamente ao pedido do usuário de saber "qual ferramenta achou o
+// erro" (Scanner) "com descrição de que tipo de erro" (Code, Message) —
+// "como corrigir" fica por conta de quem exibe isso (ver
+// transport.remediationHint), não deste tipo: uma sugestão de correção é
+// texto de apresentação, não um dado que faça sentido persistir junto do
+// job.
+type ScanStatus struct {
+	JobID             uuid.UUID
+	Status            string
+	Target            string
+	RequestedScanners []string
+	SucceededScanners []string
+	FailedScanners    []domain.ScannerFailure
+	Attempts          int
+	CreatedAt         time.Time
+	StartedAt         *time.Time
+	FinishedAt        *time.Time
+}
+
+// GetScanStatus consulta o estado atual de um job de scan — quem chama
+// tipicamente é a UI logo depois de disparar um scan (CreateScanJob),
+// fazendo polling até o status virar terminal (completed/failed/
+// dead_letter), pra saber se precisa mostrar os achados, um aviso de
+// falha parcial, ou o motivo de uma falha total.
+func (s *Service) GetScanStatus(ctx context.Context, jobID uuid.UUID) (*ScanStatus, error) {
+	job, err := s.jobsRepo.GetByID(ctx, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: get scan status %s: %w", jobID, err)
+	}
+
+	var payload scanJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("scanning: decode job %s payload: %w", jobID, err)
+	}
+
+	status := &ScanStatus{
+		JobID:             job.ID,
+		Status:            string(job.Status),
+		Target:            payload.Target,
+		RequestedScanners: payload.Scanners,
+		Attempts:          job.Attempts,
+		CreatedAt:         job.CreatedAt,
+		StartedAt:         job.StartedAt,
+		FinishedAt:        job.FinishedAt,
+	}
+
+	switch job.Status {
+	case jobs.StatusCompleted:
+		var result struct {
+			SucceededScanners []string                `json:"succeeded_scanners"`
+			FailedScanners    []domain.ScannerFailure `json:"failed_scanners,omitempty"`
+		}
+		if len(job.Result) > 0 {
+			if err := json.Unmarshal(job.Result, &result); err != nil {
+				return nil, fmt.Errorf("scanning: decode job %s result: %w", jobID, err)
+			}
+		}
+		status.SucceededScanners = result.SucceededScanners
+		status.FailedScanners = result.FailedScanners
+	case jobs.StatusFailed, jobs.StatusDeadLetter:
+		if job.Error != nil && *job.Error != "" {
+			status.FailedScanners = decodeFailures(*job.Error)
+		}
+	}
+
+	return status, nil
+}
+
+// decodeFailures decodifica o texto de jobs.error de volta em
+// []domain.ScannerFailure — o formato que encodeFailures grava desde
+// esta fase. Tolerante a texto que NÃO está nesse formato (o fallback
+// defensivo de HandleScanDeadLetter grava só "max retries exceeded" em
+// texto puro quando não há nenhum jobs.error anterior; um jobs.error
+// gravado antes desta mudança também não seria JSON): em vez de devolver
+// erro e quebrar GetScanStatus pra um job assim, devolve uma única
+// entrada sintética com o texto bruto na Message — sempre alguma
+// informação em vez de um erro de decodificação visível pro cliente
+// HTTP.
+func decodeFailures(raw string) []domain.ScannerFailure {
+	var failures []domain.ScannerFailure
+	if err := json.Unmarshal([]byte(raw), &failures); err != nil {
+		return []domain.ScannerFailure{{Message: raw}}
+	}
+	return failures
+}
+
 // maxRecentFindings é o teto de ListRecentFindings — nenhum chamador
 // consegue pedir mais que isso, nem passando um limit maior (evita uma
 // consulta acidentalmente sem paginação nenhuma trazer a tabela inteira
@@ -394,6 +492,49 @@ func summarizeFailures(failed []scannerOutcome) string {
 	return strings.Join(parts, "; ")
 }
 
+// newScannerFailure extrai de scannerOutcome.err a mesma classificação de
+// erro (Code) que a camada HTTP já usa pra decidir status code —
+// reaproveitada aqui pra que quem consultar o resultado de um job (ver
+// GetScanStatus) saiba o TIPO do erro sem fazer parsing de string livre.
+// Um erro que não veio de apperrors não deveria acontecer nos
+// CodeScanner de hoje (todos devolvem *apperrors.Error nas suas falhas
+// conhecidas), mas defensivo contra um bug futuro que devolva um erro
+// "cru" — cai em CodeInternal em vez de entrar em pânico ou perder a
+// mensagem.
+func newScannerFailure(o scannerOutcome) domain.ScannerFailure {
+	if appErr, ok := apperrors.As(o.err); ok {
+		return domain.ScannerFailure{Scanner: o.scanner, Code: string(appErr.Code), Message: appErr.Message}
+	}
+	return domain.ScannerFailure{Scanner: o.scanner, Code: string(apperrors.CodeInternal), Message: o.err.Error()}
+}
+
+func scannerFailures(outcomes []scannerOutcome) []domain.ScannerFailure {
+	out := make([]domain.ScannerFailure, len(outcomes))
+	for i, o := range outcomes {
+		out[i] = newScannerFailure(o)
+	}
+	return out
+}
+
+// encodeFailures serializa as falhas de scanner de failed para o texto
+// gravado em jobs.error (TEXT genérico, compartilhado com todo outro
+// tipo de job desta plataforma) — JSON, não texto livre, pra que
+// GetScanStatus consiga decodificar de volta em []domain.ScannerFailure
+// sem parsing de string. summarizeFailures (texto livre, pensado pra
+// leitura em log) continua existindo separadamente só pras mensagens de
+// log desta package — os dois formatos servem públicos diferentes.
+func encodeFailures(failed []scannerOutcome) string {
+	data, err := json.Marshal(scannerFailures(failed))
+	if err != nil {
+		// Defensivo: json.Marshal de um []domain.ScannerFailure (só
+		// campos string) não deveria falhar nunca — preferimos um
+		// texto degradado, ainda útil em log, a perder jobs.error
+		// inteiro por causa de um erro de serialização.
+		return summarizeFailures(failed)
+	}
+	return string(data)
+}
+
 // ProcessScanJob implementa a execução do lado do worker (mesmo desenho
 // de diario_oficial.Service.ProcessJob, incluindo a mesma idempotência
 // contra redelivery do RabbitMQ: um job em estado terminal vira um no-op
@@ -435,12 +576,12 @@ func (s *Service) ProcessScanJob(ctx context.Context, jobID uuid.UUID, correlati
 			return err
 		}
 		if len(succeeded) == 0 {
-			return s.jobsRepo.MarkFailed(ctx, tx, jobID, summarizeFailures(failed))
+			return s.jobsRepo.MarkFailed(ctx, tx, jobID, encodeFailures(failed))
 		}
 		return s.jobsRepo.MarkCompleted(ctx, tx, jobID, struct {
-			SucceededScanners []string `json:"succeeded_scanners"`
-			FailedScanners    []string `json:"failed_scanners,omitempty"`
-		}{SucceededScanners: outcomeNames(succeeded), FailedScanners: outcomeNames(failed)})
+			SucceededScanners []string                `json:"succeeded_scanners"`
+			FailedScanners    []domain.ScannerFailure `json:"failed_scanners,omitempty"`
+		}{SucceededScanners: outcomeNames(succeeded), FailedScanners: scannerFailures(failed)})
 	})
 	if txErr != nil {
 		return fmt.Errorf("scanning: record processing outcome: %w", txErr)
@@ -488,8 +629,30 @@ func (s *Service) ProcessScanJob(ctx context.Context, jobID uuid.UUID, correlati
 // qual diario_oficial.Service.HandleDeadLetter — antes disso, toda falha
 // era tratada como "ainda pode ter sucesso numa nova tentativa" (ver
 // ProcessScanJob) e não publicava EventScanFailed.
-func (s *Service) HandleScanDeadLetter(ctx context.Context, jobID uuid.UUID, correlationID uuid.UUID, reason string) error {
-	err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
+//
+// O motivo gravado como jobs.error não é mais um texto genérico fixo
+// ("max retries exceeded"): isso descartava silenciosamente o motivo de
+// verdade (qual scanner falhou, com que tipo de erro e mensagem) que
+// ProcessScanJob já tinha gravado na ÚLTIMA tentativa via MarkFailed —
+// bug real, encontrado enquanto o usuário investigava por que um disparo
+// de scan "deu errado" e só via "max retries exceeded" no resultado
+// final, sem nenhuma pista do motivo. Em vez de sobrescrever, carrega o
+// job atual e reaproveita seu jobs.error (já no formato JSON de
+// []domain.ScannerFailure produzido por encodeFailures) verbatim — só
+// cai no texto genérico se, por algum motivo defensivo (job nunca passou
+// por MarkFailed antes de ser dado como esgotado), não houver nada
+// gravado ainda.
+func (s *Service) HandleScanDeadLetter(ctx context.Context, jobID uuid.UUID, correlationID uuid.UUID) error {
+	current, err := s.jobsRepo.GetByID(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("scanning: load job %s for dead letter: %w", jobID, err)
+	}
+	reason := "max retries exceeded"
+	if current.Error != nil && *current.Error != "" {
+		reason = *current.Error
+	}
+
+	err = database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		if err := s.jobsRepo.MarkDeadLetter(ctx, tx, jobID, reason); err != nil {
 			return err
 		}

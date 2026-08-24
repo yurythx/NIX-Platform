@@ -90,6 +90,30 @@ func (h *Handlers) ListFindings(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOK(w, toFindingResponses(findings))
 }
 
+// GetScanStatus trata GET /api/v1/scanning/scans/{scanID} — pensado pra
+// UI fazer polling logo depois de CreateScan até o status virar terminal
+// (completed/failed/dead_letter), e então mostrar não só os achados
+// (ListFindings) mas também qual scanner falhou, de que tipo foi o erro
+// e como corrigir (ver ScanStatusResponse/remediationHint) — resposta
+// direta ao pedido do usuário de saber "qual ferramenta achou o erro" e
+// separar os erros por tipo/correção, que antes só existia no log do
+// worker.
+func (h *Handlers) GetScanStatus(w http.ResponseWriter, r *http.Request) {
+	scanID, err := uuid.Parse(chi.URLParam(r, "scanID"))
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, apperrors.BadRequest("scanID must be a valid UUID"))
+		return
+	}
+
+	status, err := h.service.GetScanStatus(r.Context(), scanID)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, toScanStatusResponse(status))
+}
+
 // ListRecentFindings trata GET /api/v1/scanning/findings — o feed "achados
 // recentes por severidade" (Fase 9) usado pela UI, que não exige um
 // scan_id de antemão como ListFindings exige.

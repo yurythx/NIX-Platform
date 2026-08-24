@@ -339,7 +339,7 @@ func TestHandleScanDeadLetter_MarksDeadLetterAndPublishesFailure(t *testing.T) {
 		t.Fatal("expected the fake scanner to fail")
 	}
 
-	if err := svc.HandleScanDeadLetter(ctx, job.ID, corrID, "max retries exceeded"); err != nil {
+	if err := svc.HandleScanDeadLetter(ctx, job.ID, corrID); err != nil {
 		t.Fatalf("HandleScanDeadLetter: %v", err)
 	}
 
@@ -353,6 +353,24 @@ func TestHandleScanDeadLetter_MarksDeadLetterAndPublishesFailure(t *testing.T) {
 	}
 	if !outboxEventExists(t, pool, job.ID.String(), EventScanFailed) {
 		t.Error("expected a scanning.scan.failed outbox event after dead-lettering")
+	}
+
+	// O bug que motivou esta troca de assinatura: HandleScanDeadLetter
+	// gravava um texto genérico fixo em jobs.error ("max retries
+	// exceeded"), descartando o motivo real que ProcessScanJob já tinha
+	// gravado na última tentativa (via MarkFailed). Agora reaproveita
+	// esse motivo — GetScanStatus precisa conseguir decodificar de volta
+	// o scanner que falhou e a mensagem real ("still failing"), não só o
+	// texto genérico.
+	status, err := svc.GetScanStatus(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanStatus: %v", err)
+	}
+	if len(status.FailedScanners) != 1 {
+		t.Fatalf("FailedScanners = %v, want exactly 1 entry", status.FailedScanners)
+	}
+	if got := status.FailedScanners[0]; got.Scanner != "trivy" || got.Message != "still failing" {
+		t.Errorf("FailedScanners[0] = %+v, want scanner=trivy message=%q", got, "still failing")
 	}
 }
 
