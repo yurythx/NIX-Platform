@@ -1,29 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
-import { Toggle } from "@/components/ui/Toggle";
 import { apiClient, ApiError } from "@/lib/api/client";
 import { useToast } from "@/components/notifications/ToastProvider";
+import { SCANNERS } from "@/lib/scanning/scannerRegistry";
 import { useScanStatusPolling } from "@/lib/scanning/useScanStatusPolling";
 import type { TestJobResponse } from "@/types/api";
 
 import { ScanProgress } from "./ScanProgress";
-
-// Nomes de scanner registrados no backend (scanning.Service) — não há
-// endpoint "listar scanners disponíveis", então esta lista é mantida
-// manualmente em sincronia com docs/openapi.yaml, mesmo princípio já
-// seguido por lib/integrations/registry.ts.
-const SCANNERS = [
-  { key: "trivy", label: "Trivy", hint: "dependências, Dockerfiles" },
-  { key: "semgrep", label: "Semgrep", hint: "SAST" },
-  { key: "sonarqube", label: "SonarQube", hint: "qualidade de código" },
-  { key: "zap", label: "OWASP ZAP", hint: "DAST — ataca de verdade" },
-] as const;
 
 // Dispara um scan novo (POST /api/v1/scanning/scans — Fase 7: mais de um
 // scanner selecionado roda tudo em paralelo sob o mesmo job/scan_id) e
@@ -37,6 +26,14 @@ const SCANNERS = [
 // ao sair desta tela. NotificationCenter continua tratando o toast via
 // WebSocket (scanning.scan.completed/failed) pra quem não ficar olhando
 // esta tela até o fim — os dois não conflitam.
+//
+// Seleção de scanner em cards (não mais Toggle+label numa linha): pedido
+// do usuário de "melhorar o layout do novo scan... uma descrição da
+// ferramenta e pra que ela serve e como usa-la" — cada card já traz essa
+// descrição (lib/scanning/scannerRegistry.ts, a mesma fonte que
+// ScanProgress e ToolFindingsCards usam, pra nunca divergir em nome
+// entre as telas), sem precisar abrir nenhum outro lugar pra entender o
+// que cada scanner faz antes de escolher.
 export function TriggerScanForm() {
   const { showToast } = useToast();
   const [selected, setSelected] = useState<Record<string, boolean>>({ trivy: true });
@@ -47,6 +44,17 @@ export function TriggerScanForm() {
 
   const scanners = SCANNERS.filter((s) => selected[s.key]).map((s) => s.key);
   const zapSelected = selected.zap;
+
+  function toggle(key: string) {
+    setSelected((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  function handleCardKeyDown(e: KeyboardEvent<HTMLDivElement>, key: string) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggle(key);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -81,28 +89,49 @@ export function TriggerScanForm() {
     <Card>
       <CardHeader>
         <CardTitle>Novo scan</CardTitle>
-        <CardDescription>
-          Escolha um ou mais scanners e o alvo. Trivy/Semgrep/SonarQube clonam uma URL git
-          (ex.: <code>https://github.com/org/repo.git#main</code>); ZAP ataca uma URL http(s) de um
-          serviço rodando de verdade — só funciona contra um host já autorizado
-          (<code>SCANNING_ZAP_ALLOWED_HOSTS</code>), nunca produção.
-        </CardDescription>
+        <CardDescription>Escolha um ou mais scanners e o alvo.</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-wrap gap-4">
-            {SCANNERS.map((s) => (
-              <label key={s.key} className="flex items-center gap-2 text-sm">
-                <Toggle
-                  checked={!!selected[s.key]}
-                  onChange={(checked) => setSelected((prev) => ({ ...prev, [s.key]: checked }))}
-                  label={s.label}
-                />
-                <span>
-                  {s.label} <span className="text-muted">({s.hint})</span>
-                </span>
-              </label>
-            ))}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {SCANNERS.map((s) => {
+              const checked = !!selected[s.key];
+              return (
+                <div
+                  key={s.key}
+                  role="switch"
+                  aria-checked={checked}
+                  aria-label={s.name}
+                  tabIndex={0}
+                  onClick={() => toggle(s.key)}
+                  onKeyDown={(e) => handleCardKeyDown(e, s.key)}
+                  className={`flex cursor-pointer flex-col gap-2 rounded-lg border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
+                    checked
+                      ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-500/10"
+                      : "border-black/10 hover:border-black/20 dark:border-white/10 dark:hover:border-white/20"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-medium text-foreground">{s.name}</div>
+                      <div className="text-xs text-muted">{s.category}</div>
+                    </div>
+                    <span
+                      aria-hidden="true"
+                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-xs ${
+                        checked
+                          ? "border-blue-500 bg-blue-500 text-white"
+                          : "border-black/20 dark:border-white/20"
+                      }`}
+                    >
+                      {checked && "✓"}
+                    </span>
+                  </div>
+                  <p className="text-sm text-muted">{s.description}</p>
+                  <p className="text-xs text-muted">{s.usage}</p>
+                </div>
+              );
+            })}
           </div>
 
           <Input

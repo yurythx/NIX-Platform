@@ -149,9 +149,13 @@ describe("TriggerScanForm", () => {
     // texto estático do CardDescription do próprio formulário, que já
     // menciona a mesma variável — o trecho abaixo só existe no hint.)
     expect(screen.getByText(/Adicione o host à variável de ambiente/)).toBeInTheDocument();
-    // trivy teve sucesso — aparece separado, não junto da falha (também
-    // em mais de um lugar: lista de progresso + badges de sucesso).
-    expect(screen.getAllByText("trivy").length).toBeGreaterThan(0);
+    // trivy teve sucesso — seu card de progresso mostra "Concluído"
+    // (nome de exibição "Trivy", via scannerRegistry — não o slug
+    // "trivy" que só aparece no card de falha, que é dados brutos da
+    // API, não passado pelo registro). "Trivy" também aparece no card de
+    // SELEÇÃO do próprio formulário, ainda visível acima do progresso —
+    // por isso getAllByText, mais de uma ocorrência é esperado aqui.
+    expect(screen.getAllByText("Trivy").length).toBeGreaterThan(0);
   });
 
   it("ao falhar, mostra um toast de erro em vez de travar o formulário", async () => {

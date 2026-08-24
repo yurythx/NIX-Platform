@@ -6,8 +6,8 @@ import { apiClient } from "@/lib/api/client";
 import { useScanStatusPolling } from "@/lib/scanning/useScanStatusPolling";
 import type { ScanFinding, ScanStatus } from "@/types/api";
 
-import { FindingsTable } from "./FindingsTable";
 import { ScanProgress } from "./ScanProgress";
+import { ToolFindingsCards } from "./ToolFindingsCards";
 
 const TERMINAL_STATUSES = new Set(["completed", "dead_letter"]);
 
@@ -49,7 +49,14 @@ export function ScanDetailLive({
   return (
     <div className="flex flex-col gap-6">
       {status && <ScanProgress status={status} polling={polling} />}
-      <FindingsTable findings={findings} showScanLink={false} />
+      {status && (
+        <div>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+            Achados por ferramenta
+          </h2>
+          <ToolFindingsCards scanId={jobId} status={status} findings={findings} />
+        </div>
+      )}
     </div>
   );
 }

@@ -23,9 +23,12 @@ function baseStatus(overrides: Partial<ScanStatus> = {}): ScanStatus {
 
 describe("ScanProgress", () => {
   it("mostra um scanner pedido sem nenhuma entrada em scanner_runs como pendente, não some da lista", () => {
+    // Nomes exibidos vêm de lib/scanning/scannerRegistry.ts (nome de
+    // exibição "Trivy", não o slug "trivy" que o backend usa) — mesmo
+    // registro que TriggerScanForm/ToolFindingsCards usam.
     render(<ScanProgress status={baseStatus()} polling />);
-    expect(screen.getByText("trivy")).toBeInTheDocument();
-    expect(screen.getByText("semgrep")).toBeInTheDocument();
+    expect(screen.getByText("Trivy")).toBeInTheDocument();
+    expect(screen.getByText("Semgrep")).toBeInTheDocument();
     expect(screen.getAllByText("Na fila").length).toBeGreaterThan(0);
   });
 
@@ -41,7 +44,7 @@ describe("ScanProgress", () => {
       />,
     );
     expect(screen.getAllByRole("status").length).toBeGreaterThan(0);
-    expect(screen.getByText("trivy rodando")).toBeInTheDocument();
+    expect(screen.getByText("Trivy rodando")).toBeInTheDocument();
   });
 
   it("progress_percent aparece como texto e como largura da barra", () => {

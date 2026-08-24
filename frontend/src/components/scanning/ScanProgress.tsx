@@ -4,7 +4,11 @@ import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
-import type { ScanStatus, ScannerRun } from "@/types/api";
+import { mergeScannerRows } from "@/lib/scanning/mergeScannerRows";
+import { scannerMeta } from "@/lib/scanning/scannerRegistry";
+import type { ScanStatus } from "@/types/api";
+
+import { ScannerFailureCard } from "./ScannerFailureCard";
 
 // Painel visual do progresso de UM scan — pedido do usuário: "um painel
 // visual dos testes rodando... quero saber qual teste está rodando,
@@ -13,6 +17,12 @@ import type { ScanStatus, ScannerRun } from "@/types/api";
 // detalhe de um scan (/seguranca/[scanId]) — os dois fazem polling de
 // GET /api/v1/scanning/scans/{id} e passam o ScanStatus mais recente
 // aqui; este componente é só apresentação, nenhum fetch próprio.
+//
+// Cada scanner é um CARD, não mais uma linha de lista — pedido do
+// usuário de "melhorar o layout... deixe também o concluído em cards":
+// um scanner concluído com sucesso já aparece aqui, com o status
+// "Concluído" no próprio card, então não existe mais uma seção separada
+// e redundante só pra listar os nomes dos que tiveram sucesso.
 
 const STATUS_LABEL: Record<string, string> = {
   queued: "Na fila",
@@ -30,37 +40,12 @@ const STATUS_TONE: Record<string, "neutral" | "success" | "danger" | "warning" |
   dead_letter: "danger",
 };
 
-type ScannerUIStatus = "pending" | "running" | "succeeded" | "failed";
-
-const SCANNER_STATUS_LABEL: Record<ScannerUIStatus, string> = {
+const SCANNER_STATUS_LABEL: Record<string, string> = {
   pending: "Na fila",
   running: "Rodando…",
   succeeded: "Concluído",
   failed: "Falhou",
 };
-
-interface MergedRow {
-  scanner: string;
-  uiStatus: ScannerUIStatus;
-  run?: ScannerRun;
-}
-
-// mergeScannerRows junta requested_scanners (a lista pedida, sempre
-// completa desde o disparo) com scanner_runs (só tem entrada pra quem já
-// COMEÇOU a rodar) — um scanner pedido sem entrada em scanner_runs ainda
-// não começou, e aparece como "pending" aqui em vez de simplesmente
-// desaparecer da lista.
-function mergeScannerRows(status: ScanStatus): MergedRow[] {
-  // O backend sempre manda scanner_runs/requested_scanners como listas
-  // (nunca omitidas), mas cai aqui defensivamente pra nunca quebrar o
-  // render por causa de um payload inesperado.
-  const byName = new Map((status.scanner_runs ?? []).map((r) => [r.scanner, r]));
-  return (status.requested_scanners ?? []).map((scanner) => {
-    const run = byName.get(scanner);
-    if (!run) return { scanner, uiStatus: "pending" };
-    return { scanner, uiStatus: run.status, run };
-  });
-}
 
 function formatElapsed(ms: number): string {
   if (ms < 1000) return "menos de 1s";
@@ -73,10 +58,8 @@ function formatElapsed(ms: number): string {
 
 export function ScanProgress({ status, polling }: { status: ScanStatus; polling: boolean }) {
   const rows = mergeScannerRows(status);
-  const requestedScanners = status.requested_scanners ?? [];
   const failedScanners = status.failed_scanners ?? [];
-  const succeededScanners = status.succeeded_scanners ?? [];
-  const succeededCount = succeededScanners.length;
+  const succeededCount = (status.succeeded_scanners ?? []).length;
   const totalFindings = (status.scanner_runs ?? []).reduce((sum, r) => sum + (r.findings_count ?? 0), 0);
 
   // "Tempo decorrido" precisa de um relógio (Date.now()) — chamar isso
@@ -132,38 +115,47 @@ export function ScanProgress({ status, polling }: { status: ScanStatus; polling:
           Achados até agora: <span className="text-foreground">{totalFindings}</span>
         </span>
         <span>
-          Sucesso: <span className="text-foreground">{succeededCount}</span> / {requestedScanners.length}
+          Sucesso: <span className="text-foreground">{succeededCount}</span> / {rows.length}
         </span>
       </div>
 
-      {/* Um scanner por linha: qual está rodando agora, qual já terminou
-          (com duração e contagem de achados), qual ainda nem começou. */}
-      <ul className="flex flex-col divide-y divide-black/5 rounded-md border border-black/10 dark:divide-white/5 dark:border-white/10">
-        {rows.map((row) => (
-          <li key={row.scanner} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-            <div className="flex items-center gap-2">
-              {row.uiStatus === "running" ? (
-                <Spinner label={`${row.scanner} rodando`} />
-              ) : (
-                <Badge
-                  tone={
-                    row.uiStatus === "succeeded" ? "success" : row.uiStatus === "failed" ? "danger" : "neutral"
-                  }
-                >
-                  {SCANNER_STATUS_LABEL[row.uiStatus]}
-                </Badge>
-              )}
-              <span className="font-medium text-foreground">{row.scanner}</span>
+      {/* Um card por scanner: qual está rodando agora, qual já terminou
+          (com duração e contagem de achados), qual ainda nem começou —
+          inclusive os já "Concluído", sem uma seção separada só pra
+          repetir esses nomes. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {rows.map((row) => {
+          const meta = scannerMeta(row.scanner);
+          return (
+            <div
+              key={row.scanner}
+              className="flex flex-col gap-2 rounded-lg border border-black/10 p-3 text-sm dark:border-white/10"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-foreground">{meta.name}</span>
+                {row.uiStatus === "running" ? (
+                  <Spinner label={`${meta.name} rodando`} />
+                ) : (
+                  <Badge
+                    tone={
+                      row.uiStatus === "succeeded" ? "success" : row.uiStatus === "failed" ? "danger" : "neutral"
+                    }
+                  >
+                    {SCANNER_STATUS_LABEL[row.uiStatus]}
+                  </Badge>
+                )}
+              </div>
+              <div className="text-xs text-muted">
+                {row.run?.duration_ms != null && <span>{formatElapsed(row.run.duration_ms)}</span>}
+                {row.run?.findings_count != null && (
+                  <span className="ml-2">{row.run.findings_count} achado(s)</span>
+                )}
+                {row.uiStatus === "pending" && <span>Ainda não começou</span>}
+              </div>
             </div>
-            <div className="text-xs text-muted">
-              {row.run?.duration_ms != null && <span>{formatElapsed(row.run.duration_ms)}</span>}
-              {row.run?.findings_count != null && (
-                <span className="ml-2">{row.run.findings_count} achado(s)</span>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
+          );
+        })}
+      </div>
 
       {/* Scanners que falharam: qual ferramenta, que tipo de erro, e como
           corrigir — o pedido original de separar erros por tipo/tool. */}
@@ -173,31 +165,7 @@ export function ScanProgress({ status, polling }: { status: ScanStatus; polling:
             {failedScanners.length === 1 ? "1 scanner falhou:" : `${failedScanners.length} scanners falharam:`}
           </span>
           {failedScanners.map((failure, i) => (
-            <div
-              key={`${failure.scanner}-${i}`}
-              className="flex flex-col gap-1 rounded-md border border-red-200 bg-red-50 p-3 text-sm dark:border-red-500/20 dark:bg-red-500/10"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-foreground">{failure.scanner || "desconhecido"}</span>
-                <Badge tone="danger">{failure.code || "ERRO"}</Badge>
-              </div>
-              <p className="text-muted">{failure.message}</p>
-              <p>
-                <span className="font-medium text-foreground">Como corrigir: </span>
-                {failure.hint}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {succeededScanners.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-muted">Concluído com sucesso:</span>
-          {succeededScanners.map((name) => (
-            <Badge key={name} tone="success">
-              {name}
-            </Badge>
+            <ScannerFailureCard key={`${failure.scanner}-${i}`} failure={failure} />
           ))}
         </div>
       )}
