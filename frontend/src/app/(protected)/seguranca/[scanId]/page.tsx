@@ -48,7 +48,7 @@ export default async function ScanDetailPage({
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <Link href="/seguranca" className="text-sm text-blue-600 hover:underline dark:text-blue-400">
+        <Link href="/seguranca" className="text-sm text-primary hover:underline">
           ← Todos os scans
         </Link>
         <h1 className="mt-1 break-all text-xl font-semibold">{status.target}</h1>

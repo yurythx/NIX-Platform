@@ -93,7 +93,7 @@ export function TriggerScanForm() {
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {SCANNERS.map((s) => {
               const checked = !!selected[s.key];
               return (
@@ -105,10 +105,10 @@ export function TriggerScanForm() {
                   tabIndex={0}
                   onClick={() => toggle(s.key)}
                   onKeyDown={(e) => handleCardKeyDown(e, s.key)}
-                  className={`flex cursor-pointer flex-col gap-2 rounded-lg border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
+                  className={`flex cursor-pointer flex-col gap-2 rounded-xl border p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
                     checked
-                      ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-500/10"
-                      : "border-black/10 hover:border-black/20 dark:border-white/10 dark:hover:border-white/20"
+                      ? "border-primary bg-primary/10"
+                      : "border-surface-border bg-surface hover:bg-black/5 dark:hover:bg-white/5"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -120,8 +120,8 @@ export function TriggerScanForm() {
                       aria-hidden="true"
                       className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-xs ${
                         checked
-                          ? "border-blue-500 bg-blue-500 text-white"
-                          : "border-black/20 dark:border-white/20"
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-surface-border"
                       }`}
                     >
                       {checked && "✓"}
@@ -153,13 +153,13 @@ export function TriggerScanForm() {
         </form>
 
         {jobId && (
-          <div className="mt-6 border-t border-black/10 pt-4 dark:border-white/10">
+          <div className="mt-6 border-t border-surface-border pt-4">
             {status ? (
               <>
                 <ScanProgress status={status} polling={polling} />
                 <Link
                   href={`/seguranca/${jobId}`}
-                  className="mt-3 inline-block text-sm text-blue-600 hover:underline dark:text-blue-400"
+                  className="mt-3 inline-block text-sm text-primary hover:underline"
                 >
                   Ver página deste scan →
                 </Link>

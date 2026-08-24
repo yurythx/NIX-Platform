@@ -56,14 +56,14 @@ export default async function SegurancaPage() {
       <TriggerScanForm />
 
       <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
           Scans recentes
         </h2>
         {scansError ? <ErrorState message={scansError} /> : <ScanList scans={scans} />}
       </div>
 
       <div>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
           Achados recentes (todos os scans)
         </h2>
         {findingsError ? (

@@ -49,7 +49,7 @@ export function ToolFindingsCards({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {rows.map((row) => {
         const meta = scannerMeta(row.scanner);
         const list = byScanner.get(row.scanner) ?? [];
@@ -60,7 +60,7 @@ export function ToolFindingsCards({
           <Link
             key={row.scanner}
             href={`/seguranca/${scanId}/${row.scanner}`}
-            className="flex flex-col gap-2 rounded-lg border border-black/10 p-4 transition-colors hover:border-black/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-white/10 dark:hover:border-white/20"
+            className="flex flex-col gap-2 rounded-xl border border-surface-border bg-surface p-4 transition-colors hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary dark:hover:bg-white/5"
           >
             <div className="flex items-center justify-between gap-2">
               <span className="font-medium text-foreground">{meta.name}</span>
@@ -70,14 +70,14 @@ export function ToolFindingsCards({
             </div>
             {meta.category && <div className="text-xs text-muted">{meta.category}</div>}
             <div className="mt-1 flex items-center gap-4 text-sm">
-              <span className={errors > 0 ? "font-medium text-red-600 dark:text-red-400" : "text-muted"}>
+              <span className={errors > 0 ? "font-medium text-danger" : "text-muted"}>
                 {errors} erro{errors === 1 ? "" : "s"}
               </span>
-              <span className={warnings > 0 ? "font-medium text-amber-600 dark:text-amber-400" : "text-muted"}>
+              <span className={warnings > 0 ? "font-medium text-amber-800 dark:text-amber-400" : "text-muted"}>
                 {warnings} warning{warnings === 1 ? "" : "s"}
               </span>
             </div>
-            <div className="text-xs text-blue-600 dark:text-blue-400">
+            <div className="text-xs text-primary">
               {list.length === 0 ? "Ver detalhes" : `Ver ${list.length} achado${list.length === 1 ? "" : "s"}`} →
             </div>
           </Link>

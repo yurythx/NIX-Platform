@@ -38,7 +38,7 @@ export function ScanList({ scans }: { scans: ScanStatus[] }) {
   }
 
   return (
-    <ul className="flex flex-col divide-y divide-black/5 rounded-lg border border-black/10 dark:divide-white/5 dark:border-white/10">
+    <ul className="flex flex-col divide-y divide-surface-border rounded-lg border border-surface-border bg-surface">
       {scans.map((s) => {
         // Defensivo: o backend garante requested_scanners/failed_scanners
         // como lista (nunca null, ver transport/dto.go's
@@ -51,7 +51,7 @@ export function ScanList({ scans }: { scans: ScanStatus[] }) {
           <li key={s.job_id}>
             <Link
               href={`/seguranca/${s.job_id}`}
-              className="flex flex-col gap-1 p-4 hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:hover:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+              className="flex flex-col gap-1 p-4 hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary dark:hover:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
             >
               <div className="min-w-0">
                 <div className="truncate font-medium text-foreground" title={s.target}>

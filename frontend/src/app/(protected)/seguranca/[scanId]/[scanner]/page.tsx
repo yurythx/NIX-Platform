@@ -59,7 +59,7 @@ export default async function ScannerFindingsPage({
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <Link href={`/seguranca/${scanId}`} className="text-sm text-blue-600 hover:underline dark:text-blue-400">
+        <Link href={`/seguranca/${scanId}`} className="text-sm text-primary hover:underline">
           ← Voltar pro scan
         </Link>
         <h1 className="mt-1 text-xl font-semibold">{meta.name}</h1>

@@ -70,7 +70,7 @@ export function FindingsTable({
               role="button"
               tabIndex={0}
               aria-label={`Ver detalhes do achado ${finding.finding_id}`}
-              className="cursor-pointer hover:bg-black/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:hover:bg-white/5"
+              className="cursor-pointer hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary dark:hover:bg-white/5"
             >
               <TableCell>
                 <SeverityBadge severity={finding.severity} />
@@ -117,7 +117,7 @@ export function FindingsTable({
                   href={selected.tool.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline dark:text-blue-400"
+                  className="text-primary hover:underline"
                 >
                   Abrir na ferramenta →
                 </a>
@@ -152,7 +152,7 @@ export function FindingsTable({
             {showScanLink && (
               <Link
                 href={`/seguranca/${selected.scan_id}`}
-                className="text-blue-600 hover:underline dark:text-blue-400"
+                className="text-primary hover:underline"
               >
                 Ver o scan completo →
               </Link>

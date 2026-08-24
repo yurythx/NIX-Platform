@@ -51,7 +51,7 @@ export function ScanDetailLive({
       {status && <ScanProgress status={status} polling={polling} />}
       {status && (
         <div>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
             Achados por ferramenta
           </h2>
           <ToolFindingsCards scanId={jobId} status={status} findings={findings} />

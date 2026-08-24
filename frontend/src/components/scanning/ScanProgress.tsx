@@ -96,9 +96,9 @@ export function ScanProgress({ status, polling }: { status: ScanStatus; polling:
           </span>
           <span>{status.progress_percent}%</span>
         </div>
-        <div className="h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-surface-border">
           <div
-            className="h-full rounded-full bg-blue-500 transition-all duration-500"
+            className="h-full rounded-full bg-primary transition-all duration-500"
             style={{ width: `${status.progress_percent}%` }}
           />
         </div>
@@ -123,13 +123,13 @@ export function ScanProgress({ status, polling }: { status: ScanStatus; polling:
           (com duração e contagem de achados), qual ainda nem começou —
           inclusive os já "Concluído", sem uma seção separada só pra
           repetir esses nomes. */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {rows.map((row) => {
           const meta = scannerMeta(row.scanner);
           return (
             <div
               key={row.scanner}
-              className="flex flex-col gap-2 rounded-lg border border-black/10 p-3 text-sm dark:border-white/10"
+              className="flex flex-col gap-2 rounded-xl border border-surface-border bg-surface p-3 text-sm"
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium text-foreground">{meta.name}</span>
