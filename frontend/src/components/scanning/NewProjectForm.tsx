@@ -12,6 +12,12 @@ import type { Project } from "@/types/api";
 
 type Tab = "git" | "upload";
 
+// MAX_UPLOAD_ZIP_BYTES espelha application.maxUploadZipBytes no backend
+// (scanning/application/service.go) — duplicado aqui só pra dar feedback
+// imediato no navegador; o backend continua sendo a validação que
+// realmente importa, nunca confiável vinda só do cliente.
+const MAX_UPLOAD_ZIP_BYTES = 50 * 1024 * 1024;
+
 // NewProjectForm: Fase 10 (Projeto persistente + upload .zip) — duas
 // abas, exatamente como a proposta original pedia (seção 5.A): URL git
 // (mesmo formato https://...#branch que um scan avulso já aceita) ou
@@ -50,6 +56,21 @@ export function NewProjectForm() {
         const file = fileInputRef.current?.files?.[0];
         if (!file) {
           showToast({ title: "Selecione um arquivo .zip", tone: "danger" });
+          setSubmitting(false);
+          return;
+        }
+        // Mesmo limite do backend (application.maxUploadZipBytes) —
+        // checado aqui ANTES de montar o FormData/enviar: achado de
+        // auditoria — sem isso, um arquivo grande demais só é rejeitado
+        // DEPOIS do upload inteiro terminar (a resposta 422 só chega
+        // quando o corpo já foi todo enviado), desperdiçando o tempo/
+        // banda do usuário à toa.
+        if (file.size > MAX_UPLOAD_ZIP_BYTES) {
+          showToast({
+            title: "Arquivo .zip muito grande",
+            description: `O limite é ${MAX_UPLOAD_ZIP_BYTES / (1024 * 1024)}MB — este arquivo tem ${(file.size / (1024 * 1024)).toFixed(1)}MB.`,
+            tone: "danger",
+          });
           setSubmitting(false);
           return;
         }

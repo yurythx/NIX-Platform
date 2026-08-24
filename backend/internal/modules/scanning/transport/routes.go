@@ -10,14 +10,18 @@ import (
 )
 
 // RegisterRoutes mounts the scanning module's routes onto an already
-// auth.RequireAuthentication-protected router. limiter is built once in
-// internal/app (backed by Postgres, shared across every API replica) and
-// passed in rather than constructed here, so every module doesn't stand
-// up its own store.
-func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter httpserver.Limiter) {
+// auth.RequireAuthentication-protected router. scanLimiter/
+// projectLimiter are built once in internal/app (backed by Postgres,
+// shared across every API replica) and passed in rather than constructed
+// here, so every module doesn't stand up its own store — two SEPARATE
+// instances, not one reused for both routes: clonar+escanear
+// (scanLimiter) custa bem mais que criar um registro de projeto
+// (projectLimiter), então cada um tem seu próprio orçamento (ver
+// internal/app/dependencies.go's RateLimiters.ScanJob/ProjectCreate).
+func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter, projectLimiter httpserver.Limiter) {
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningManage),
-		httpserver.RateLimit(logger, limiter, RateLimitKey),
+		httpserver.RateLimit(logger, scanLimiter, RateLimitKey),
 	).Post("/scanning/scans", h.CreateScan)
 
 	r.With(
@@ -52,7 +56,7 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 	// deste módulo.
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningManage),
-		httpserver.RateLimit(logger, limiter, RateLimitKey),
+		httpserver.RateLimit(logger, projectLimiter, RateLimitKey),
 	).Post("/scanning/projects", h.CreateProject)
 
 	r.With(

@@ -41,6 +41,14 @@ type RateLimiters struct {
 	WSTicket   httpserver.Limiter // POST /api/v1/ws/ticket
 	LocalLogin httpserver.Limiter // POST /api/v1/auth/login — chave por IP, não por usuário (§ Sistema de Login Local), já que quem chama ainda não está autenticado
 	ScanJob    httpserver.Limiter // POST /api/v1/scanning/scans — clonar+escanear é bem mais caro que um teste de integração comum, por isso mais apertado que TestJob
+	// ProjectCreate (Fase 10) é uma instância PRÓPRIA, não o ScanJob
+	// reaproveitado — achado de auditoria: criar um projeto é uma escrita
+	// de metadado barata (ou, no caso de upload, guardar um .zip), nada
+	// perto do custo de clonar+escanear que justifica o limite apertado
+	// de ScanJob; compartilhar o mesmo limiter faria alguém criando 3
+	// projetos seguidos ser barrado por um orçamento pensado pra outra
+	// operação bem mais cara.
+	ProjectCreate httpserver.Limiter // POST /api/v1/scanning/projects
 }
 
 // OutboxSource identifica este backend como o Source carimbado em todo
@@ -153,21 +161,34 @@ func NewDependencies(ctx context.Context, component string) (*Dependencies, erro
 		Hub:         ws.NewHub(logger),
 		Tickets:     ws.NewTicketStore(ws.TicketTTL),
 		RateLimiters: &RateLimiters{
+			// O último argumento (bucket) namespaceia cada limiter dentro
+			// de rate_limit_buckets — ver o comentário de
+			// ratelimit.PostgresLimiter: sem ele, dois limiters
+			// diferentes recebendo o MESMO key (o subject do usuário
+			// autenticado, comum entre rotas de módulos diferentes)
+			// escreviam na mesma linha e se anulavam.
+			//
 			// Equivalente aproximado aos parâmetros anteriores em memória
 			// (0.5 req/s, burst 3): até 3 requisições a cada 10s.
-			TestJob: ratelimit.NewPostgresLimiter(pool, 10, 3),
+			TestJob: ratelimit.NewPostgresLimiter(pool, 10, 3, "test_job"),
 			// Equivalente a 1 req/s, burst 5: até 5 requisições a cada 5s.
-			WSTicket: ratelimit.NewPostgresLimiter(pool, 5, 5),
+			WSTicket: ratelimit.NewPostgresLimiter(pool, 5, 5, "ws_ticket"),
 			// Mais apertado de propósito — até 5 tentativas de login a
 			// cada 60s por IP, para desacelerar força bruta de senha sem
 			// travar um usuário legítimo que só errou a senha uma ou
 			// duas vezes.
-			LocalLogin: ratelimit.NewPostgresLimiter(pool, 60, 5),
+			LocalLogin: ratelimit.NewPostgresLimiter(pool, 60, 5, "local_login"),
 			// Até 2 scans a cada 60s por usuário: um `git clone` + `trivy
 			// fs` custa bem mais CPU/I/O/rede que um teste de integração
 			// comum, então o limite é deliberadamente mais apertado que
 			// TestJob.
-			ScanJob: ratelimit.NewPostgresLimiter(pool, 60, 2),
+			ScanJob: ratelimit.NewPostgresLimiter(pool, 60, 2, "scan_job"),
+			// Criar um projeto (Fase 10) é uma escrita barata (metadado,
+			// ou guardar um .zip) — nunca clona nem escaneia nada por si
+			// só — então tem um orçamento próprio, tão generoso quanto
+			// TestJob, em vez de disputar o orçamento apertado do
+			// ScanJob acima.
+			ProjectCreate: ratelimit.NewPostgresLimiter(pool, 10, 3, "project_create"),
 		},
 		Idempotency: idempotency.NewPostgresStore(pool),
 		Flags:       configflags.NewPostgresStore(pool),

@@ -65,7 +65,7 @@ func NewRouter(deps *Dependencies) chi.Router {
 		usersTransport.RegisterRoutes(api, deps.Modules.Users.Handlers, deps.Logger)
 		integrationsTransport.RegisterRoutes(api, deps.Modules.Integrations.Handlers)
 		diarioTransport.RegisterRoutes(api, deps.Modules.DiarioOficial.Handlers, deps.Logger, deps.RateLimiters.TestJob)
-		scanningTransport.RegisterRoutes(api, deps.Modules.Scanning.Handlers, deps.Logger, deps.RateLimiters.ScanJob)
+		scanningTransport.RegisterRoutes(api, deps.Modules.Scanning.Handlers, deps.Logger, deps.RateLimiters.ScanJob, deps.RateLimiters.ProjectCreate)
 		configflags.RegisterRoutes(api, deps.Modules.ConfigFlags.Handlers, deps.Logger)
 	})
 

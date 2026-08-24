@@ -756,7 +756,7 @@ const maxUploadZipBytes = 50 * 1024 * 1024 // 50MB
 // escanear (git_clone.go's parseGitTarget/validateHost, dentro do
 // worker) — nunca duplicado aqui, pra nunca divergir entre as duas
 // validações.
-func (s *Service) CreateProjectGit(ctx context.Context, name, target string) (*domain.Project, error) {
+func (s *Service) CreateProjectGit(ctx context.Context, name, target string, requestedBy *uuid.UUID) (*domain.Project, error) {
 	if name == "" {
 		return nil, apperrors.Validation("name is required")
 	}
@@ -768,7 +768,27 @@ func (s *Service) CreateProjectGit(ctx context.Context, name, target string) (*d
 	if err := s.repo.CreateProject(ctx, p); err != nil {
 		return nil, fmt.Errorf("scanning: create project: %w", err)
 	}
+	s.recordProjectCreated(ctx, p, requestedBy)
 	return &p, nil
+}
+
+// recordProjectCreated grava a auditoria de um projeto novo (Fase 10) —
+// achado de auditoria: CreateProjectGit/CreateProjectUpload não tinham
+// nenhum registro, ao contrário de createScanJob (ActionScanRequested),
+// mesmo criar um projeto por upload guardando até 50MB de código de
+// terceiros. Best-effort (audit pode ser nil, mesmo princípio do resto
+// do Service) — nunca falha a criação do projeto por conta disto.
+func (s *Service) recordProjectCreated(ctx context.Context, p domain.Project, requestedBy *uuid.UUID) {
+	if s.audit == nil {
+		return
+	}
+	_ = s.audit.Record(ctx, audit.Entry{
+		UserID:       requestedBy,
+		Action:       audit.ActionProjectCreated,
+		ResourceType: "project",
+		ResourceID:   p.ID.String(),
+		Metadata:     map[string]any{"name": p.Name, "source_type": string(p.SourceType), "target": p.Target},
+	})
 }
 
 // CreateProjectUpload cria um domain.Project (Fase 10) a partir dos bytes
@@ -778,7 +798,7 @@ func (s *Service) CreateProjectGit(ctx context.Context, name, target string) (*d
 // o suficiente pra rejeitar entrada obviamente inválida cedo (vazio,
 // grande demais), sem duplicar a validação de conteúdo que já vive em
 // outro lugar.
-func (s *Service) CreateProjectUpload(ctx context.Context, name string, zipBytes []byte) (*domain.Project, error) {
+func (s *Service) CreateProjectUpload(ctx context.Context, name string, zipBytes []byte, requestedBy *uuid.UUID) (*domain.Project, error) {
 	if name == "" {
 		return nil, apperrors.Validation("name is required")
 	}
@@ -793,6 +813,7 @@ func (s *Service) CreateProjectUpload(ctx context.Context, name string, zipBytes
 	if err := s.repo.CreateProject(ctx, p); err != nil {
 		return nil, fmt.Errorf("scanning: create project: %w", err)
 	}
+	s.recordProjectCreated(ctx, p, requestedBy)
 	return &p, nil
 }
 

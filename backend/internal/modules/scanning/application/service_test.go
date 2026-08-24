@@ -17,6 +17,7 @@ import (
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/infrastructure"
+	"github.com/yurythx/nix-platform/internal/platform/audit"
 	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
@@ -979,10 +980,10 @@ func TestCreateProjectGit_RequiresNameAndTarget(t *testing.T) {
 	svc := newService(pool)
 	ctx := context.Background()
 
-	if _, err := svc.CreateProjectGit(ctx, "", "https://example.com/repo.git"); err == nil {
+	if _, err := svc.CreateProjectGit(ctx, "", "https://example.com/repo.git", nil); err == nil {
 		t.Error("expected an error for an empty name")
 	}
-	if _, err := svc.CreateProjectGit(ctx, "test-project-empty-target", ""); err == nil {
+	if _, err := svc.CreateProjectGit(ctx, "test-project-empty-target", "", nil); err == nil {
 		t.Error("expected an error for an empty target")
 	}
 }
@@ -992,7 +993,7 @@ func TestCreateProjectGit_And_ListProjects_RoundTrip(t *testing.T) {
 	svc := newService(pool)
 	ctx := context.Background()
 
-	created, err := svc.CreateProjectGit(ctx, "test-project-roundtrip", "https://example.com/repo.git")
+	created, err := svc.CreateProjectGit(ctx, "test-project-roundtrip", "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateProjectGit: %v", err)
 	}
@@ -1024,6 +1025,46 @@ func TestCreateProjectGit_And_ListProjects_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestCreateProject_RecordsAuditEntry cobre um achado de auditoria:
+// CreateProjectGit/CreateProjectUpload não gravavam NENHUMA entrada em
+// audit_logs, ao contrário de createScanJob (ActionScanRequested) — um
+// upload guarda até 50MB de código de terceiros e uma URL git passa a
+// ser re-escaneada a cada "Rodar de novo" sem confirmação nova, as duas
+// merecem rastro de quem criou. Usa um audit.Writer de VERDADE (não nil,
+// ao contrário de newService/newServiceWithFlags) pra provar que a linha
+// é realmente persistida, não só que Record foi chamado. requestedBy
+// fica nil (audit_logs.user_id é NULLABLE e tem FOREIGN KEY pra users —
+// um uuid.New() aleatório, sem linha correspondente em users, faria o
+// INSERT falhar por violação de FK, silenciosamente engolido pelo "_ ="
+// de recordProjectCreated; testar quem criou de verdade exigiria semear
+// uma linha em users antes, fora do escopo deste teste).
+func TestCreateProject_RecordsAuditEntry(t *testing.T) {
+	pool := testPool(t)
+	repo := infrastructure.NewPostgresRepository(pool)
+	jobsRepo := jobs.NewRepository(pool)
+	outboxWriter := outbox.NewWriter("nix.test")
+	zipExtractor := infrastructure.NewZipExtractor("", testLogger())
+	auditWriter := audit.NewWriter(pool)
+	svc := NewService(pool, repo, jobsRepo, outboxWriter, auditWriter, zipExtractor, nil, nil, testLogger())
+	ctx := context.Background()
+
+	created, err := svc.CreateProjectGit(ctx, "test-project-audit", "https://example.com/repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateProjectGit: %v", err)
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_logs WHERE resource_type = 'project' AND resource_id = $1 AND action = $2`,
+		created.ID.String(), audit.ActionProjectCreated,
+	).Scan(&n); err != nil {
+		t.Fatalf("count audit_logs: %v", err)
+	}
+	if n == 0 {
+		t.Error("CreateProjectGit did not record an audit_logs entry")
+	}
+}
+
 func TestGetProject_UnknownID_ReturnsNotFound(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
@@ -1043,14 +1084,14 @@ func TestCreateProjectUpload_RequiresNameAndBytesAndSizeLimit(t *testing.T) {
 	svc := newService(pool)
 	ctx := context.Background()
 
-	if _, err := svc.CreateProjectUpload(ctx, "", []byte("pretend zip bytes")); err == nil {
+	if _, err := svc.CreateProjectUpload(ctx, "", []byte("pretend zip bytes"), nil); err == nil {
 		t.Error("expected an error for an empty name")
 	}
-	if _, err := svc.CreateProjectUpload(ctx, "test-project-empty-zip", nil); err == nil {
+	if _, err := svc.CreateProjectUpload(ctx, "test-project-empty-zip", nil, nil); err == nil {
 		t.Error("expected an error for empty zip bytes")
 	}
 	oversized := make([]byte, maxUploadZipBytes+1)
-	if _, err := svc.CreateProjectUpload(ctx, "test-project-oversized-zip", oversized); err == nil {
+	if _, err := svc.CreateProjectUpload(ctx, "test-project-oversized-zip", oversized, nil); err == nil {
 		t.Error("expected an error for a zip file over the size limit")
 	}
 }
@@ -1061,7 +1102,7 @@ func TestCreateProjectUpload_And_GetProject_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	zipBytes := []byte("pretend zip bytes, never parsed at project-creation time")
-	created, err := svc.CreateProjectUpload(ctx, "test-project-upload-roundtrip", zipBytes)
+	created, err := svc.CreateProjectUpload(ctx, "test-project-upload-roundtrip", zipBytes, nil)
 	if err != nil {
 		t.Fatalf("CreateProjectUpload: %v", err)
 	}
@@ -1106,7 +1147,7 @@ func TestCreateProjectScanJob_UploadProject_RejectsScannerWithoutLocalSupport(t 
 	svc := newService(pool, &fakeScanner{name: "sonarqube"}, &fakeLocalScanner{fakeScanner: fakeScanner{name: "trivy"}})
 	ctx := context.Background()
 
-	project, err := svc.CreateProjectUpload(ctx, "test-project-reject-unsupported", []byte("pretend zip"))
+	project, err := svc.CreateProjectUpload(ctx, "test-project-reject-unsupported", []byte("pretend zip"), nil)
 	if err != nil {
 		t.Fatalf("CreateProjectUpload: %v", err)
 	}
@@ -1142,7 +1183,7 @@ func TestProcessScanJob_UploadProject_ExtractsZipAndRunsLocalScanners(t *testing
 	corrID := uuid.New()
 
 	zipBytes := buildTestZip(t, map[string]string{"go.mod": "module example.com/upload\n"})
-	project, err := svc.CreateProjectUpload(ctx, "test-project-process-upload", zipBytes)
+	project, err := svc.CreateProjectUpload(ctx, "test-project-process-upload", zipBytes, nil)
 	if err != nil {
 		t.Fatalf("CreateProjectUpload: %v", err)
 	}
@@ -1223,7 +1264,7 @@ func TestListProjectFindingsHistory_NeverScanned_ReturnsEmptyNotError(t *testing
 	svc := newService(pool)
 	ctx := context.Background()
 
-	project, err := svc.CreateProjectGit(ctx, "test-project-history-empty", "https://example.com/repo.git")
+	project, err := svc.CreateProjectGit(ctx, "test-project-history-empty", "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateProjectGit: %v", err)
 	}
@@ -1273,7 +1314,7 @@ func TestListProjectFindingsHistory_DeduplicatesAcrossRescans(t *testing.T) {
 	// Scan 1: os dois achados presentes.
 	scanner1 := &fakeScanner{name: "trivy", findings: []domain.Finding{persistent, fixedLater}}
 	svc1 := newService(pool, scanner1)
-	project, err := svc1.CreateProjectGit(ctx, "test-project-history-dedup", "https://example.com/repo.git")
+	project, err := svc1.CreateProjectGit(ctx, "test-project-history-dedup", "https://example.com/repo.git", nil)
 	if err != nil {
 		t.Fatalf("CreateProjectGit: %v", err)
 	}

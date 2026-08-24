@@ -37,6 +37,12 @@ const (
 	ActionScanRequested = "scan.requested"
 	ActionScanCompleted = "scan.completed"
 	ActionScanFailed    = "scan.failed"
+	// ActionProjectCreated (Fase 10) — criar um projeto por upload guarda
+	// até 50MB de código-fonte de terceiros; criar por git registra uma
+	// URL que passa a ser re-escaneada sem confirmação nenhuma toda vez
+	// que "Rodar de novo" é clicado. As duas merecem trilha de auditoria,
+	// mesmo padrão que ActionScanRequested já tem pra CreateScanJob.
+	ActionProjectCreated = "project.created"
 )
 
 // Entry é um registro de auditoria.

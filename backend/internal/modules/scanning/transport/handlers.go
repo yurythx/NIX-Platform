@@ -220,20 +220,27 @@ type createProjectGitRequest struct {
 // continua sendo POST /api/v1/scanning/scans com project_id preenchido
 // (ver CreateScan), o mesmo endpoint que um scan avulso já usa.
 func (h *Handlers) CreateProject(w http.ResponseWriter, r *http.Request) {
+	var requestedBy *uuid.UUID
+	if identity, ok := auth.IdentityFromContext(r.Context()); ok {
+		if id, err := uuid.Parse(identity.Subject); err == nil {
+			requestedBy = &id
+		}
+	}
+
 	var (
 		project *domain.Project
 		err     error
 	)
 
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-		project, err = h.createProjectFromUpload(w, r)
+		project, err = h.createProjectFromUpload(w, r, requestedBy)
 	} else {
 		var req createProjectGitRequest
 		if decodeErr := httputil.DecodeJSON(w, r, &req); decodeErr != nil {
 			httputil.WriteError(w, r, h.logger, decodeErr)
 			return
 		}
-		project, err = h.service.CreateProjectGit(r.Context(), req.Name, req.Target)
+		project, err = h.service.CreateProjectGit(r.Context(), req.Name, req.Target, requestedBy)
 	}
 	if err != nil {
 		httputil.WriteError(w, r, h.logger, err)
@@ -245,7 +252,7 @@ func (h *Handlers) CreateProject(w http.ResponseWriter, r *http.Request) {
 
 // createProjectFromUpload lê o campo de texto "name" e o arquivo "file"
 // de um corpo multipart/form-data — o outro caminho de CreateProject.
-func (h *Handlers) createProjectFromUpload(w http.ResponseWriter, r *http.Request) (*domain.Project, error) {
+func (h *Handlers) createProjectFromUpload(w http.ResponseWriter, r *http.Request, requestedBy *uuid.UUID) (*domain.Project, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
 	if err := r.ParseMultipartForm(maxUploadRequestBytes); err != nil {
 		return nil, apperrors.BadRequest(fmt.Sprintf("invalid multipart/form-data body: %v", err))
@@ -263,7 +270,7 @@ func (h *Handlers) createProjectFromUpload(w http.ResponseWriter, r *http.Reques
 		return nil, apperrors.BadRequest(fmt.Sprintf("failed to read uploaded file: %v", err))
 	}
 
-	return h.service.CreateProjectUpload(r.Context(), name, zipBytes)
+	return h.service.CreateProjectUpload(r.Context(), name, zipBytes, requestedBy)
 }
 
 // ListProjects trata GET /api/v1/scanning/projects (Fase 10) — cada
