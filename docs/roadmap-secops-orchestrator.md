@@ -1,9 +1,11 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
-- **Status:** todas as fases propostas estão concluídas. Fases 1, 3-9 implementadas (Fundação,
-  Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração concorrente, CLI + CI/CD, Frontend) — ver
-  detalhes na seção "Fases" abaixo. Fase 2 (TruffleHog) foi pulada por decisão explícita do
-  usuário, redundante com o gitleaks já no CI.
+- **Status:** Fases 1, 3-9 concluídas (Fundação, Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração
+  concorrente, CLI + CI/CD, Frontend). Fase 2 (TruffleHog) pulada por decisão explícita do usuário,
+  redundante com o gitleaks já no CI. **Fases 10-13 (abaixo) são uma extensão nova, ainda não
+  implementada** — adaptação de uma segunda proposta externa ("Orquestrador de Segurança de Código
+  On-Premise", estilo GitGuard) pra esta mesma arquitetura, com 3 decisões explícitas do usuário
+  registradas na seção "Reconciliação" logo abaixo.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -387,6 +389,166 @@ ferramentas estarem prontas para gerar valor.
   caminho que o clique do usuário percorre (proxy BFF autenticado por cookie de sessão, não um
   bearer token direto), criando um job real de verdade.
 
+## Extensão — Projetos persistentes, Gitleaks, Syft, viewer de código, prompt de IA
+
+Segunda proposta externa (ver histórico de conversa), desta vez inspirada no GitGuard: uma
+aplicação "on-premise" com repositórios mantidos permanentemente em disco, upload de `.zip`,
+suporte a repositório privado via PAT, 4 motores (Semgrep/Trivy/Gitleaks/Syft), deduplicação por
+fingerprint, viewer de código-fonte na UI e um botão "copiar prompt pra IA" por achado. Boa parte
+já existe (ver tabela); o resto é adaptado abaixo — nunca implementado literalmente como a proposta
+descreve quando isso colidia com uma decisão de arquitetura já tomada e documentada neste roadmap.
+
+### O que a proposta pede que já existe hoje, sem mudança nenhuma
+
+| Pedido da proposta | Onde já existe |
+|---|---|
+| Orquestração paralela de scanners via goroutines | ✅ `runConcurrently` (Fase 7) — e mais robusto que o texto da proposta: `sync.WaitGroup` puro, não `errgroup` (ver Fase 7, o cancelamento cruzado do `errgroup` seria regressão) |
+| Severidade normalizada CRITICAL/HIGH/MEDIUM/LOW | ✅ `domain.Severity`, desde a Fase 1 — a MESMA escala que a proposta pede |
+| Ferramenta de origem + arquivo:linha em cada achado | ✅ `Finding.Scanner`/`File`/`Line`, desde a Fase 1 |
+| "Card mostra qual ferramenta achou, tipo de erro, como corrigir" | ✅ `remediationHint`/`ScannerFailureCard`/`FindingsTable` (sessão anterior) — inclusive já com link "abrir na ferramenta" (`ToolResponse.URL`), algo que a proposta nem pede |
+| Rodar scanner direto contra um diretório LOCAL (sem clonar) | ✅ `TrivyScanner.ExecuteLocal`/`SemgrepScanner.ExecuteLocal` (Fase 8, `cmd/secscan`) — exatamente o método que as Fases 11/12 abaixo reaproveitam pra ler do disco em vez de clonar de novo |
+| Interface comum por ferramenta (Strategy) | ✅ `domain.CodeScanner` — Gitleaks/Syft (Fase 11) são só mais dois adapters, mesmo padrão de `TrivyScanner`/`SemgrepScanner` |
+
+### Reconciliação — as 3 decisões do usuário
+
+1. **Armazenamento em disco:** a proposta pede repositórios persistidos permanentemente em
+   `./storage/repos/{project_id}`, com `git pull` pra re-scan. **Decisão: não.** O worker sempre
+   clona pra um diretório TEMPORÁRIO e apaga logo depois de cada scan (`cloneShallow`,
+   `git_clone.go`) — deliberado desde a Fase 3, e o motivo continua válido: o worker já é desenhado
+   pra escalar horizontalmente via consumer RabbitMQ (múltiplas réplicas), e "qual réplica tem a
+   pasta de qual projeto no disco local dela" é um problema de estado que checkout persistente
+   introduziria sem necessidade — resolvê-lo direito exigiria storage compartilhado em rede (EFS/NFS
+   ou similar), escopo bem maior que o valor real do pedido ("re-scan mais rápido"). Em vez disso: a
+   **Fase 10** abaixo introduz "Projeto" como um registro leve (nome, alvo, histórico de scans) —
+   sem persistir o checkout em si. Um re-scan continua clonando do zero (o mesmo custo de rede que
+   todo scan já paga hoje, pequeno pra shallow clone) — só ganha a conveniência de não precisar
+   colar a URL de novo.
+2. **PAT / repositório privado:** a proposta pede um campo de Personal Access Token pra clonar
+   repositórios privados. **Decisão: não, por enquanto.** Aceitar credencial do usuário é uma
+   superfície de segurança nova que este roadmap nunca teve (guardar segredo com segurança, nunca
+   deixar vazar em log/mensagem de erro do `git`, decidir quem pode ver/rotacionar) — desproporcional
+   ao resto da proposta, que dá pra entregar inteiro sem isso. `parseGitTarget` continua exigindo
+   `https://` público, exatamente como hoje (Fase 3). Fica registrado aqui como possível fase futura,
+   não como esquecimento.
+3. **Gitleaks e Syft:** a proposta pede os dois. O roadmap já tinha decisão explícita contra ambos —
+   Gitleaks pulado na Fase 2 (redundante com o gitleaks do CI) e SBOM listado em "Fora de escopo"
+   (abaixo) como "projeto à parte". **Decisão: adicionar os dois agora**, revisitando as duas
+   decisões — o contexto mudou: CI gitleaks só cobre o que está em PRs/commits deste próprio
+   repositório; um Gitleaks sob demanda pela UI do orquestrador cobre QUALQUER alvo que o usuário
+   aponte, o mesmo raciocínio que já vale pra Trivy/Semgrep/SonarQube não serem "redundantes" com o
+   CI mesmo o CI já rodando `govulncheck`/`npm audit`. Ver Fase 11.
+
+### Fase 10 — Projeto como entidade própria + upload `.zip` — 🔲 não implementada
+
+- Migration nova: `scanning_projects` (id, name, target, created_at) — tabela própria do módulo
+  `scanning`, mesmo princípio de `scan_findings`/`scanning_scanner_runs` (nunca uma coluna a mais
+  na tabela `jobs` genérica compartilhada com `diario_oficial`).
+- `scanJobPayload` (`application/service.go`) ganha `ProjectID *uuid.UUID` opcional — um scan
+  disparado "avulso" (sem projeto, o fluxo atual) continua funcionando sem mudança; um scan
+  disparado a partir da tela de um projeto carrega o `ProjectID`, e o histórico desse projeto é
+  "todo job cujo payload tem esse `project_id`" (mesmo padrão de consulta que `ListRecentScans` já
+  usa, um filtro a mais).
+- `POST /api/v1/scanning/projects` cria um projeto (nome + alvo git, validado pelo MESMO
+  `parseGitTarget`/`validateHost` que scan avulso já usa — nenhuma validação nova). Alvo git
+  continua só `https://` público (decisão 2 acima).
+- **Upload `.zip`, a peça genuinamente nova**: `POST /api/v1/scanning/projects` aceita também
+  `multipart/form-data` com um arquivo `.zip` em vez de um alvo git — o handler extrai pra um
+  diretório TEMPORÁRIO (mesmo ciclo de vida do clone: existe só durante o scan, apaga depois),
+  valida que a extração não escreve fora do diretório de destino (defesa contra "zip slip" — um
+  `../../etc/cron.d/x` dentro do `.zip`, a mesma classe de ataque que `validateHost` já previne pro
+  caso do git/SSRF, adaptada pra path em vez de host) e roda `TrivyScanner.ExecuteLocal`/
+  `SemgrepScanner.ExecuteLocal`/`GitleaksScanner.ExecuteLocal` (Fase 11) direto nele — os MESMOS
+  métodos que `cmd/secscan` já usa pra ler um diretório local, reaproveitados, não duplicados. Um
+  projeto criado por upload nunca tem alvo git — `sonarqube`/`zap` ficam indisponíveis pra ele (o
+  primeiro exige `git clone` pra derivar a project key, o segundo nem se aplica, ataca um serviço
+  vivo).
+- Frontend: `/seguranca` ganha uma terceira seção "Projetos" (cards, mesmo padrão de
+  `ToolFindingsCards`/`IntegrationCard` — nunca uma tabela nova), cada card com nome + alvo + status
+  do último scan + botão "Rodar de novo" (dispara `POST /api/v1/scanning/scans` com o `ProjectID` já
+  preenchido, sem pedir a URL de novo). Formulário de criação com duas abas (URL git / upload
+  `.zip`), exatamente como a proposta pede na seção 5.A.
+
+### Fase 11 — Gitleaks e Syft como `CodeScanner` novos — 🔲 não implementada
+
+- `GitleaksScanner` (`infrastructure/gitleaks_scanner.go`): mesmo esqueleto de `TrivyScanner` —
+  `Execute` clona via `cloneShallow` (reaproveita a validação de SSRF já compartilhada),
+  `ExecuteLocal` lê um diretório já no disco (upload `.zip`, Fase 10). Roda
+  `gitleaks detect --source . --report-format json --no-git` (`--no-git`: escaneia os arquivos como
+  estão no disco, não o histórico de commits — consistente com Trivy/Semgrep, que também só veem o
+  snapshot do `--depth 1`; histórico completo de commits é um modo separado, fora de escopo aqui,
+  mesmo raciocínio que já limita o clone a raso). **Ajuste real que precisa acontecer junto**: com
+  Gitleaks cobrindo secrets sob demanda, `TrivyScanner.scanFS` deveria deixar de rodar
+  `--scanners vuln,misconfig` e continuar SEM `secret` — hoje o comentário no código justifica essa
+  exclusão como "gitleaks já cobre no CI"; com Gitleaks também sob demanda agora, a mesma exclusão
+  continua certa (evita o mesmo achado duplicado vindo de duas ferramentas diferentes no mesmo
+  scan), só o comentário precisa ser atualizado pra apontar pro Gitleaks sob demanda, não só o do
+  CI.
+- Severidade: Gitleaks não tem campo de severidade nativo (é binário — achou um segredo ou não) —
+  todo achado do Gitleaks mapeia pra `CRITICAL` (um segredo commitado é sempre grave, nunca um
+  "talvez"; mesmo padrão de decisão que já mapeou a ausência de nível acima de HIGH do ZAP/Semgrep
+  pra escalas mais simples).
+- `SyftScanner` (`infrastructure/syft_scanner.go`): **estruturalmente diferente dos outros 5** — os
+  outros produzem `[]Finding` (uma vulnerabilidade/achado é sempre acionável, algo pra corrigir);
+  Syft produz um **inventário** (lista de pacotes/versões), não achados de segurança por si só. Não
+  força esse inventário dentro de `domain.Finding` (perderia a informação real, um pacote não é um
+  "erro"). Em vez disso, `CodeScanner` ganha um segundo método OPCIONAL:
+  ```go
+  // Inventory é implementado só por scanners que produzem inventário, não
+  // achados — hoje só Syft. Um type assertion (`scanner.(domain.InventoryProvider)`)
+  // no Service decide se um scanner participa do fluxo de achados, do de
+  // inventário, ou dos dois — nunca uma interface CodeScanner maior que a
+  // maioria dos scanners não teria como implementar de verdade.
+  type InventoryProvider interface {
+      Inventory(ctx context.Context, target string) ([]Package, error)
+  }
+  ```
+  Nova tabela `scan_packages` (scan_id, name, version, type, license) — consultável junto do scan
+  como uma aba própria "Inventário (SBOM)" na página de um scan (`/seguranca/[scanId]`), ao lado
+  de "Achados por ferramenta" (Fase 9), nunca misturada na mesma lista.
+- RBAC: nenhuma permissão nova — `scanning:read`/`scanning:manage` já cobrem os dois scanners
+  novos, mesmo princípio de Trivy/Semgrep/SonarQube/ZAP.
+
+### Fase 12 — Snippet de código no achado + deduplicação — 🔲 não implementada
+
+- **A proposta pede um endpoint `GET /api/file-content` pra ler o arquivo do disco sob demanda na
+  UI — incompatível com a decisão 1 acima** (sem checkout persistente, não há arquivo no disco
+  depois que o scan termina e a pasta temporária é apagada). Adaptação: em vez de ler o arquivo
+  DEPOIS, sob demanda, `Finding` ganha um campo `Snippet` capturado NO MOMENTO do scan, enquanto o
+  clone temporário ainda existe — cada adapter (`Trivy`/`Semgrep`/`Gitleaks`) lê ~5 linhas antes/depois
+  de `Finding.Line` do próprio arquivo já aberto durante o parsing do resultado, antes de
+  `cloneShallow` limpar o diretório. Entrega o mesmo valor real da proposta ("ver o código da
+  vulnerabilidade sem abrir o repositório") sem precisar manter nada em disco depois — o preço é não
+  dar pra navegar o repositório inteiro livremente (só o trecho de cada achado específico), que
+  nunca foi pedido além do contexto de UM achado por vez na proposta original (seção 5.B: "renderiza
+  o arquivo... com destaque na linha", sempre no contexto de UM achado expandido).
+- Migration: `scan_findings` ganha coluna `snippet TEXT NOT NULL DEFAULT ''` — achados antigos
+  (antes desta fase) ficam com snippet vazio, `FindingsTable`/Dialog tratam isso mostrando só "sem
+  trecho disponível" em vez de quebrar.
+- **Deduplicação por fingerprint**: `Finding` ganha `Fingerprint` — SHA-256 de
+  `scanner + finding_id + file + line`, calculado em `toFindingResponse` (Go) ou já no momento de
+  gravar (mais barato calcular uma vez que a cada leitura — decisão: calcular em `SaveFindings`,
+  gravar a coluna). Não deduplica DENTRO de um scan (cada linha de `scan_findings` já é um achado
+  distinto por natureza) — deduplica ENTRE re-scans do MESMO projeto (Fase 10): a UI do histórico de
+  um projeto mostra "achado X apareceu pela primeira vez no scan de 12/08, ainda presente no scan de
+  20/08" em vez de listar a mesma vulnerabilidade repetida uma vez por scan.
+
+### Fase 13 — Filtro de ruído + botão "Copiar prompt pra IA" — 🔲 não implementada
+
+- Filtro de ruído por caminho (`/tests/`, `/fixtures/`, `*_test.go`, `.env.example`, etc.):
+  **configurável, não hardcoded** — um achado real de segredo commitado dentro de um arquivo de
+  teste ainda É um segredo real (Gitleaks, por design, não distingue "teste" de "produção"; um
+  `.env.example` com uma chave de exemplo que por acaso é uma chave de verdade já vazada é
+  exatamente o tipo de coisa que não deveria sumir silenciosamente). Lista de padrões de exclusão
+  vira uma feature flag configurável (`internal/platform/configflags`, mesmo mecanismo que já
+  desliga `diario_oficial_scraping_enabled` em runtime) — desligada por padrão (mostra tudo, como
+  hoje), habilitável por quem administra a instância.
+- Botão "Copiar prompt pra IA" em cada achado (`FindingsTable`'s Dialog, ao lado de "Como
+  corrigir"): monta o markdown exatamente como a proposta especifica (seção 5.C), mas incluindo
+  também `remediationFor()` (o hint por categoria OWASP que este roadmap já gera, Fase 9 anterior) —
+  contexto a mais que a proposta não tinha porque não existia antes disso ser construído. Cópia via
+  `navigator.clipboard.writeText` (API do navegador, nenhuma dependência nova) — mesmo princípio de
+  zero-novo-design que todo componente desta seção já segue.
+
 ## Mapeamento OWASP Top 10 — o que já é real hoje vs. o que este roadmap adiciona
 
 | Risco | Já implementado no NIX Platform hoje | O que este roadmap adiciona |
@@ -398,13 +560,22 @@ ferramentas estarem prontas para gerar valor.
 | A05 Security Misconfiguration | CSP com nonce, headers de segurança, containers non-root | ✅ Trivy (`--scanners misconfig`) varrendo Dockerfiles sob demanda, via `POST /api/v1/scanning/scans` (Fase 3) |
 | A06 Vulnerable Components | govulncheck + npm audit + Trivy (imagens) + Dependabot, todos já no CI | ✅ Trivy (`--scanners vuln`) sob demanda contra qualquer repositório git, fora do CI (Fase 3) |
 | A07 Auth Failures | Bloqueio de conta, rate limit distribuído, erro genérico (sem enumeração de usuário) | ✅ ZAP testando o ciclo de vida de sessão em staging (Fase 6) |
-| A08 Software & Data Integrity | Idempotência, outbox transacional, CI builda a partir do código-fonte | Nenhuma assinatura/SBOM ainda — gap real, não coberto por nenhuma fase acima; ficaria fora de escopo deste roadmap |
+| A08 Software & Data Integrity | Idempotência, outbox transacional, CI builda a partir do código-fonte | ✅ Syft (inventário SBOM, Fase 11 — "Extensão" acima) sob demanda; assinatura digital de artefato (`cosign`) continua fora de escopo (ver "Fora de escopo") |
 | A09 Logging & Monitoring | Audit log imutável, logs estruturados correlacionados por request id, Prometheus, OpenTelemetry | `scanning.scan.completed` como mais um evento auditado (Fase 1) |
 | A10 SSRF | ⚠️ Desde a Fase 3, `POST /api/v1/scanning/scans` (target de `trivy`, `semgrep` **e**, desde a Fase 5, `sonarqube` — os três reaproveitam a mesma validação via `git_clone.go`) É um endpoint que aceita uma URL do chamador — `validateHost` resolve o host e rejeita IP privado/loopback/link-local/não especificado antes de clonar, defesa em profundidade (não uma proteção completa contra DNS rebinding, já que o `git` re-resolve o host ao conectar; aceito hoje porque quem chama já precisa de `scanning:manage`). Todo outro endpoint continua sem aceitar URL arbitrária. | ✅ Semgrep + SonarQube (Fases 4/5) já rodam contra os próprios módulos da plataforma sob demanda — detectariam um cliente HTTP com URL não validada se esse padrão aparecesse no futuro |
 
 ## Fora de escopo deste roadmap
 
-- Assinatura digital de artefatos / SBOM (A08) — mencionado na proposta original, mas é um
-  projeto à parte (ferramenta tipo `cosign`/`syft`), não uma fase natural deste orquestrador.
+- **Assinatura digital de artefatos** (`cosign` ou similar, A08) — diferente de SBOM/Syft (agora em
+  escopo, Fase 11): assinar/verificar artefato de build é um projeto de supply-chain à parte, não
+  uma fase natural deste orquestrador de scanning.
+- **Repositório privado / PAT** — decisão explícita do usuário (ver "Reconciliação" acima, item 2):
+  superfície de segurança nova (guardar/rotacionar credencial) desproporcional ao resto da proposta.
+  Fica registrado como possível fase futura, não como esquecimento.
+- **Checkout de repositório persistido em disco** — decisão explícita do usuário (ver
+  "Reconciliação" acima, item 1): o worker escala horizontalmente via RabbitMQ, e persistir um
+  checkout local por projeto reintroduziria um problema de estado por réplica que o desenho atual
+  (clone efêmero, temporário, apagado após cada scan) evita de propósito. "Projeto" (Fase 10) é
+  metadado — nome, alvo, histórico — nunca o checkout em si.
 - Qualquer execução automática deste roadmap nesta sessão — este documento é o planejamento;
   implementação começa quando o usuário escolher uma fase.
