@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -143,7 +144,7 @@ func (t *TrivyScanner) ExecuteLocal(ctx context.Context, dir string) ([]domain.F
 	if err := cmd.Run(); err != nil {
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("scanning: trivy: scan failed: %s", extractErrorLine(stderr.String())))
 	}
-	return parseTrivyReport(stdout.Bytes())
+	return parseTrivyReport(stdout.Bytes(), dir)
 }
 
 // scanRemote pede pro sidecar (cmd/trivy-sidecar) rodar `trivy fs` contra
@@ -184,7 +185,7 @@ func (t *TrivyScanner) scanRemote(ctx context.Context, dir string) ([]domain.Fin
 		return nil, apperrors.DependencyUnavailable(fmt.Sprintf("scanning: trivy: scan failed: %s", extractErrorLine(errResp.Error)))
 	}
 
-	return parseTrivyReport(respBody)
+	return parseTrivyReport(respBody, dir)
 }
 
 // trivyReport é o subconjunto do JSON de saída do `trivy` (formato
@@ -213,7 +214,14 @@ type trivyReport struct {
 	} `json:"Results"`
 }
 
-func parseTrivyReport(raw []byte) ([]domain.Finding, error) {
+// parseTrivyReport decodifica o JSON do trivy. dir é o diretório que foi
+// escaneado — usado só pra capturar o snippet (Fase 12) de uma
+// misconfiguration, cujo StartLine aponta um lugar real no arquivo
+// (result.Target, relativo a dir); uma vulnerabilidade de dependência
+// nunca tem Line (é sobre uma versão de pacote inteira, não uma linha
+// específica) — captureSnippet devolve "" sozinho pra Line<=0, então
+// nenhum caso especial é necessário aqui pra pular vulnerabilidades.
+func parseTrivyReport(raw []byte, dir string) ([]domain.Finding, error) {
 	var report trivyReport
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return nil, fmt.Errorf("scanning: trivy: decode report: %w", err)
@@ -238,6 +246,7 @@ func parseTrivyReport(raw []byte) ([]domain.Finding, error) {
 				Description:   fmt.Sprintf("%s: %s", m.Title, m.Message),
 				File:          result.Target,
 				Line:          m.CauseMetadata.StartLine,
+				Snippet:       captureSnippet(filepath.Join(dir, result.Target), m.CauseMetadata.StartLine),
 			})
 		}
 	}

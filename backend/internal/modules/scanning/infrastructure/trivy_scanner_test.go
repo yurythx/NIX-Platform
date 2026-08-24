@@ -22,6 +22,16 @@ import (
 // público real, registrada no roadmap).
 
 func TestParseTrivyReport_VulnerabilitiesAndMisconfigurations(t *testing.T) {
+	// Dockerfile de verdade em disco (Fase 12 — snippet): a
+	// misconfiguration abaixo aponta StartLine=3, dentro deste arquivo —
+	// prova que captureSnippet lê o conteúdo real, não só que a função
+	// existe.
+	dir := t.TempDir()
+	dockerfile := "FROM alpine:3.20\n\nUSER root\n\nCMD [\"sh\"]\n"
+	if err := os.WriteFile(dir+"/Dockerfile", []byte(dockerfile), 0o644); err != nil {
+		t.Fatalf("write test Dockerfile: %v", err)
+	}
+
 	raw := []byte(`{
 		"Results": [
 			{
@@ -39,7 +49,7 @@ func TestParseTrivyReport_VulnerabilitiesAndMisconfigurations(t *testing.T) {
 		]
 	}`)
 
-	findings, err := parseTrivyReport(raw)
+	findings, err := parseTrivyReport(raw, dir)
 	if err != nil {
 		t.Fatalf("parseTrivyReport: %v", err)
 	}
@@ -54,6 +64,9 @@ func TestParseTrivyReport_VulnerabilitiesAndMisconfigurations(t *testing.T) {
 	if !strings.Contains(vuln.Description, "example.com/dep@1.0.0") {
 		t.Errorf("vuln description = %q, want it to mention the package/version", vuln.Description)
 	}
+	if vuln.Snippet != "" {
+		t.Errorf("vuln Snippet = %q, want empty — a dependency vulnerability has no specific line", vuln.Snippet)
+	}
 
 	misconf := findings[1]
 	if misconf.ID != "DS002" || misconf.Severity != domain.SeverityHigh || misconf.OWASPCategory != "A05:2021-Security Misconfiguration" {
@@ -62,10 +75,13 @@ func TestParseTrivyReport_VulnerabilitiesAndMisconfigurations(t *testing.T) {
 	if misconf.Line != 3 {
 		t.Errorf("misconfig line = %d, want 3", misconf.Line)
 	}
+	if !strings.Contains(misconf.Snippet, "USER root") {
+		t.Errorf("misconfig Snippet = %q, want it to contain the real Dockerfile line around StartLine=3", misconf.Snippet)
+	}
 }
 
 func TestParseTrivyReport_NoFindings_ReturnsEmptyNotError(t *testing.T) {
-	findings, err := parseTrivyReport([]byte(`{"Results": []}`))
+	findings, err := parseTrivyReport([]byte(`{"Results": []}`), "")
 	if err != nil {
 		t.Fatalf("parseTrivyReport: %v", err)
 	}

@@ -10,6 +10,8 @@ import { useToast } from "@/components/notifications/ToastProvider";
 import { apiClient, ApiError } from "@/lib/api/client";
 import type { Project, TestJobResponse } from "@/types/api";
 
+import { ProjectFindingHistoryPanel } from "./ProjectFindingHistoryPanel";
+
 const STATUS_LABEL: Record<string, string> = {
   queued: "Na fila",
   processing: "Rodando",
@@ -43,6 +45,7 @@ export function ProjectCard({ project }: { project: Project }) {
   const { showToast } = useToast();
   const [running, setRunning] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   async function runAgain() {
     const scanners = project.last_scan?.requested_scanners?.length
@@ -119,7 +122,26 @@ export function ProjectCard({ project }: { project: Project }) {
               Ver scan disparado agora →
             </Link>
           )}
+          {/* Histórico deduplicado (Fase 12) — só faz sentido depois de
+              pelo menos um scan; buscado sob demanda (ver
+              ProjectFindingHistoryPanel), nunca no carregamento de
+              /seguranca. */}
+          {project.last_scan && (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((open) => !open)}
+              className="text-sm text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            >
+              {historyOpen ? "Ocultar histórico ←" : "Ver histórico →"}
+            </button>
+          )}
         </div>
+
+        {historyOpen && (
+          <div className="border-t border-surface-border pt-3">
+            <ProjectFindingHistoryPanel projectId={project.id} />
+          </div>
+        )}
       </CardContent>
     </Card>
   );

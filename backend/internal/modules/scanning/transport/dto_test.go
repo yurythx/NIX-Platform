@@ -14,6 +14,8 @@ import (
 func TestToolDisplayName(t *testing.T) {
 	cases := []struct{ scanner, want string }{
 		{"trivy", "Trivy"},
+		{"gitleaks", "Gitleaks"},
+		{"syft", "Syft"},
 		{"semgrep", "Semgrep"},
 		{"sonarqube", "SonarQube"},
 		{"zap", "OWASP ZAP"},
@@ -78,5 +80,28 @@ func TestToolLink_Zap_LinksToAlertsIndex(t *testing.T) {
 func TestToolLink_UnknownScanner_Empty(t *testing.T) {
 	if got := toolLink("um-scanner-futuro", "id", "target", "http://localhost:9001"); got != "" {
 		t.Errorf("toolLink(unknown scanner) = %q, want empty", got)
+	}
+}
+
+// TestToFindingResponse_CarriesSnippetAndFingerprint cobre a Fase 12:
+// Snippet/Fingerprint são campos passthrough de domain.PersistedFinding
+// pra FindingResponse — nenhuma lógica própria, só não podem se perder no
+// caminho (um bug real fácil de cometer: esquecer de listar um campo novo
+// no struct literal de toFindingResponse).
+func TestToFindingResponse_CarriesSnippetAndFingerprint(t *testing.T) {
+	f := domain.PersistedFinding{
+		Finding: domain.Finding{
+			ID:      "CVE-2026-0001",
+			Snippet: "5: func handler() {\n6:   // linha vulnerável\n7: }",
+		},
+		FindingFingerprint: "abc123fingerprint",
+	}
+
+	got := toFindingResponse(f, "")
+	if got.Snippet != f.Snippet {
+		t.Errorf("Snippet = %q, want %q", got.Snippet, f.Snippet)
+	}
+	if got.Fingerprint != f.FindingFingerprint {
+		t.Errorf("Fingerprint = %q, want %q", got.Fingerprint, f.FindingFingerprint)
 	}
 }

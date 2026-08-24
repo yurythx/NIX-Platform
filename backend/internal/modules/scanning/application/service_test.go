@@ -896,6 +896,10 @@ func (f *fakeRepositoryCapturingLimit) ListByScanID(context.Context, uuid.UUID) 
 	panic("ListByScanID should not be called by ListRecentFindings")
 }
 
+func (f *fakeRepositoryCapturingLimit) ListByScanIDs(context.Context, []uuid.UUID) ([]domain.PersistedFinding, error) {
+	panic("ListByScanIDs should not be called by ListRecentFindings")
+}
+
 func (f *fakeRepositoryCapturingLimit) ListRecent(_ context.Context, limit int) ([]domain.PersistedFinding, error) {
 	f.gotLimit = limit
 	return nil, nil
@@ -1201,4 +1205,130 @@ func buildTestZip(t *testing.T, files map[string]string) []byte {
 		t.Fatalf("close zip writer: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// A partir daqui: Fase 12 — deduplicação de achados por fingerprint entre
+// re-scans do MESMO projeto.
+
+func TestListProjectFindingsHistory_NeverScanned_ReturnsEmptyNotError(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+
+	project, err := svc.CreateProjectGit(ctx, "test-project-history-empty", "https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("CreateProjectGit: %v", err)
+	}
+
+	history, err := svc.ListProjectFindingsHistory(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListProjectFindingsHistory: %v", err)
+	}
+	if len(history) != 0 {
+		t.Errorf("history = %v, want none for a project that was never scanned", history)
+	}
+}
+
+func TestListProjectFindingsHistory_UnknownProject_ReturnsEmptyNotError(t *testing.T) {
+	// Diferente de GetProject, ListProjectFindingsHistory nunca precisa
+	// de um NotFound: ListProjectScans (o que ela reaproveita) já trata
+	// "nenhum scan encontrado pra esse projeto" como uma lista vazia
+	// legítima, seja porque o projeto existe e nunca rodou, seja porque o
+	// ID nem existe — as duas situações produzem a mesma resposta
+	// honesta: nenhum histórico pra mostrar.
+	pool := testPool(t)
+	svc := newService(pool)
+
+	history, err := svc.ListProjectFindingsHistory(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("ListProjectFindingsHistory: %v", err)
+	}
+	if len(history) != 0 {
+		t.Errorf("history = %v, want none for an unknown project ID", history)
+	}
+}
+
+func TestListProjectFindingsHistory_DeduplicatesAcrossRescans(t *testing.T) {
+	pool := testPool(t)
+	persistent := domain.Finding{
+		ID: "CVE-2026-PERSISTENT", OWASPCategory: "A06:2021-Vulnerable and Outdated Components",
+		Severity: domain.SeverityHigh, Description: "ainda não corrigido", File: "go.sum", Line: 10,
+	}
+	fixedLater := domain.Finding{
+		ID: "CVE-2026-FIXED", OWASPCategory: "A06:2021-Vulnerable and Outdated Components",
+		Severity: domain.SeverityCritical, Description: "corrigido depois do primeiro scan", File: "go.sum", Line: 20,
+	}
+
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	// Scan 1: os dois achados presentes.
+	scanner1 := &fakeScanner{name: "trivy", findings: []domain.Finding{persistent, fixedLater}}
+	svc1 := newService(pool, scanner1)
+	project, err := svc1.CreateProjectGit(ctx, "test-project-history-dedup", "https://example.com/repo.git")
+	if err != nil {
+		t.Fatalf("CreateProjectGit: %v", err)
+	}
+	job1, err := svc1.CreateProjectScanJob(ctx, corrID, []string{"trivy"}, project.ID, nil)
+	if err != nil {
+		t.Fatalf("CreateProjectScanJob (1): %v", err)
+	}
+	if err := svc1.ProcessScanJob(ctx, job1.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob (1): %v", err)
+	}
+
+	// created_at tem precisão de timestamp — um sleep pequeno garante que
+	// os dois scans não colidam no MESMO instante, pra FirstSeenAt/
+	// LastSeenAt do achado persistente realmente poderem diferir.
+	time.Sleep(10 * time.Millisecond)
+
+	// Scan 2 (re-scan do MESMO projeto): só o achado persistente continua
+	// — fixedLater foi corrigido, não aparece mais.
+	scanner2 := &fakeScanner{name: "trivy", findings: []domain.Finding{persistent}}
+	svc2 := newService(pool, scanner2)
+	job2, err := svc2.CreateProjectScanJob(ctx, corrID, []string{"trivy"}, project.ID, nil)
+	if err != nil {
+		t.Fatalf("CreateProjectScanJob (2): %v", err)
+	}
+	if err := svc2.ProcessScanJob(ctx, job2.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob (2): %v", err)
+	}
+
+	history, err := svc2.ListProjectFindingsHistory(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("ListProjectFindingsHistory: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history = %d entries, want 2 (one per DISTINCT fingerprint, not one per scan)", len(history))
+	}
+
+	byID := make(map[string]ProjectFindingHistory, 2)
+	for _, h := range history {
+		byID[h.Description] = h
+	}
+
+	got, ok := byID["ainda não corrigido"]
+	if !ok {
+		t.Fatal("missing the persistent finding in the history")
+	}
+	if got.ScanCount != 2 {
+		t.Errorf("persistent finding ScanCount = %d, want 2 (appeared in both scans)", got.ScanCount)
+	}
+	if !got.StillPresent {
+		t.Error("persistent finding StillPresent = false, want true (it's in the most recent scan)")
+	}
+	if !got.LastSeenAt.After(got.FirstSeenAt) {
+		t.Errorf("persistent finding FirstSeenAt=%v LastSeenAt=%v, want LastSeenAt strictly after FirstSeenAt across two scans", got.FirstSeenAt, got.LastSeenAt)
+	}
+
+	gotFixed, ok := byID["corrigido depois do primeiro scan"]
+	if !ok {
+		t.Fatal("missing the fixed finding in the history")
+	}
+	if gotFixed.ScanCount != 1 {
+		t.Errorf("fixed finding ScanCount = %d, want 1 (only appeared in the first scan)", gotFixed.ScanCount)
+	}
+	if gotFixed.StillPresent {
+		t.Error("fixed finding StillPresent = true, want false — it's absent from the most recent scan")
+	}
 }

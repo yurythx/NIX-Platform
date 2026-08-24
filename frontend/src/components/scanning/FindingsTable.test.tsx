@@ -18,6 +18,7 @@ function makeFinding(overrides: Partial<ScanFinding> = {}): ScanFinding {
     description: "Descrição completa e bem detalhada do achado, sem truncar.",
     file: "go.sum",
     line: 12,
+    fingerprint: "abc123fingerprint",
     created_at: "2026-08-24T12:00:00Z",
     tool: { name: "Trivy", url: "https://nvd.nist.gov/vuln/detail/CVE-2026-0001" },
     ...overrides,
@@ -92,5 +93,31 @@ describe("FindingsTable", () => {
 
     rerender(<FindingsTable findings={[finding]} showScanLink />);
     expect(screen.getByText("Ver o scan completo →")).toBeInTheDocument();
+  });
+
+  it("achado com snippet (Fase 12) mostra o trecho e destaca a linha do achado", async () => {
+    const finding = makeFinding({
+      line: 12,
+      snippet: "10: func handler() {\n11:   data := input\n12:   exec(data)\n13: }\n14: ",
+    });
+    const user = userEvent.setup();
+    render(<FindingsTable findings={[finding]} />);
+
+    await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).getByText("Trecho do código")).toBeInTheDocument();
+    expect(within(dialog).getByText("exec(data)")).toBeInTheDocument();
+  });
+
+  it("achado sem snippet (achado antigo, ou ferramenta sem linha específica) nunca mostra a seção", async () => {
+    const finding = makeFinding({ snippet: undefined });
+    const user = userEvent.setup();
+    render(<FindingsTable findings={[finding]} />);
+
+    await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).queryByText("Trecho do código")).not.toBeInTheDocument();
   });
 });

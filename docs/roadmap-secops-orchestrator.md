@@ -6,8 +6,8 @@
   ser redundante). **Fases 10-13 (abaixo) são uma extensão nova**, adaptação de uma segunda
   proposta externa ("Orquestrador de Segurança de Código On-Premise", estilo GitGuard) pra esta
   mesma arquitetura, com 3 decisões explícitas do usuário registradas na seção "Reconciliação" logo
-  abaixo. **Fases 10 (Projeto + upload .zip) e 11 (Gitleaks + Syft) já implementadas e verificadas
-  ao vivo; Fases 12/13 ainda não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
+  abaixo. **Fases 10 (Projeto + upload .zip), 11 (Gitleaks + Syft) e 12 (snippet + deduplicação) já
+  implementadas e verificadas ao vivo; Fase 13 ainda não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
   container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks e Syft migrados e
   verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`/`syft-scanner`, volume
   compartilhado `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker,
@@ -677,29 +677,64 @@ healthcheck que Trivy/Gitleaks.
 - RBAC: nenhuma permissão nova — `scanning:read`/`scanning:manage` já cobrem os três scanners
   novos, mesmo princípio de Trivy/Semgrep/SonarQube/ZAP.
 
-### Fase 12 — Snippet de código no achado + deduplicação — 🔲 não implementada
+### Fase 12 — Snippet de código no achado + deduplicação — ✅ implementada
 
 - **A proposta pede um endpoint `GET /api/file-content` pra ler o arquivo do disco sob demanda na
   UI — incompatível com a decisão 1 acima** (sem checkout persistente, não há arquivo no disco
   depois que o scan termina e a pasta temporária é apagada). Adaptação: em vez de ler o arquivo
   DEPOIS, sob demanda, `Finding` ganha um campo `Snippet` capturado NO MOMENTO do scan, enquanto o
-  clone temporário ainda existe — cada adapter (`Trivy`/`Semgrep`/`Gitleaks`) lê ~5 linhas antes/depois
-  de `Finding.Line` do próprio arquivo já aberto durante o parsing do resultado, antes de
-  `cloneShallow` limpar o diretório. Entrega o mesmo valor real da proposta ("ver o código da
-  vulnerabilidade sem abrir o repositório") sem precisar manter nada em disco depois — o preço é não
-  dar pra navegar o repositório inteiro livremente (só o trecho de cada achado específico), que
-  nunca foi pedido além do contexto de UM achado por vez na proposta original (seção 5.B: "renderiza
-  o arquivo... com destaque na linha", sempre no contexto de UM achado expandido).
-- Migration: `scan_findings` ganha coluna `snippet TEXT NOT NULL DEFAULT ''` — achados antigos
-  (antes desta fase) ficam com snippet vazio, `FindingsTable`/Dialog tratam isso mostrando só "sem
-  trecho disponível" em vez de quebrar.
-- **Deduplicação por fingerprint**: `Finding` ganha `Fingerprint` — SHA-256 de
-  `scanner + finding_id + file + line`, calculado em `toFindingResponse` (Go) ou já no momento de
-  gravar (mais barato calcular uma vez que a cada leitura — decisão: calcular em `SaveFindings`,
-  gravar a coluna). Não deduplica DENTRO de um scan (cada linha de `scan_findings` já é um achado
-  distinto por natureza) — deduplica ENTRE re-scans do MESMO projeto (Fase 10): a UI do histórico de
-  um projeto mostra "achado X apareceu pela primeira vez no scan de 12/08, ainda presente no scan de
-  20/08" em vez de listar a mesma vulnerabilidade repetida uma vez por scan.
+  clone temporário ainda existe — `captureSnippet` (`infrastructure/git_clone.go`, compartilhada
+  entre Trivy/Semgrep) lê até 5 linhas antes/depois de `Finding.Line` do próprio arquivo já aberto
+  durante o parsing do resultado, antes de `cloneShallow`/`ZipExtractor` limparem o diretório. Entrega
+  o mesmo valor real da proposta ("ver o código da vulnerabilidade sem abrir o repositório") sem
+  precisar manter nada em disco depois.
+  - **Cada linha do snippet vem prefixada com o número REAL do arquivo** (`"32: const preTax =
+    eval(...)"`) — ajuste real feito durante a implementação: a linha do achado nem sempre cai no
+    centro do trecho (perto do início/fim do arquivo o contexto é truncado assimetricamente), então
+    sem o número real embutido a UI não teria como saber qual linha destacar. `FindingsTable.tsx`'s
+    `SnippetBlock` faz o parsing inverso desse prefixo só pra decidir o destaque visual — o texto em
+    si nunca é reformatado.
+  - Só Trivy (misconfigurations — vulnerabilidades de dependência nunca têm uma linha específica,
+    `captureSnippet` devolve "" sozinho pra `Line<=0`) e Semgrep (toda linha tem uma linha real)
+    capturam snippet de arquivo de verdade. **Gitleaks deliberadamente NÃO usa `captureSnippet`** —
+    decisão de segurança tomada durante a implementação, não um esquecimento: um achado de segredo já
+    grava seu próprio `Snippet` MASCARADO (`maskSecretSnippet`, Fase 11) — mostrar as linhas reais ao
+    redor vazaria o segredo em claro (a própria linha do achado), exatamente o vazamento que o
+    mascaramento existe pra evitar.
+  - Migration `scan_findings.snippet` já tinha ido num commit anterior (junto do fingerprint, abaixo)
+    — achados antigos (antes desta fase) ficam com snippet vazio; `FindingsTable`'s Dialog só omite a
+    seção "Trecho do código" nesse caso, nunca mostra um bloco vazio.
+- **Deduplicação por fingerprint** — `Finding.Fingerprint`/a coluna `scan_findings.fingerprint`
+  (SHA-256 de `scanner + finding_id + file + line`, calculado em `SaveFindings`) já existiam de um
+  commit anterior; esta fase entrega o consumo de verdade:
+  - `Repository.ListByScanIDs` (nova) busca os achados de VÁRIOS scan_ids numa viagem só;
+    `Service.ListProjectFindingsHistory` (Fase 10 — reaproveita `ListProjectScans`, mesma consulta
+    que já filtra por projeto) agrupa em memória por `Fingerprint` — o volume de achados por projeto
+    nesta plataforma nunca justificou um `GROUP BY` no banco pra isto. Cada grupo vira um
+    `ProjectFindingHistory`: `FirstSeenAt`/`LastSeenAt` (MIN/MAX entre as ocorrências),
+    `ScanCount` (quantos scans DISTINTOS incluíram esse fingerprint) e `StillPresent` (aparece no
+    scan MAIS RECENTE do projeto?) — exatamente "achado X apareceu pela primeira vez no scan de
+    12/08, ainda presente no scan de 20/08", o pedido literal do roadmap. Não deduplica DENTRO de um
+    scan (cada linha de `scan_findings` já é um achado distinto por natureza) — só ENTRE os scans de
+    um MESMO projeto.
+  - `GET /api/v1/scanning/projects/{projectID}/findings-history` (rota nova). Frontend:
+    `ProjectFindingHistoryPanel` — busca sob demanda (só quando o card expande, "Ver histórico →" em
+    `ProjectCard`), nunca no carregamento inicial de `/seguranca`.
+- **Achado real durante a verificação ao vivo** (não hipotético): rodando Trivy duas vezes contra o
+  mesmo alvo, 86 achados brutos por scan deduplicaram pra 75 fingerprints distintos — não um bug: o
+  Trivy relata o MESMO CVE contra o MESMO arquivo mais de uma vez quando várias dependências resolvem
+  pro mesmo pacote vulnerável, e como `Line` é sempre 0 pra Trivy (vulnerabilidade de dependência,
+  nunca uma linha específica), essas repetições batem no MESMO fingerprint por desenho — confirma que
+  a dedução está funcionando exatamente como o SHA-256 de `scanner+finding_id+file+line` deveria se
+  comportar, não um efeito colateral indesejado.
+- Verificado ao vivo, ponta a ponta: Semgrep contra um repositório público real (`OWASP/NodeGoat`) —
+  21 achados, todos os 21 com snippet real capturado, a linha destacada batendo exatamente com a
+  vulnerabilidade real (`eval(req.body.preTax)`, um `eval` inseguro). Mesmo projeto escaneado duas
+  vezes com Semgrep: os 21 fingerprints idênticos nas duas vezes, `scan_count: 2`,
+  `still_present: true` nos 21 — e os 75 fingerprints do Trivy (de uma terceira execução do mesmo
+  projeto) aparecendo com `scan_count: 1`, `still_present: false` (não fazia parte do scan mais
+  recente). `/seguranca` carregado com uma sessão real (NextAuth), "Ver histórico →" expandindo o
+  painel corretamente através do proxy BFF.
 
 ### Fase 13 — Filtro de ruído + botão "Copiar prompt pra IA" — 🔲 não implementada
 

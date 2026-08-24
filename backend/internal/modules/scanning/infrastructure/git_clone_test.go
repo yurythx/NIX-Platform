@@ -3,6 +3,10 @@ package infrastructure
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -173,6 +177,76 @@ func TestExtractErrorLine(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := extractErrorLine(tc.in); got != tc.want {
 				t.Errorf("extractErrorLine(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// A partir daqui: captureSnippet (Fase 12 — snippet de código no achado).
+
+func writeTestFile(t *testing.T, lineCount int) string {
+	t.Helper()
+	dir := t.TempDir()
+	lines := make([]string, lineCount)
+	for i := range lines {
+		lines[i] = "line " + strconv.Itoa(i+1)
+	}
+	path := filepath.Join(dir, "app.go")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+	return path
+}
+
+func TestCaptureSnippet_ReturnsContextAroundLine(t *testing.T) {
+	path := writeTestFile(t, 20)
+
+	got := captureSnippet(path, 10)
+
+	if !strings.Contains(got, "line 10") {
+		t.Errorf("snippet = %q, want it to contain the target line itself", got)
+	}
+	if !strings.Contains(got, "line 5") || !strings.Contains(got, "line 15") {
+		t.Errorf("snippet = %q, want %d lines of context before/after (5..15)", got, snippetContext)
+	}
+	if strings.Contains(got, "line 4") || strings.Contains(got, "line 16") {
+		t.Errorf("snippet = %q, want exactly %d lines of context, not more", got, snippetContext)
+	}
+	// O NÚMERO real da linha (não a posição dentro do snippet) vem como
+	// prefixo — é o que o frontend usa pra saber qual linha destacar como
+	// "a do achado" (FindingsTable.tsx), já que a linha do achado nem
+	// sempre é a primeira/central do snippet (perto do início/fim do
+	// arquivo, o contexto é truncado assimetricamente).
+	if !strings.Contains(got, "10: line 10") {
+		t.Errorf("snippet = %q, want each line prefixed with its real line number (e.g. \"10: line 10\")", got)
+	}
+}
+
+func TestCaptureSnippet_ClampsAtFileBoundaries(t *testing.T) {
+	path := writeTestFile(t, 3)
+
+	got := captureSnippet(path, 1)
+
+	if !strings.Contains(got, "line 1") || !strings.Contains(got, "line 3") {
+		t.Errorf("snippet = %q, want the whole 3-line file even though context would normally reach further", got)
+	}
+}
+
+func TestCaptureSnippet_NeverErrors_ReturnsEmptyOnAnyFailure(t *testing.T) {
+	cases := map[string]struct {
+		path string
+		line int
+	}{
+		"empty path":          {path: "", line: 5},
+		"zero line":           {path: writeTestFile(t, 10), line: 0},
+		"negative line":       {path: writeTestFile(t, 10), line: -1},
+		"line past EOF":       {path: writeTestFile(t, 10), line: 999},
+		"file does not exist": {path: "/does/not/exist/app.go", line: 5},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := captureSnippet(tc.path, tc.line); got != "" {
+				t.Errorf("captureSnippet(%q, %d) = %q, want empty", tc.path, tc.line, got)
 			}
 		})
 	}

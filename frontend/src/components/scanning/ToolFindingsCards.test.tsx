@@ -36,6 +36,7 @@ function makeFinding(overrides: Partial<ScanFinding> = {}): ScanFinding {
     description: "desc",
     file: "",
     line: 0,
+    fingerprint: "abc123fingerprint",
     created_at: "2026-08-24T12:00:00Z",
     tool: { name: "Trivy" },
     ...overrides,

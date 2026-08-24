@@ -58,4 +58,10 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/projects", h.ListProjects)
+
+	// Fase 12 (deduplicação por fingerprint): histórico deduplicado de
+	// achados ENTRE os scans de um projeto.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/projects/{projectID}/findings-history", h.ListProjectFindingsHistory)
 }

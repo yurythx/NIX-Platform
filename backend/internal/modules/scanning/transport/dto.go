@@ -23,6 +23,8 @@ type ToolResponse struct {
 
 var toolDisplayNames = map[string]string{
 	"trivy":     "Trivy",
+	"gitleaks":  "Gitleaks",
+	"syft":      "Syft",
 	"semgrep":   "Semgrep",
 	"sonarqube": "SonarQube",
 	"zap":       "OWASP ZAP",
@@ -83,18 +85,26 @@ func toolLink(scanner, findingID, target, sonarQubePublicURL string) string {
 // sairiam em PascalCase, inconsistente com o resto da API, que é sempre
 // snake_case).
 type FindingResponse struct {
-	ID            string       `json:"id"`
-	ScanID        string       `json:"scan_id"`
-	Scanner       string       `json:"scanner"`
-	Target        string       `json:"target"`
-	FindingID     string       `json:"finding_id"`
-	OWASPCategory string       `json:"owasp_category"`
-	Severity      string       `json:"severity"`
-	Description   string       `json:"description"`
-	File          string       `json:"file"`
-	Line          int          `json:"line"`
-	CreatedAt     time.Time    `json:"created_at"`
-	Tool          ToolResponse `json:"tool"`
+	ID            string `json:"id"`
+	ScanID        string `json:"scan_id"`
+	Scanner       string `json:"scanner"`
+	Target        string `json:"target"`
+	FindingID     string `json:"finding_id"`
+	OWASPCategory string `json:"owasp_category"`
+	Severity      string `json:"severity"`
+	Description   string `json:"description"`
+	File          string `json:"file"`
+	Line          int    `json:"line"`
+	// Snippet (Fase 12) vem vazio pra achados de antes desta fase, ou
+	// pra um achado sem File/Line específico (ex.: uma vulnerabilidade
+	// de dependência do Trivy, ou o próprio Gitleaks, que grava só o
+	// match mascarado — nunca linhas reais do arquivo, ver
+	// gitleaks_scanner.go) — nunca tratado como erro pelo cliente, só
+	// "sem trecho disponível".
+	Snippet     string       `json:"snippet,omitempty"`
+	Fingerprint string       `json:"fingerprint"`
+	CreatedAt   time.Time    `json:"created_at"`
+	Tool        ToolResponse `json:"tool"`
 }
 
 func toFindingResponse(f domain.PersistedFinding, sonarQubePublicURL string) FindingResponse {
@@ -109,6 +119,8 @@ func toFindingResponse(f domain.PersistedFinding, sonarQubePublicURL string) Fin
 		Description:   f.Description,
 		File:          f.File,
 		Line:          f.Line,
+		Snippet:       f.Snippet,
+		Fingerprint:   f.FindingFingerprint,
 		CreatedAt:     f.CreatedAt,
 		Tool: ToolResponse{
 			Name: toolDisplayName(f.Scanner),
@@ -373,6 +385,46 @@ func toProjectResponses(projects []domain.Project, lastScanByProject map[string]
 	out := make([]ProjectResponse, 0, len(projects))
 	for _, p := range projects {
 		out = append(out, toProjectResponse(p, lastScanByProject[p.ID.String()]))
+	}
+	return out
+}
+
+// ProjectFindingHistoryResponse é o formato público de
+// application.ProjectFindingHistory (Fase 12 — deduplicação por
+// fingerprint) — "achado X apareceu pela primeira vez no scan de 12/08,
+// ainda presente no scan de 20/08", o pedido literal do roadmap.
+type ProjectFindingHistoryResponse struct {
+	Fingerprint   string       `json:"fingerprint"`
+	Scanner       string       `json:"scanner"`
+	OWASPCategory string       `json:"owasp_category"`
+	Severity      string       `json:"severity"`
+	Description   string       `json:"description"`
+	File          string       `json:"file"`
+	Line          int          `json:"line"`
+	FirstSeenAt   time.Time    `json:"first_seen_at"`
+	LastSeenAt    time.Time    `json:"last_seen_at"`
+	ScanCount     int          `json:"scan_count"`
+	StillPresent  bool         `json:"still_present"`
+	Tool          ToolResponse `json:"tool"`
+}
+
+func toProjectFindingHistoryResponses(list []application.ProjectFindingHistory) []ProjectFindingHistoryResponse {
+	out := make([]ProjectFindingHistoryResponse, 0, len(list))
+	for _, h := range list {
+		out = append(out, ProjectFindingHistoryResponse{
+			Fingerprint:   h.Fingerprint,
+			Scanner:       h.Scanner,
+			OWASPCategory: h.OWASPCategory,
+			Severity:      string(h.Severity),
+			Description:   h.Description,
+			File:          h.File,
+			Line:          h.Line,
+			FirstSeenAt:   h.FirstSeenAt,
+			LastSeenAt:    h.LastSeenAt,
+			ScanCount:     h.ScanCount,
+			StillPresent:  h.StillPresent,
+			Tool:          ToolResponse{Name: toolDisplayName(h.Scanner)},
+		})
 	}
 	return out
 }

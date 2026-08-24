@@ -172,6 +172,14 @@ type Repository interface {
 	// é erro — quem chama decide se isso merece um 404.
 	ListByScanID(ctx context.Context, scanID uuid.UUID) ([]PersistedFinding, error)
 
+	// ListByScanIDs retorna todo achado de QUALQUER um dos scanIDs, sem
+	// ordenação nenhuma garantida (Fase 12 — histórico de achados de um
+	// projeto: application.Service.ListProjectFindingsHistory agrupa o
+	// resultado por Fingerprint em memória, a ordem da linha individual
+	// não importa pra esse agrupamento). Uma lista de scanIDs vazia
+	// devolve uma lista vazia, não erro.
+	ListByScanIDs(ctx context.Context, scanIDs []uuid.UUID) ([]PersistedFinding, error)
+
 	// ListRecent retorna os achados mais graves/recentes entre TODAS as
 	// execuções de scan (não só uma), até limit linhas — o feed que a
 	// Fase 9 (UI no frontend) usa pra listar "achados recentes por

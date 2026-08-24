@@ -142,6 +142,19 @@ export function FindingsTable({
                 </p>
               </div>
             )}
+            {/* Trecho do código (Fase 12) — pedido implícito de "ver o
+                código da vulnerabilidade sem abrir o repositório", já que
+                esta plataforma nunca mantém um checkout persistente pra
+                navegar livremente (ver docs/roadmap-secops-orchestrator.md).
+                Achado sem snippet (ferramenta sem linha específica, ou
+                achado de antes desta fase) simplesmente omite esta seção,
+                nunca mostra um bloco vazio. */}
+            {selected.snippet && (
+              <div>
+                <div className="font-medium text-foreground">Trecho do código</div>
+                <SnippetBlock snippet={selected.snippet} highlightLine={selected.line} />
+              </div>
+            )}
             <div>
               <div className="font-medium text-foreground">Como corrigir</div>
               <p className="text-muted">{remediationFor(selected)}</p>
@@ -161,5 +174,40 @@ export function FindingsTable({
         )}
       </Dialog>
     </>
+  );
+}
+
+// SnippetBlock renderiza o snippet capturado pelo backend (Fase 12) —
+// cada linha vem prefixada com o número REAL do arquivo, ex. "10: foo()"
+// (ver captureSnippet no backend, git_clone.go), nunca a posição dentro
+// do snippet: a linha do achado nem sempre é a primeira/central (perto
+// do início/fim do arquivo, o contexto fica truncado assimetricamente).
+// Faz o parsing inverso desse prefixo só pra decidir qual linha destacar
+// como "a do achado" — o texto exibido continua vindo do backend, nunca
+// reformatado.
+const SNIPPET_LINE_PATTERN = /^(\d+): (.*)$/;
+
+function SnippetBlock({ snippet, highlightLine }: { snippet: string; highlightLine: number }) {
+  const lines = snippet.split("\n");
+  return (
+    <pre className="overflow-x-auto rounded-md border border-surface-border bg-black/5 p-3 text-xs dark:bg-white/5">
+      <code>
+        {lines.map((raw, i) => {
+          const match = raw.match(SNIPPET_LINE_PATTERN);
+          const lineNumber = match ? Number(match[1]) : null;
+          const content = match ? match[2] : raw;
+          const isTarget = lineNumber === highlightLine;
+          return (
+            <div
+              key={i}
+              className={`flex gap-3 px-1 ${isTarget ? "bg-danger/10 text-foreground" : "text-muted"}`}
+            >
+              <span className="w-8 shrink-0 select-none text-right opacity-60">{lineNumber ?? ""}</span>
+              <span className="whitespace-pre">{content}</span>
+            </div>
+          );
+        })}
+      </code>
+    </pre>
   );
 }

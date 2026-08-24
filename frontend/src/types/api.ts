@@ -75,7 +75,34 @@ export interface ScanFinding {
   description: string;
   file: string;
   line: number;
+  // snippet (Fase 12): vazio pra achados de antes desta fase, ou pra um
+  // achado sem file/line específico (ex.: uma vulnerabilidade de
+  // dependência do Trivy) — nunca tratado como erro, só "sem trecho
+  // disponível" (ver FindingsTable's Dialog).
+  snippet?: string;
+  // fingerprint (Fase 12): SHA-256 de scanner+finding_id+file+line,
+  // estável entre re-scans do MESMO alvo — usado pra deduplicar achados
+  // ao longo do histórico de um projeto, nunca exibido cru na UI.
+  fingerprint: string;
   created_at: string;
+  tool: FindingTool;
+}
+
+// GET /api/v1/scanning/projects/{projectID}/findings-history (Fase 12 —
+// deduplicação por fingerprint): UM achado deduplicado ENTRE re-scans do
+// MESMO projeto — "apareceu pela primeira vez em X, ainda presente em Y".
+export interface ProjectFindingHistory {
+  fingerprint: string;
+  scanner: string;
+  owasp_category: string;
+  severity: ScanSeverity;
+  description: string;
+  file: string;
+  line: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  scan_count: number;
+  still_present: boolean;
   tool: FindingTool;
 }
 

@@ -88,6 +88,24 @@ func (r *PostgresRepository) ListByScanID(ctx context.Context, scanID uuid.UUID)
 	return scanFindingRows(rows)
 }
 
+// ListByScanIDs retorna todo achado de QUALQUER um dos scanIDs (Fase 12 —
+// histórico de achados de um projeto) — sem ordenação por severidade
+// aqui, quem chama (application.Service.ListProjectFindingsHistory)
+// agrupa por Fingerprint em memória e decide sua própria ordem pro
+// resultado final.
+func (r *PostgresRepository) ListByScanIDs(ctx context.Context, scanIDs []uuid.UUID) ([]domain.PersistedFinding, error) {
+	if len(scanIDs) == 0 {
+		return nil, nil
+	}
+	q := fmt.Sprintf(`SELECT %s FROM scan_findings WHERE scan_id = ANY($1)`, findingColumns)
+	rows, err := r.pool.Query(ctx, q, scanIDs)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: list findings for %d scans: %w", len(scanIDs), err)
+	}
+	defer rows.Close()
+	return scanFindingRows(rows)
+}
+
 // ListRecent retorna os achados mais graves/recentes entre TODAS as
 // execuções de scan, até limit linhas — o feed que a Fase 9 (UI) usa.
 func (r *PostgresRepository) ListRecent(ctx context.Context, limit int) ([]domain.PersistedFinding, error) {

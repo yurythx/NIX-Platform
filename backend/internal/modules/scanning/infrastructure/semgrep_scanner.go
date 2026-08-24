@@ -131,6 +131,10 @@ func parseSemgrepReport(raw []byte, scanDir string) ([]domain.Finding, error) {
 			Description:   r.Extra.Message,
 			File:          relativeToScanDir(r.Path, scanDir),
 			Line:          r.Start.Line,
+			// r.Path (não o File acima) — já é o caminho ABSOLUTO que o
+			// semgrep reportou, direto utilizável por captureSnippet, sem
+			// precisar remontar a partir do relativo + scanDir de novo.
+			Snippet: captureSnippet(r.Path, r.Start.Line),
 		})
 	}
 	return findings, nil

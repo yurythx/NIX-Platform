@@ -19,6 +19,67 @@ import (
 	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 )
 
+// snippetContext é quantas linhas antes/depois de Finding.Line
+// captureSnippet inclui — mesmo valor "~5 linhas" que o roadmap pede
+// (Fase 12).
+const snippetContext = 5
+
+// captureSnippet lê até snippetContext linhas antes/depois de line
+// (1-indexed) de path — best-effort: qualquer falha (arquivo ausente,
+// linha fora do intervalo, path vazio, ...) devolve "", nunca um erro que
+// faria o scan inteiro falhar só porque um snippet cosmético não pôde ser
+// capturado. Chamado no momento do parsing do resultado de cada scanner
+// (Trivy/Semgrep — ver trivy_scanner.go/semgrep_scanner.go), enquanto o
+// diretório clonado/extraído ainda existe, ANTES do cleanup — nunca
+// depois, sob demanda: a proposta original pedia um endpoint
+// `GET /api/file-content` pra ler o arquivo do disco a qualquer momento,
+// incompatível com a decisão de nunca manter um checkout persistente
+// (ver docs/roadmap-secops-orchestrator.md, Fase 12).
+//
+// GitleaksScanner deliberadamente NÃO usa esta função — um achado de
+// segredo já grava seu próprio Snippet mascarado (ver
+// gitleaks_scanner.go's maskSecretSnippet), nunca as linhas reais do
+// arquivo: mostrar contexto de verdade ao redor da linha revelaria o
+// segredo em claro (a própria linha do achado), exatamente o vazamento
+// que o mascaramento existe pra evitar.
+func captureSnippet(path string, line int) string {
+	if path == "" || line <= 0 {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	idx := line - 1
+	if idx < 0 || idx >= len(lines) {
+		return ""
+	}
+
+	start := idx - snippetContext
+	if start < 0 {
+		start = 0
+	}
+	end := idx + snippetContext + 1
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	// Cada linha ganha o número REAL do arquivo como prefixo ("5: ...") —
+	// sem isso, o snippet começando em qualquer lugar (Line pode estar
+	// perto do início/fim do arquivo, onde snippetContext é truncado)
+	// deixaria a UI sem como saber qual linha destacar como "a do
+	// achado" nem mostrar a numeração real do arquivo. O frontend faz o
+	// parsing inverso desse prefixo pra decidir o destaque (ver
+	// FindingsTable.tsx).
+	numbered := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		numbered = append(numbered, fmt.Sprintf("%d: %s", i+1, lines[i]))
+	}
+	return strings.Join(numbered, "\n")
+}
+
 // refPattern restringe o que aceitamos depois de "#" no alvo a algo que
 // só pode ser um nome de branch/tag git — nunca uma flag (não pode
 // começar com "-") nem conter espaço/metacaractere.

@@ -714,3 +714,70 @@ func TestListProjects_IncludesJustCreatedProject(t *testing.T) {
 		t.Error("ListProjects did not include the project just created")
 	}
 }
+
+func TestListProjectFindingsHistory_DeduplicatesAcrossRescans(t *testing.T) {
+	pool := testPool(t)
+	finding := domain.Finding{
+		ID: "CVE-2026-HANDLER", OWASPCategory: "A06:2021-Vulnerable and Outdated Components",
+		Severity: domain.SeverityHigh, Description: "achado do handler", File: "go.sum", Line: 1,
+	}
+	h := NewHandlers(newTestService(pool, &fakeScanner{name: "trivy", findings: []domain.Finding{finding}}), testLogger(), testSonarQubePublicURL)
+
+	createBody, _ := json.Marshal(createProjectGitRequest{Name: "test-project-handler-history", Target: "https://example.com/repo.git"})
+	createReq := httptest.NewRequest(http.MethodPost, "/scanning/projects", bytes.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	h.CreateProject(createRec, createReq)
+	project := decodeEnvelope[ProjectResponse](t, createRec.Body.Bytes())
+
+	scanBody, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy"}, ProjectID: project.ID})
+	scanReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(scanBody))
+	scanRec := httptest.NewRecorder()
+	h.CreateScan(scanRec, scanReq)
+	job := decodeEnvelope[scanJobResponse](t, scanRec.Body.Bytes())
+
+	jobID, err := uuid.Parse(job.JobID)
+	if err != nil {
+		t.Fatalf("parse job id: %v", err)
+	}
+	if err := h.service.ProcessScanJob(context.Background(), jobID, uuid.New()); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/projects/"+project.ID+"/findings-history", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("projectID", project.ID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.ListProjectFindingsHistory(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	got := decodeEnvelope[[]ProjectFindingHistoryResponse](t, rec.Body.Bytes())
+	if len(got) != 1 {
+		t.Fatalf("history = %d entries, want 1", len(got))
+	}
+	if got[0].ScanCount != 1 || !got[0].StillPresent {
+		t.Errorf("history entry = %+v, want ScanCount=1 StillPresent=true", got[0])
+	}
+	if got[0].Tool.Name != "Trivy" {
+		t.Errorf("Tool.Name = %q, want the display name \"Trivy\"", got[0].Tool.Name)
+	}
+}
+
+func TestListProjectFindingsHistory_InvalidProjectID_Returns400(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/projects/not-a-uuid/findings-history", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("projectID", "not-a-uuid")
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h.ListProjectFindingsHistory(rec, r)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}

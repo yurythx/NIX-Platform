@@ -298,6 +298,26 @@ func (h *Handlers) ListProjects(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOK(w, toProjectResponses(projects, lastScanByProject))
 }
 
+// ListProjectFindingsHistory trata
+// GET /api/v1/scanning/projects/{projectID}/findings-history (Fase 12) —
+// todo achado deduplicado por fingerprint entre TODOS os scans de um
+// projeto, "ainda presente"/"quando apareceu pela primeira vez" incluído.
+func (h *Handlers) ListProjectFindingsHistory(w http.ResponseWriter, r *http.Request) {
+	projectID, err := uuid.Parse(chi.URLParam(r, "projectID"))
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, apperrors.BadRequest("projectID must be a valid UUID"))
+		return
+	}
+
+	history, err := h.service.ListProjectFindingsHistory(r.Context(), projectID)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, toProjectFindingHistoryResponses(history))
+}
+
 // correlationIDFromRequest reaproveita o request id (§50) como o
 // correlation id do fluxo de negócio quando ele já é um UUID, voltando
 // para um novo UUID caso o cliente tenha enviado um X-Request-ID que não

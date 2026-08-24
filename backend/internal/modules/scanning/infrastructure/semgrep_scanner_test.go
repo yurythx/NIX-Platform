@@ -2,6 +2,10 @@ package infrastructure
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
@@ -86,6 +90,46 @@ func TestParseSemgrepReport_ListAndStringOWASPMetadata(t *testing.T) {
 	}
 	if noMetadata.OWASPCategory != "" {
 		t.Errorf("OWASPCategory (absent) = %q, want empty", noMetadata.OWASPCategory)
+	}
+}
+
+// TestParseSemgrepReport_CapturesSnippetFromRealFile cobre a Fase 12
+// (snippet de código no achado): r.Path já vem ABSOLUTO na saída real do
+// semgrep, direto utilizável por captureSnippet sem remontar a partir do
+// File relativo — este teste escreve um arquivo de verdade em disco pra
+// provar que o snippet capturado é o conteúdo real ao redor da linha, não
+// um valor inventado.
+func TestParseSemgrepReport_CapturesSnippetFromRealFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "views.py")
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	raw := []byte(fmt.Sprintf(`{
+		"results": [
+			{
+				"check_id": "python.django.security.injection.command.subprocess-injection.subprocess-injection",
+				"path": %q,
+				"start": {"line": 10},
+				"extra": {"message": "achado de teste", "severity": "ERROR", "metadata": {}}
+			}
+		]
+	}`, path))
+
+	findings, err := parseSemgrepReport(raw, dir)
+	if err != nil {
+		t.Fatalf("parseSemgrepReport: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(findings))
+	}
+	if !strings.Contains(findings[0].Snippet, "line 10") {
+		t.Errorf("Snippet = %q, want it to contain the real file's line 10", findings[0].Snippet)
 	}
 }
 
