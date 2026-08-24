@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+
+# Sidecar do Trivy (ver cmd/trivy-sidecar/main.go e
+# docs/roadmap-secops-orchestrator.md, seção "Containerização"): decisão
+# do usuário de isolar cada scanner no seu próprio container, como o
+# GitGuard faz — o binário `trivy` sai da imagem do backend-worker e
+# ganha esta imagem própria, com um servidor HTTP fino na frente.
+
+# ---- builder ----
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+
+RUN apk add --no-cache ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trivy-sidecar ./cmd/trivy-sidecar
+
+# ---- runtime ----
+FROM alpine:3.20 AS runtime
+
+# Mesma instalação (binário + verificação de checksum) que já vivia em
+# Dockerfile.worker antes desta fase — só movida pra cá.
+ARG TRIVY_VERSION=0.74.0
+RUN apk add --no-cache ca-certificates curl && \
+    ARCH="$(uname -m)" && \
+    case "$ARCH" in \
+        x86_64) TRIVY_ARCH="64bit" ;; \
+        aarch64) TRIVY_ARCH="ARM64" ;; \
+        *) echo "unsupported architecture for trivy: $ARCH" >&2; exit 1 ;; \
+    esac && \
+    cd /tmp && \
+    curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" && \
+    curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt" && \
+    grep "trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" trivy_${TRIVY_VERSION}_checksums.txt | sha256sum -c - && \
+    tar -xzf "trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" trivy && \
+    mv trivy /usr/local/bin/trivy && \
+    chmod +x /usr/local/bin/trivy && \
+    rm -f /tmp/trivy_${TRIVY_VERSION}_* && \
+    apk del curl
+
+# UID/GID FIXOS (10001) — o MESMO valor que Dockerfile.worker usa pro seu
+# próprio usuário "nix". Os dois processos falam com o mesmo caminho no
+# volume compartilhado scanning_workspace (docker-compose.yml, montado
+# em /workspace nos dois lados): o worker escreve (clona o alvo ali), este
+# sidecar só lê — mas qualquer um dos dois pode ser o PRIMEIRO container a
+# montar o volume ainda vazio (depende da ordem de start do compose), e
+# é esse primeiro mount que decide a ownership inicial do volume nomeado
+# (Docker copia o que já existe nesse caminho dentro da imagem pro volume
+# vazio). Sem este mkdir+chown aqui também, um dia em que este container
+# suba primeiro deixaria o volume root:root, e o WORKER (que precisa
+# escrever) falharia com "permission denied".
+RUN addgroup -g 10001 -S nix && adduser -u 10001 -S nix -G nix && \
+    mkdir -p /workspace && chown nix:nix /workspace
+USER nix
+WORKDIR /app
+COPY --from=builder --chown=nix:nix /out/trivy-sidecar ./trivy-sidecar
+
+ENTRYPOINT ["./trivy-sidecar"]

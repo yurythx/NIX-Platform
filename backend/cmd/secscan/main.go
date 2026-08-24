@@ -146,7 +146,11 @@ type localScanner interface {
 // uma limitação técnica.
 func runScanners(ctx context.Context, scannerNames []string, repo, trivyPath, semgrepPath, semgrepConfig string, logger *slog.Logger) ([]domain.Finding, error) {
 	available := map[string]localScanner{
-		infrastructure.TrivyScannerName:   infrastructure.NewTrivyScanner(trivyPath, 0, logger),
+		// serviceURL/workspaceDir vazios: secscan só chama ExecuteLocal
+		// (abaixo), nunca Execute — os dois parâmetros são só do caminho
+		// containerizado de produção (ver trivy_scanner.go), irrelevantes
+		// aqui.
+		infrastructure.TrivyScannerName:   infrastructure.NewTrivyScanner(trivyPath, "", "", 0, logger),
 		infrastructure.SemgrepScannerName: infrastructure.NewSemgrepScanner(semgrepPath, semgrepConfig, 0, logger),
 	}
 

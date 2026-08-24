@@ -59,7 +59,7 @@ func (s *SemgrepScanner) Name() string { return SemgrepScannerName }
 // `semgrep scan` no diretório resultante — sempre removido ao final,
 // sucesso ou erro.
 func (s *SemgrepScanner) Execute(ctx context.Context, target string) ([]domain.Finding, error) {
-	dir, cleanup, err := cloneShallow(ctx, target, s.cloneTimeout, s.logger)
+	dir, cleanup, err := cloneShallow(ctx, target, s.cloneTimeout, "", s.logger)
 	if err != nil {
 		return nil, err
 	}

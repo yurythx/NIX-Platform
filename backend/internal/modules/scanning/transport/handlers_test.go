@@ -220,8 +220,16 @@ func TestListFindings_KnownScan_ReturnsSnakeCaseFields(t *testing.T) {
 func TestListRecentFindings_IncludesJustCreatedFinding(t *testing.T) {
 	pool := testPool(t)
 	const marker = "recent-findings-handler-marker"
+	// CRITICAL, não HIGH: ListRecentFindings ordena por severidade e
+	// depois por created_at DESC dentro do mesmo nível — com CRITICAL
+	// (o nível mais alto) e o timestamp mais recente possível (now(), no
+	// momento em que RunScan grava), este achado sempre fica em primeiro
+	// lugar, não importa quantos outros achados reais (de scans de
+	// verdade rodados neste mesmo ambiente ao longo da sessão) já
+	// existam — HIGH quebrava aqui assim que o banco compartilhado
+	// acumulou mais de limit=200 achados CRITICAL reais.
 	scanner := &fakeScanner{name: marker, findings: []domain.Finding{
-		{ID: "HANDLER-MARKER-1", Severity: domain.SeverityHigh, Description: "achado do teste do handler"},
+		{ID: "HANDLER-MARKER-1", Severity: domain.SeverityCritical, Description: "achado do teste do handler"},
 	}}
 	svc := newTestService(pool, scanner)
 	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)

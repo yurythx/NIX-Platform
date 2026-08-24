@@ -136,9 +136,30 @@ type DiarioOficialConfig struct {
 // configurado deve reportar o scanner "sonarqube" como indisponível, não
 // derrubar o worker.
 type ScanningConfig struct {
-	TrivyPath     string
-	SemgrepPath   string
-	SemgrepConfig string
+	// TrivyPath só é usado por TrivyScanner.ExecuteLocal (o caminho do
+	// CLI cmd/secscan, standalone, nunca fala HTTP com nada — Fase 8) —
+	// Execute (o caminho de produção via worker) usa TrivyServiceURL
+	// abaixo, desde a containerização do Trivy (ver
+	// docs/roadmap-secops-orchestrator.md, seção "Containerização").
+	TrivyPath string
+	// TrivyServiceURL aponta pro sidecar (docker-compose.yml, serviço
+	// `trivy-scanner`) que TrivyScanner.Execute chama via HTTP em vez de
+	// rodar o binário `trivy` dentro do próprio worker — vazio reporta o
+	// scanner "trivy" como indisponível (mesmo princípio de SonarQubeURL
+	// vazio), nunca derruba o worker.
+	TrivyServiceURL string
+	// ScanningWorkspaceDir é o diretório BASE onde TrivyScanner.Execute
+	// clona o alvo — precisa ser o mesmo caminho montado como o volume
+	// compartilhado `scanning_workspace` (docker-compose.yml), pra ficar
+	// visível pro sidecar também. Vazio (padrão de desenvolvimento fora
+	// de Docker, ex.: `go test` local) cai de volta pro diretório
+	// temporário do próprio SO (os.MkdirTemp("", ...), o comportamento de
+	// sempre antes desta fase) — só Trivy usa isto por ora; Semgrep/
+	// SonarQube continuam clonando pro temp dir padrão do worker até
+	// serem containerizados também.
+	ScanningWorkspaceDir string
+	SemgrepPath          string
+	SemgrepConfig        string
 
 	SonarScannerPath         string
 	SonarQubeURL             string
@@ -364,9 +385,11 @@ func Load() (*Config, error) {
 			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
 		},
 		Scanning: ScanningConfig{
-			TrivyPath:     l.str("SCANNING_TRIVY_PATH", false, "trivy"),
-			SemgrepPath:   l.str("SCANNING_SEMGREP_PATH", false, "semgrep"),
-			SemgrepConfig: l.str("SCANNING_SEMGREP_CONFIG", false, ""),
+			TrivyPath:            l.str("SCANNING_TRIVY_PATH", false, "trivy"),
+			TrivyServiceURL:      l.str("SCANNING_TRIVY_SERVICE_URL", false, ""),
+			ScanningWorkspaceDir: l.str("SCANNING_WORKSPACE_DIR", false, ""),
+			SemgrepPath:          l.str("SCANNING_SEMGREP_PATH", false, "semgrep"),
+			SemgrepConfig:        l.str("SCANNING_SEMGREP_CONFIG", false, ""),
 
 			SonarScannerPath:         l.str("SCANNING_SONAR_SCANNER_PATH", false, "sonar-scanner"),
 			SonarQubeURL:             l.str("SCANNING_SONARQUBE_URL", false, ""),

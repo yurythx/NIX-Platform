@@ -11,6 +11,14 @@ volumes:
   sonarqube_data:
   sonarqube_extensions:
   sonarqube_logs:
+  # scanning_workspace (§ Containerização — cada scanner isolado no seu
+  # próprio container, como o GitGuard, decisão explícita do usuário):
+  # compartilhado entre backend-worker (que clona o alvo aqui — leitura E
+  # escrita) e cada sidecar de scanner (trivy-scanner, e os que vierem
+  # depois — só leitura, ver docker-compose.yml abaixo). O worker
+  # continua dono do ciclo de vida: cria o diretório antes do scan, apaga
+  # depois — nenhum sidecar escreve nem limpa nada aqui.
+  scanning_workspace:
 
 services:
   postgres:
@@ -210,6 +218,11 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-nix}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-nix}
     volumes:
       - ./secrets:/run/secrets:ro
+      # scanning_workspace (§ Containerização, ver comentário na seção
+      # `volumes:` no topo deste arquivo): TrivyScanner.Execute clona o
+      # alvo aqui (leitura E escrita — o worker é dono do ciclo de vida),
+      # o sidecar trivy-scanner só lê o mesmo caminho.
+      - scanning_workspace:/workspace
     networks:
       - nix_internal
     depends_on:
@@ -217,12 +230,37 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      trivy-scanner:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${WORKER_METRICS_PORT:-9100}/health"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # trivy-scanner (§ Containerização — cada scanner isolado no seu
+  # próprio container, decisão explícita do usuário: "gitguard usa cada
+  # solução containerizada, vamos fazer do mesmo jeito"): mesmo padrão
+  # que sonarqube/zap já seguiam — um serviço de vida longa com API HTTP
+  # própria, em vez do binário instalado dentro da imagem do worker. Só
+  # lê o volume compartilhado (nunca escreve nem limpa) — o worker
+  # continua dono de criar/apagar o diretório clonado.
+  trivy-scanner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.trivy-sidecar
+    restart: unless-stopped
+    volumes:
+      - scanning_workspace:/workspace:ro
+    networks:
+      - nix_internal
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   frontend:
     build:

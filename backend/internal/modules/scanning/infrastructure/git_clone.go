@@ -94,13 +94,22 @@ func isPrivateOrReserved(ip net.IP) bool {
 // cloneShallow valida target (formato + SSRF via validateHost) e clona um
 // branch/tag só (raso) para um novo diretório temporário — o ponto de
 // entrada único que todo CodeScanner baseado em código-fonte usa (hoje:
-// TrivyScanner, SemgrepScanner), para que a validação de alvo e a defesa
-// de SSRF vivam num único lugar e nunca divirjam entre scanners.
+// TrivyScanner, SemgrepScanner, SonarScanner), para que a validação de
+// alvo e a defesa de SSRF vivam num único lugar e nunca divirjam entre
+// scanners.
+//
+// baseDir é onde esse diretório temporário nasce — "" usa o padrão do
+// próprio SO (os.MkdirTemp, o comportamento de sempre). Um scanner
+// containerizado (§ Containerização — ver docs/roadmap-secops-
+// orchestrator.md; hoje só TrivyScanner) passa o caminho do volume
+// compartilhado com seu sidecar (`/workspace`, ScanningConfig.
+// ScanningWorkspaceDir) em vez de "", pra que o diretório clonado fique
+// visível também no container do sidecar, não só no do worker.
 //
 // Quem chama é responsável por invocar o cleanup retornado (sempre não
 // nil quando err é nil) assim que terminar de usar o diretório — nunca
 // deixa código de terceiros no disco do worker além do necessário.
-func cloneShallow(ctx context.Context, target string, cloneTimeout time.Duration, logger *slog.Logger) (dir string, cleanup func(), err error) {
+func cloneShallow(ctx context.Context, target string, cloneTimeout time.Duration, baseDir string, logger *slog.Logger) (dir string, cleanup func(), err error) {
 	repoURL, ref, err := parseGitTarget(target)
 	if err != nil {
 		return "", nil, apperrors.Validation(err.Error())
@@ -109,7 +118,7 @@ func cloneShallow(ctx context.Context, target string, cloneTimeout time.Duration
 		return "", nil, apperrors.Validation(err.Error())
 	}
 
-	dir, err = os.MkdirTemp("", "nix-scan-*")
+	dir, err = os.MkdirTemp(baseDir, "nix-scan-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("scanning: create temp dir: %w", err)
 	}

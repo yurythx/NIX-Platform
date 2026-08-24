@@ -82,7 +82,7 @@ func buildModules(deps *Dependencies) *Modules {
 	m.DiarioOficial.Handlers = diarioTransport.NewHandlers(diarioSvc, deps.Logger)
 
 	scanningRepo := scanningInfra.NewPostgresRepository(deps.DB)
-	trivyScanner := scanningInfra.NewTrivyScanner(deps.Config.Scanning.TrivyPath, deps.Config.Scanning.CloneTimeout, deps.Logger)
+	trivyScanner := scanningInfra.NewTrivyScanner(deps.Config.Scanning.TrivyPath, deps.Config.Scanning.TrivyServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	sonarScanner := scanningInfra.NewSonarScanner(
 		deps.Config.Scanning.SonarScannerPath, deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,

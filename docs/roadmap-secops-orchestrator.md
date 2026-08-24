@@ -5,7 +5,11 @@
   redundante com o gitleaks já no CI. **Fases 10-13 (abaixo) são uma extensão nova, ainda não
   implementada** — adaptação de uma segunda proposta externa ("Orquestrador de Segurança de Código
   On-Premise", estilo GitGuard) pra esta mesma arquitetura, com 3 decisões explícitas do usuário
-  registradas na seção "Reconciliação" logo abaixo.
+  registradas na seção "Reconciliação" logo abaixo. **"Containerização"** (uma quarta decisão,
+  posterior às 3 — cada scanner isolado no próprio container, como o GitGuard) está **parcialmente
+  implementada**: Trivy migrado e verificado ao vivo (sidecar `trivy-scanner`, volume compartilhado
+  `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker, migração futura
+  seguindo o mesmo desenho.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -176,10 +180,12 @@ ferramentas estarem prontas para gerar valor.
   passaria batido), aceita como suficiente hoje porque quem chama já precisa do mesmo nível de
   confiança de qualquer outra ação administrativa de integração na plataforma. Ver a linha A10 na
   tabela OWASP abaixo.
-- `git` e `trivy` instalados só na imagem do `backend-worker` (nunca na do `backend-api`), com o
-  binário do Trivy verificado por checksum SHA-256 contra o `checksums.txt` publicado pelo próprio
-  projeto antes de instalar — integridade de supply chain (A08:2021) para a própria ferramenta de
-  segurança que a plataforma orquestra.
+- `git` instalado na imagem do `backend-worker` (nunca na do `backend-api`) — `trivy` em si **saiu**
+  dessa imagem numa fase posterior (ver "Containerização" abaixo: o binário ganhou seu próprio
+  container, `trivy-scanner`, chamado via HTTP). O checksum SHA-256 do binário contra o
+  `checksums.txt` publicado pelo próprio projeto Trivy continua verificado antes de instalar —
+  integridade de supply chain (A08:2021) — só que agora no `Dockerfile.trivy-sidecar`, não mais
+  aqui.
 - **Desvio deliberado do padrão síncrono da Fase 1**: com um scanner real e lento (clone + scan
   pode levar de segundos a minutos) chamado por HTTP de verdade, o par
   `CreateScanJob`/`ProcessScanJob` (mesmo desenho job+outbox+worker de
@@ -438,6 +444,65 @@ descreve quando isso colidia com uma decisão de arquitetura já tomada e docume
    aponte, o mesmo raciocínio que já vale pra Trivy/Semgrep/SonarQube não serem "redundantes" com o
    CI mesmo o CI já rodando `govulncheck`/`npm audit`. Ver Fase 11.
 
+### Containerização — cada scanner isolado no próprio container — 🟡 parcial (Trivy feito)
+
+Decisão do usuário, depois das 3 acima: **"o gitguard usa cada solução containerizada, vamos fazer
+do mesmo jeito"**. Antes desta decisão, Trivy/Semgrep/(sonar-scanner CLI) rodavam como binários
+instalados DENTRO da imagem do `backend-worker`, chamados via `os/exec` — SonarQube e ZAP já eram
+diferentes (serviços de vida longa próprios, `docker-compose.yml`), mas por acaso de arquitetura
+(os dois precisam mesmo de um servidor), não por uma decisão deliberada de isolamento. Agora é
+deliberado: **todo scanner vira um serviço próprio**, um container isolado com API HTTP fina na
+frente — o mesmo padrão que SonarQube/ZAP já tinham, generalizado.
+
+**Por que não montar o socket do Docker** (a forma mais óbvia de fazer o worker literalmente rodar
+`docker run trivy ...`): a Fase 3 já rejeitou isso explicitamente pro caso de ler imagens Docker —
+"superfície de ataque equivalente a root no host". O mesmo raciocínio vale igual aqui; escolhido em
+vez disso o desenho abaixo, que nunca dá ao worker acesso ao Docker em si.
+
+**Desenho, estabelecido implementando o Trivy (o primeiro, referência pros próximos)**:
+- Volume Docker nomeado novo, `scanning_workspace`, montado em `/workspace` — leitura+escrita no
+  `backend-worker` (que continua sendo o único dono do ciclo de vida: cria o diretório antes do
+  scan, apaga depois), **somente leitura** em cada sidecar de scanner (defesa em profundidade: um
+  sidecar comprometido não consegue adulterar o clone que outro scanner ainda vai ler).
+- `cloneShallow` (`git_clone.go`, compartilhada entre Trivy/Semgrep/SonarQube) ganhou um parâmetro
+  `baseDir` — `""` continua o padrão de sempre (diretório temporário do próprio SO, usado por
+  Semgrep/SonarQube, ainda não containerizados); só `TrivyScanner.Execute` passa
+  `ScanningConfig.ScanningWorkspaceDir` (`/workspace` em produção), pra clonar dentro do volume
+  compartilhado em vez do filesystem privado do worker.
+- Sidecar novo, `cmd/trivy-sidecar` (`backend/Dockerfile.trivy-sidecar`, serviço `trivy-scanner` no
+  `docker-compose.yml`): um servidor HTTP fino — `POST /scan {"path": "..."}` roda
+  `trivy fs --format json ...` contra esse path e devolve o JSON NATIVO do trivy, sem reinterpretar
+  nada. Recusa (400) qualquer `path` fora de `/workspace` — nunca confia cegamente no que a rede
+  interna mandou, mesma postura de `validateHost` pro alvo git. Todo o parsing/mapeamento
+  OWASP/normalização de severidade (`parseTrivyReport`) continua em `trivy_scanner.go`, no worker —
+  nunca duplicado no sidecar.
+- `TrivyScanner.Execute` (produção, via worker) chama o sidecar por HTTP;
+  `TrivyScanner.ExecuteLocal` (`cmd/secscan`, o CLI standalone da Fase 8) continua rodando o binário
+  local via `os/exec`, sem depender de rede nenhuma — os dois caminhos convergem no mesmo
+  `parseTrivyReport`, então o formato do achado nunca diverge entre eles.
+- **Achado real durante a implementação**: um volume Docker nomeado novo nasce `root:root` — o
+  worker (rodando como usuário não-root `nix`) não conseguia criar o diretório do clone
+  (`permission denied`), reproduzido ao vivo contra um scan de verdade antes de corrigir. Fix: os
+  dois Dockerfiles (`Dockerfile.worker` e `Dockerfile.trivy-sidecar`) passaram a usar um UID/GID
+  FIXO (`10001`), idêntico nos dois, e pré-criam `/workspace` com essa ownership ANTES do volume ser
+  montado — Docker copia a ownership que já existe nesse caminho dentro da imagem pro volume vazio
+  na primeira vez que ele é montado, então qualquer um dos dois containers pode ser o primeiro a
+  subir sem deixar o volume com o dono errado.
+- Verificado ao vivo, ponta a ponta: um scan de verdade contra `OWASP/NodeGoat` via o sidecar achou
+  os MESMOS 86 achados que a Fase 3 original (antes da containerização) já tinha registrado — prova
+  de que a migração não mudou nenhum resultado, só onde o binário roda. O caminho de erro também
+  verificado (alvo inexistente) — a mensagem real do `git clone` (capturada no worker, antes de
+  qualquer chamada ao sidecar) continua chegando íntegra até a UI.
+- Imagem do `backend-worker` caiu de ~982MB pra bem menos sem o binário do trivy (ainda carrega
+  semgrep+sonar-scanner+JRE, os próximos candidatos a sair); `trivy-scanner` como imagem própria
+  fica em ~243MB, só o necessário pro Trivy rodar.
+
+**Ainda não migrados pro mesmo padrão** (trabalho futuro, mesmo desenho, scanner por scanner):
+Semgrep (`semgrep_scanner.go`, ainda `os/exec` dentro do worker) e o `sonar-scanner` CLI em si
+(`sonar_scanner.go` — o SERVIDOR SonarQube já é seu próprio container desde a Fase 5, só o CLI que
+faz upload ainda roda dentro do worker). Gitleaks e Syft (Fase 11 abaixo, ainda não implementada)
+já nascem seguindo este padrão desde o design, não vão precisar de uma migração depois.
+
 ### Fase 10 — Projeto como entidade própria + upload `.zip` — 🔲 não implementada
 
 - Migration nova: `scanning_projects` (id, name, target, created_at) — tabela própria do módulo
@@ -470,9 +535,13 @@ descreve quando isso colidia com uma decisão de arquitetura já tomada e docume
 
 ### Fase 11 — Gitleaks e Syft como `CodeScanner` novos — 🔲 não implementada
 
-- `GitleaksScanner` (`infrastructure/gitleaks_scanner.go`): mesmo esqueleto de `TrivyScanner` —
-  `Execute` clona via `cloneShallow` (reaproveita a validação de SSRF já compartilhada),
-  `ExecuteLocal` lê um diretório já no disco (upload `.zip`, Fase 10). Roda
+- `GitleaksScanner` (`infrastructure/gitleaks_scanner.go`): mesmo esqueleto do `TrivyScanner`
+  JÁ CONTAINERIZADO (ver "Containerização" acima, a referência a seguir, não a versão anterior a
+  ela) — `Execute` clona via `cloneShallow` pro volume `scanning_workspace` compartilhado (reaproveita
+  a validação de SSRF já compartilhada) e chama um sidecar novo (`cmd/gitleaks-sidecar`,
+  `Dockerfile.gitleaks-sidecar`, serviço `gitleaks-scanner`) via HTTP, nunca rodando o binário dentro
+  do próprio worker; `ExecuteLocal` continua lendo um diretório já no disco direto (upload `.zip`,
+  Fase 10) via `os/exec` local, sem depender de rede, igual `TrivyScanner.ExecuteLocal`. Roda
   `gitleaks detect --source . --report-format json --no-git` (`--no-git`: escaneia os arquivos como
   estão no disco, não o histórico de commits — consistente com Trivy/Semgrep, que também só veem o
   snapshot do `--depth 1`; histórico completo de commits é um modo separado, fora de escopo aqui,

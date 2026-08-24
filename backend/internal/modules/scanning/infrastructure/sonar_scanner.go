@@ -81,7 +81,7 @@ func (s *SonarScanner) Execute(ctx context.Context, target string) ([]domain.Fin
 		return nil, apperrors.DependencyUnavailable("scanning: sonarqube: SCANNING_SONARQUBE_URL is not configured")
 	}
 
-	dir, cleanup, err := cloneShallow(ctx, target, s.cloneTimeout, s.logger)
+	dir, cleanup, err := cloneShallow(ctx, target, s.cloneTimeout, "", s.logger)
 	if err != nil {
 		return nil, err
 	}
