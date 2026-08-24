@@ -872,6 +872,26 @@ func (f *fakeRepositoryCapturingLimit) ListScannerRuns(context.Context, uuid.UUI
 	panic("ListScannerRuns should not be called by ListRecentFindings")
 }
 
+func (f *fakeRepositoryCapturingLimit) CreateProject(context.Context, domain.Project) error {
+	panic("CreateProject should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) GetProject(context.Context, uuid.UUID) (domain.Project, error) {
+	panic("GetProject should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) ListProjects(context.Context, int) ([]domain.Project, error) {
+	panic("ListProjects should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) SavePackages(context.Context, pgx.Tx, uuid.UUID, []domain.Package) error {
+	panic("SavePackages should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) ListPackagesByScanID(context.Context, uuid.UUID) ([]domain.Package, error) {
+	panic("ListPackagesByScanID should not be called by ListRecentFindings")
+}
+
 func TestListRecentFindings_LimitClamping(t *testing.T) {
 	cases := []struct {
 		name      string

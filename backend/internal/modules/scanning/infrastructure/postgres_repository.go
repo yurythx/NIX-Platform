@@ -36,12 +36,16 @@ func (r *PostgresRepository) SaveFindings(ctx context.Context, tx pgx.Tx, scanID
 	}
 
 	const q = `
-		INSERT INTO scan_findings (scan_id, scanner, target, finding_id, owasp_category, severity, description, file, line)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO scan_findings (scan_id, scanner, target, finding_id, owasp_category, severity, description, file, line, snippet, fingerprint)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 	batch := &pgx.Batch{}
 	for _, f := range findings {
-		batch.Queue(q, scanID, scanner, target, f.ID, f.OWASPCategory, f.Severity, f.Description, f.File, f.Line)
+		// Fingerprint calculado aqui, na hora de gravar — não pelo
+		// CodeScanner (ver domain.Fingerprint): identifica o "mesmo"
+		// achado entre re-scans do mesmo alvo/projeto (Fase 10).
+		fingerprint := domain.Fingerprint(scanner, f.ID, f.File, f.Line)
+		batch.Queue(q, scanID, scanner, target, f.ID, f.OWASPCategory, f.Severity, f.Description, f.File, f.Line, f.Snippet, fingerprint)
 	}
 
 	results := tx.SendBatch(ctx, batch)
@@ -57,7 +61,7 @@ func (r *PostgresRepository) SaveFindings(ctx context.Context, tx pgx.Tx, scanID
 
 // findingColumns é a lista de colunas compartilhada por ListByScanID e
 // ListRecent — as duas leem a mesma forma de linha, só o WHERE/LIMIT muda.
-const findingColumns = `id, scan_id, scanner, target, finding_id, owasp_category, severity, description, file, line, created_at`
+const findingColumns = `id, scan_id, scanner, target, finding_id, owasp_category, severity, description, file, line, snippet, fingerprint, created_at`
 
 // findingSeverityOrder ordena da mais grave pra menos grave — compartilhado
 // pelas duas queries abaixo.
@@ -101,7 +105,7 @@ func scanFindingRows(rows pgx.Rows) ([]domain.PersistedFinding, error) {
 	for rows.Next() {
 		var f domain.PersistedFinding
 		var severity string
-		if err := rows.Scan(&f.RecordID, &f.ScanID, &f.Scanner, &f.Target, &f.ID, &f.OWASPCategory, &severity, &f.Description, &f.File, &f.Line, &f.CreatedAt); err != nil {
+		if err := rows.Scan(&f.RecordID, &f.ScanID, &f.Scanner, &f.Target, &f.ID, &f.OWASPCategory, &severity, &f.Description, &f.File, &f.Line, &f.Snippet, &f.FindingFingerprint, &f.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning: scan finding row: %w", err)
 		}
 		f.Severity = domain.Severity(severity)

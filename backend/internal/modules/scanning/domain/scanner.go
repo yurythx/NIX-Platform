@@ -9,6 +9,9 @@ package domain
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,6 +51,26 @@ type Finding struct {
 	// arquivo específico (ex.: um achado de DAST contra uma API rodando).
 	File string
 	Line int
+	// Snippet é um trecho do código-fonte ao redor de Line (Fase 12) —
+	// capturado NO MOMENTO do scan, enquanto o clone/checkout temporário
+	// ainda existe (nunca lido depois sob demanda: a plataforma não
+	// mantém checkout persistido nenhum, ver docs/roadmap-secops-
+	// orchestrator.md, "Reconciliação"). Vazio quando não há arquivo
+	// (mesmo caso de File vazio) ou quando o scanner não captura
+	// snippet.
+	Snippet string
+}
+
+// Fingerprint identifica o "mesmo" achado entre execuções — SHA-256 de
+// scanner+findingID+file+line, curto o bastante pra comparar/indexar,
+// determinístico o bastante pra um re-scan do mesmo projeto (Fase 10)
+// reconhecer "isto já apareceu antes" sem depender de nenhum ID que a
+// ferramenta de origem tenha gerado (nem toda ferramenta garante um ID
+// estável entre execuções, mas scanner+regra/CVE+arquivo+linha já
+// identifica o achado o bastante pra este propósito).
+func Fingerprint(scanner, findingID, file string, line int) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%d", scanner, findingID, file, line)))
+	return hex.EncodeToString(sum[:])
 }
 
 // CodeScanner é o contrato que toda ferramenta de scanning implementa
@@ -79,7 +102,13 @@ type PersistedFinding struct {
 	Scanner  string
 	Target   string
 	Finding
-	CreatedAt time.Time
+	// FindingFingerprint (não "Fingerprint": colidiria por shadowing com
+	// um futuro campo de mesmo nome em Finding, mesmo raciocínio do
+	// RecordID/ID acima) — calculado por Fingerprint() no momento de
+	// gravar (ver infrastructure.PostgresRepository.SaveFindings), nunca
+	// pelo próprio CodeScanner.
+	FindingFingerprint string
+	CreatedAt          time.Time
 }
 
 // ScannerFailure descreve a falha de UM scanner dentro da execução de um
@@ -179,4 +208,76 @@ type Repository interface {
 	// lista vazia (job ainda não chegou a rodar nenhum scanner, ou jobID
 	// desconhecido) não é erro.
 	ListScannerRuns(ctx context.Context, jobID uuid.UUID) ([]ScannerRun, error)
+
+	// CreateProject grava um Project novo (Fase 10) — p.ID é preenchido
+	// por quem chama antes (uuid.New(), mesmo padrão de jobs.New), não
+	// gerado aqui.
+	CreateProject(ctx context.Context, p Project) error
+
+	// GetProject busca um projeto por ID — ErrProjectNotFound (via
+	// apperrors.NotFound na camada application) se não existir.
+	GetProject(ctx context.Context, id uuid.UUID) (Project, error)
+
+	// ListProjects retorna os projetos mais recentes primeiro, até
+	// limit.
+	ListProjects(ctx context.Context, limit int) ([]Project, error)
+
+	// SavePackages grava o inventário (Fase 11 — Syft) de uma execução
+	// de scan, mesma atomicidade de SaveFindings (dentro da transação de
+	// quem chama). Uma lista vazia não é erro.
+	SavePackages(ctx context.Context, tx pgx.Tx, scanID uuid.UUID, packages []Package) error
+
+	// ListPackagesByScanID retorna o inventário de uma execução —
+	// equivalente de ListByScanID, mas pra pacotes, não achados.
+	ListPackagesByScanID(ctx context.Context, scanID uuid.UUID) ([]Package, error)
+}
+
+// Project (Fase 10) é o registro leve de um alvo recorrente — nome, de
+// onde vem (git ou upload) — NUNCA o checkout em si (decisão explícita
+// do usuário, ver "Reconciliação" em docs/roadmap-secops-orchestrator.md:
+// o worker escala horizontalmente via RabbitMQ, persistir um checkout
+// por projeto reintroduziria estado por réplica). Um projeto git guarda
+// só a URL (re-clonada a cada scan); um projeto de upload guarda os
+// BYTES do .zip enviado (bounded pelo tamanho do upload em si, extraído
+// de novo a cada re-scan, nunca mantido descompactado entre execuções).
+type ProjectSourceType string
+
+const (
+	ProjectSourceGit    ProjectSourceType = "git"
+	ProjectSourceUpload ProjectSourceType = "upload"
+)
+
+type Project struct {
+	ID         uuid.UUID
+	Name       string
+	SourceType ProjectSourceType
+	Target     string // URL git — vazio quando SourceType == ProjectSourceUpload
+	// UploadZip só é lido/gravado quando SourceType == ProjectSourceUpload
+	// — nil (não um slice vazio) representa "sem upload", pra nunca
+	// confundir com um .zip de verdade vazio de conteúdo.
+	UploadZip []byte
+	CreatedAt time.Time
+}
+
+// Package (Fase 11 — Syft) é UM item do inventário de dependências de
+// uma execução de scan — estruturalmente diferente de Finding: um
+// pacote não é "um erro pra corrigir", é só um fato ("esta versão desta
+// biblioteca está presente"). Por isso nunca reaproveita Finding, e
+// InventoryProvider é uma interface separada de CodeScanner — nem todo
+// scanner produz um inventário (hoje só Syft).
+type Package struct {
+	Name    string
+	Version string
+	Type    string // ex.: "go-module", "npm", "python"
+	License string
+}
+
+// InventoryProvider é implementado só por scanners que produzem
+// inventário, não achados de segurança — hoje só Syft. Um type assertion
+// (scanner.(InventoryProvider)) no Service decide se um scanner
+// registrado participa do fluxo de achados, do de inventário, ou dos
+// dois, sem inflar CodeScanner com um método que a maioria dos scanners
+// não teria como implementar de verdade.
+type InventoryProvider interface {
+	Inventory(ctx context.Context, target string) ([]Package, error)
 }

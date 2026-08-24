@@ -26,6 +26,15 @@ export const SCANNERS: ScannerMeta[] = [
       "Alvo: URL https:// de um repositório git, opcionalmente com #branch (ex.: https://github.com/org/repo.git#main). Clona o repositório e analisa os arquivos de dependência/Dockerfile encontrados.",
   },
   {
+    key: "gitleaks",
+    name: "Gitleaks",
+    category: "Segredos commitados",
+    description:
+      "Vasculha o código em busca de segredos commitados por engano — chaves de API, tokens, senhas, chaves privadas. Todo achado é sempre CRITICAL: um segredo vazado é sempre grave, nunca um \"talvez\".",
+    usage:
+      "Alvo: URL https:// de um repositório git, opcionalmente com #branch. Clona o repositório e escaneia os arquivos como estão no disco (não o histórico de commits).",
+  },
+  {
     key: "semgrep",
     name: "Semgrep",
     category: "SAST — análise estática de código",

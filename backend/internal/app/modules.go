@@ -83,6 +83,7 @@ func buildModules(deps *Dependencies) *Modules {
 
 	scanningRepo := scanningInfra.NewPostgresRepository(deps.DB)
 	trivyScanner := scanningInfra.NewTrivyScanner(deps.Config.Scanning.TrivyPath, deps.Config.Scanning.TrivyServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
+	gitleaksScanner := scanningInfra.NewGitleaksScanner(deps.Config.Scanning.GitleaksPath, deps.Config.Scanning.GitleaksServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	sonarScanner := scanningInfra.NewSonarScanner(
 		deps.Config.Scanning.SonarScannerPath, deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,
@@ -92,7 +93,7 @@ func buildModules(deps *Dependencies) *Modules {
 		deps.Config.Scanning.ZapURL, deps.Config.Scanning.ZapAPIKey, deps.Config.Scanning.ZapAllowedHosts,
 		deps.Config.Scanning.ZapScanTimeout, deps.Logger,
 	)
-	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner, semgrepScanner, sonarScanner, zapScanner)
+	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner, gitleaksScanner, semgrepScanner, sonarScanner, zapScanner)
 	m.Scanning.Service = scanningSvc
 	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger, deps.Config.Scanning.SonarQubePublicURL)
 

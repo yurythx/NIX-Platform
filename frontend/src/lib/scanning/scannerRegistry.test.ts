@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { scannerMeta, SCANNERS } from "./scannerRegistry";
 
 describe("scannerMeta", () => {
-  it("conhece os 4 scanners registrados no backend", () => {
+  it("conhece os 5 scanners registrados no backend", () => {
     const keys = SCANNERS.map((s) => s.key).sort();
-    expect(keys).toEqual(["semgrep", "sonarqube", "trivy", "zap"]);
+    expect(keys).toEqual(["gitleaks", "semgrep", "sonarqube", "trivy", "zap"]);
   });
 
   it("todo scanner registrado tem nome, categoria, descrição e instrução de uso não vazios", () => {

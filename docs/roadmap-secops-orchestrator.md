@@ -2,12 +2,14 @@
 
 - **Status:** Fases 1, 3-9 concluídas (Fundação, Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração
   concorrente, CLI + CI/CD, Frontend). Fase 2 (TruffleHog) pulada por decisão explícita do usuário,
-  redundante com o gitleaks já no CI. **Fases 10-13 (abaixo) são uma extensão nova, ainda não
-  implementada** — adaptação de uma segunda proposta externa ("Orquestrador de Segurança de Código
-  On-Premise", estilo GitGuard) pra esta mesma arquitetura, com 3 decisões explícitas do usuário
-  registradas na seção "Reconciliação" logo abaixo. **"Containerização"** (uma quarta decisão,
-  posterior às 3 — cada scanner isolado no próprio container, como o GitGuard) está **parcialmente
-  implementada**: Trivy migrado e verificado ao vivo (sidecar `trivy-scanner`, volume compartilhado
+  redundante com o gitleaks já no CI (decisão revisitada na Fase 11 abaixo — sob demanda deixou de
+  ser redundante). **Fases 10-13 (abaixo) são uma extensão nova**, adaptação de uma segunda
+  proposta externa ("Orquestrador de Segurança de Código On-Premise", estilo GitGuard) pra esta
+  mesma arquitetura, com 3 decisões explícitas do usuário registradas na seção "Reconciliação" logo
+  abaixo. **Fase 11 (Gitleaks) já implementada e verificada ao vivo; Fase 11 (Syft) e Fases 10/12/13
+  ainda não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no
+  próprio container, como o GitGuard) está **parcialmente implementada**: Trivy e Gitleaks migrados
+  e verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`, volume compartilhado
   `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker, migração futura
   seguindo o mesmo desenho.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
@@ -444,7 +446,7 @@ descreve quando isso colidia com uma decisão de arquitetura já tomada e docume
    aponte, o mesmo raciocínio que já vale pra Trivy/Semgrep/SonarQube não serem "redundantes" com o
    CI mesmo o CI já rodando `govulncheck`/`npm audit`. Ver Fase 11.
 
-### Containerização — cada scanner isolado no próprio container — 🟡 parcial (Trivy feito)
+### Containerização — cada scanner isolado no próprio container — 🟡 parcial (Trivy e Gitleaks feitos)
 
 Decisão do usuário, depois das 3 acima: **"o gitguard usa cada solução containerizada, vamos fazer
 do mesmo jeito"**. Antes desta decisão, Trivy/Semgrep/(sonar-scanner CLI) rodavam como binários
@@ -497,11 +499,18 @@ vez disso o desenho abaixo, que nunca dá ao worker acesso ao Docker em si.
   semgrep+sonar-scanner+JRE, os próximos candidatos a sair); `trivy-scanner` como imagem própria
   fica em ~243MB, só o necessário pro Trivy rodar.
 
+**Gitleaks (Fase 11) já nasceu seguindo este mesmo desenho**, sem precisar de uma migração
+posterior: `cmd/gitleaks-sidecar`/`Dockerfile.gitleaks-sidecar`/serviço `gitleaks-scanner`,
+mesmo UID/GID fixo (`10001`) nos dois Dockerfiles, mesma validação de path dentro de
+`/workspace`, `GitleaksScanner.Execute` chamando o sidecar por HTTP e `ExecuteLocal` rodando o
+binário local — ver Fase 11 abaixo pro que só o Gitleaks precisou (o achado real do path com o
+diretório de clone embutido, corrigido em `parseGitleaksReport`).
+
 **Ainda não migrados pro mesmo padrão** (trabalho futuro, mesmo desenho, scanner por scanner):
 Semgrep (`semgrep_scanner.go`, ainda `os/exec` dentro do worker) e o `sonar-scanner` CLI em si
 (`sonar_scanner.go` — o SERVIDOR SonarQube já é seu próprio container desde a Fase 5, só o CLI que
-faz upload ainda roda dentro do worker). Gitleaks e Syft (Fase 11 abaixo, ainda não implementada)
-já nascem seguindo este padrão desde o design, não vão precisar de uma migração depois.
+faz upload ainda roda dentro do worker). Syft (Fase 11 abaixo, ainda não implementada) já nasce
+seguindo este padrão desde o design, não vai precisar de uma migração depois.
 
 ### Fase 10 — Projeto como entidade própria + upload `.zip` — 🔲 não implementada
 
@@ -533,30 +542,45 @@ já nascem seguindo este padrão desde o design, não vão precisar de uma migra
   preenchido, sem pedir a URL de novo). Formulário de criação com duas abas (URL git / upload
   `.zip`), exatamente como a proposta pede na seção 5.A.
 
-### Fase 11 — Gitleaks e Syft como `CodeScanner` novos — 🔲 não implementada
+### Fase 11 — Gitleaks e Syft como `CodeScanner` novos — 🟡 parcial (Gitleaks feito, Syft pendente)
 
-- `GitleaksScanner` (`infrastructure/gitleaks_scanner.go`): mesmo esqueleto do `TrivyScanner`
-  JÁ CONTAINERIZADO (ver "Containerização" acima, a referência a seguir, não a versão anterior a
-  ela) — `Execute` clona via `cloneShallow` pro volume `scanning_workspace` compartilhado (reaproveita
-  a validação de SSRF já compartilhada) e chama um sidecar novo (`cmd/gitleaks-sidecar`,
-  `Dockerfile.gitleaks-sidecar`, serviço `gitleaks-scanner`) via HTTP, nunca rodando o binário dentro
-  do próprio worker; `ExecuteLocal` continua lendo um diretório já no disco direto (upload `.zip`,
-  Fase 10) via `os/exec` local, sem depender de rede, igual `TrivyScanner.ExecuteLocal`. Roda
-  `gitleaks detect --source . --report-format json --no-git` (`--no-git`: escaneia os arquivos como
-  estão no disco, não o histórico de commits — consistente com Trivy/Semgrep, que também só veem o
-  snapshot do `--depth 1`; histórico completo de commits é um modo separado, fora de escopo aqui,
-  mesmo raciocínio que já limita o clone a raso). **Ajuste real que precisa acontecer junto**: com
-  Gitleaks cobrindo secrets sob demanda, `TrivyScanner.scanFS` deveria deixar de rodar
-  `--scanners vuln,misconfig` e continuar SEM `secret` — hoje o comentário no código justifica essa
-  exclusão como "gitleaks já cobre no CI"; com Gitleaks também sob demanda agora, a mesma exclusão
-  continua certa (evita o mesmo achado duplicado vindo de duas ferramentas diferentes no mesmo
-  scan), só o comentário precisa ser atualizado pra apontar pro Gitleaks sob demanda, não só o do
-  CI.
+- `GitleaksScanner` (`infrastructure/gitleaks_scanner.go`) — **✅ implementado e verificado ao
+  vivo**: mesmo esqueleto do `TrivyScanner` JÁ CONTAINERIZADO (ver "Containerização" acima) —
+  `Execute` clona via `cloneShallow` pro volume `scanning_workspace` compartilhado (reaproveita a
+  validação de SSRF já compartilhada) e chama o sidecar `cmd/gitleaks-sidecar`
+  (`Dockerfile.gitleaks-sidecar`, serviço `gitleaks-scanner`) via HTTP, nunca rodando o binário
+  dentro do próprio worker; `ExecuteLocal` roda o binário local via `os/exec`, sem rede — usado só
+  por `cmd/secscan`/upload `.zip` (Fase 10, ainda não implementada), continua sem chamador de
+  produção por ora, mesmo como `TrivyScanner.ExecuteLocal` antes da Fase 8 existir. Roda
+  `gitleaks detect --source {path} --no-git --report-format json --report-path /dev/stdout
+  --exit-code 0` — `--exit-code 0` (não estava no texto original desta fase, ajuste real feito
+  durante a implementação): gitleaks sai com 1 por padrão quando ACHA um segredo, o que não é uma
+  falha da ferramenta; forçar sempre 0 mantém o branch de erro do sidecar só pra falha de verdade
+  (path inválido, binário quebrado), mesmo princípio de exit-code que `cmd/secscan` já aplicava pro
+  `trivy`. **Achado real durante a verificação ao vivo** (não hipotético): diferente do trivy, que
+  já devolve `Target` relativo, o gitleaks devolve `File` com o `--source` completo embutido (ex.:
+  `/workspace/nix-scan-3216795497/new_key`) — sem tratamento, o nome do diretório de clone efêmero
+  vazaria pro achado mostrado ao usuário; `parseGitleaksReport` agora recebe o diretório base e
+  remove esse prefixo (coberto por `TestParseGitleaksReport_StripsBaseDirFromFile`).
+  Verificado contra um repositório público real com segredos de teste conhecidos
+  (`trufflesecurity/test_keys`) — 3 achados reais (`aws-access-token`, `generic-api-key`,
+  `private-key`), rodando em paralelo com o Trivy no mesmo scan sem conflito no volume
+  compartilhado.
+- **Ajuste feito** (o mesmo que este roadmap já previa): com Gitleaks cobrindo secrets sob demanda,
+  `TrivyScanner` continua sem `--scanners secret` — o comentário em `trivy_scanner.go` foi
+  atualizado pra apontar pro `GitleaksScanner` sob demanda como o motivo real da exclusão, não mais
+  só "o CI já roda gitleaks" (que continua verdade, mas não é o motivo desta exclusão específica).
 - Severidade: Gitleaks não tem campo de severidade nativo (é binário — achou um segredo ou não) —
   todo achado do Gitleaks mapeia pra `CRITICAL` (um segredo commitado é sempre grave, nunca um
   "talvez"; mesmo padrão de decisão que já mapeou a ausência de nível acima de HIGH do ZAP/Semgrep
-  pra escalas mais simples).
-- `SyftScanner` (`infrastructure/syft_scanner.go`): **estruturalmente diferente dos outros 5** — os
+  pra escalas mais simples). Categoria OWASP: `A07:2021-Identification and Authentication
+  Failures` — onde o próprio mapeamento oficial do OWASP Top 10 2021 associa CWE-798 (Use of
+  Hard-coded Credentials).
+- Segredo em claro nunca persiste: `Finding.Snippet` do Gitleaks guarda só as bordas do match
+  mascaradas (`maskSecretSnippet` — ex.: `AKI***********PLE`), nunca o valor completo — o próprio
+  achado não pode virar um novo vazamento em log, resposta de API ou tela.
+- `SyftScanner` (`infrastructure/syft_scanner.go`) — **ainda não implementada**: **estruturalmente
+  diferente dos outros 5** — os
   outros produzem `[]Finding` (uma vulnerabilidade/achado é sempre acionável, algo pra corrigir);
   Syft produz um **inventário** (lista de pacotes/versões), não achados de segurança por si só. Não
   força esse inventário dentro de `domain.Finding` (perderia a informação real, um pacote não é um

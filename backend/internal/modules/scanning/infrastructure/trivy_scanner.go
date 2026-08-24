@@ -37,9 +37,13 @@ const TrivyScannerName = "trivy"
 // Docker (superfície de ataque equivalente a root no host) nem depender
 // de um registry que ainda não existe.
 //
-// Deliberadamente NÃO roda o scanner "secret" do Trivy: o CI já roda
-// gitleaks para a mesma categoria (secret scanning) — rodar os dois seria
-// a mesma redundância que levou a pular TruffleHog nesta fase.
+// Deliberadamente NÃO roda o scanner "secret" do Trivy: GitleaksScanner
+// (Fase 11, gitleaks_scanner.go) já cobre essa categoria sob demanda pra
+// QUALQUER alvo — rodar os dois no mesmo scan duplicaria o mesmo achado
+// vindo de duas ferramentas diferentes, a mesma redundância que levou a
+// pular TruffleHog nesta fase (o CI deste próprio repositório também roda
+// gitleaks, mas isso cobre só commits/PRs daqui — não é o motivo desta
+// exclusão).
 //
 // Containerização (§ decisão do usuário — "gitguard usa cada solução
 // containerizada, vamos fazer do mesmo jeito", ver
