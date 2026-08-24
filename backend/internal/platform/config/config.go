@@ -154,15 +154,21 @@ type ScanningConfig struct {
 	// GitleaksScanner.ExecuteLocal (cmd/secscan e Fase 10/upload .zip).
 	GitleaksPath       string
 	GitleaksServiceURL string
-	// ScanningWorkspaceDir é o diretório BASE onde TrivyScanner.Execute e
-	// GitleaksScanner.Execute clonam o alvo — precisa ser o mesmo caminho
-	// montado como o volume compartilhado `scanning_workspace`
-	// (docker-compose.yml), pra ficar visível pros sidecars também. Vazio
-	// (padrão de desenvolvimento fora de Docker, ex.: `go test` local) cai
-	// de volta pro diretório temporário do próprio SO (os.MkdirTemp("",
-	// ...), o comportamento de sempre antes desta fase) — Semgrep/
-	// SonarQube continuam clonando pro temp dir padrão do worker até
-	// serem containerizados também.
+	// SyftPath/SyftServiceURL — mesmo papel, pro sidecar `syft-scanner`
+	// (Fase 11). SyftPath só é usado por SyftScanner.InventoryLocal (sem
+	// chamador de produção ainda, mesmo estado que TrivyScanner.ExecuteLocal
+	// tinha antes da Fase 8).
+	SyftPath       string
+	SyftServiceURL string
+	// ScanningWorkspaceDir é o diretório BASE onde TrivyScanner.Execute,
+	// GitleaksScanner.Execute e SyftScanner.Inventory clonam o alvo —
+	// precisa ser o mesmo caminho montado como o volume compartilhado
+	// `scanning_workspace` (docker-compose.yml), pra ficar visível pros
+	// sidecars também. Vazio (padrão de desenvolvimento fora de Docker,
+	// ex.: `go test` local) cai de volta pro diretório temporário do
+	// próprio SO (os.MkdirTemp("", ...), o comportamento de sempre antes
+	// desta fase) — Semgrep/SonarQube continuam clonando pro temp dir
+	// padrão do worker até serem containerizados também.
 	ScanningWorkspaceDir string
 	SemgrepPath          string
 	SemgrepConfig        string
@@ -395,6 +401,8 @@ func Load() (*Config, error) {
 			TrivyServiceURL:      l.str("SCANNING_TRIVY_SERVICE_URL", false, ""),
 			GitleaksPath:         l.str("SCANNING_GITLEAKS_PATH", false, "gitleaks"),
 			GitleaksServiceURL:   l.str("SCANNING_GITLEAKS_SERVICE_URL", false, ""),
+			SyftPath:             l.str("SCANNING_SYFT_PATH", false, "syft"),
+			SyftServiceURL:       l.str("SCANNING_SYFT_SERVICE_URL", false, ""),
 			ScanningWorkspaceDir: l.str("SCANNING_WORKSPACE_DIR", false, ""),
 			SemgrepPath:          l.str("SCANNING_SEMGREP_PATH", false, "semgrep"),
 			SemgrepConfig:        l.str("SCANNING_SEMGREP_CONFIG", false, ""),

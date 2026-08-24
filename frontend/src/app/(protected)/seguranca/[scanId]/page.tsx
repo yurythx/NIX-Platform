@@ -5,7 +5,7 @@ import { ScanDetailLive } from "@/components/scanning/ScanDetailLive";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
-import type { ScanFinding, ScanStatus } from "@/types/api";
+import type { ScanFinding, ScanPackage, ScanStatus } from "@/types/api";
 
 // Página de detalhe de UM scan — pedido do usuário: "quero os resultados
 // separados por scan". Antes desta rota existir, /seguranca só mostrava
@@ -45,6 +45,17 @@ export default async function ScanDetailPage({
     // que o scan terminar, se ainda estiver em andamento).
   }
 
+  // packages (Fase 11 — Syft): mesmo tratamento best-effort de findings —
+  // sempre vazio pra um scan que não pediu "syft", nunca motivo pra
+  // quebrar a página.
+  let packages: ScanPackage[] = [];
+  try {
+    const res = await serverApiGet<ScanPackage[]>(`v1/scanning/scans/${scanId}/packages`);
+    packages = res.data;
+  } catch {
+    // Mesmo princípio do bloco de findings acima.
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -57,7 +68,7 @@ export default async function ScanDetailPage({
         </p>
       </div>
 
-      <ScanDetailLive jobId={scanId} initialStatus={status} initialFindings={findings} />
+      <ScanDetailLive jobId={scanId} initialStatus={status} initialFindings={findings} initialPackages={packages} />
     </div>
   );
 }

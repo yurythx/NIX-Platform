@@ -6,12 +6,12 @@
   ser redundante). **Fases 10-13 (abaixo) são uma extensão nova**, adaptação de uma segunda
   proposta externa ("Orquestrador de Segurança de Código On-Premise", estilo GitGuard) pra esta
   mesma arquitetura, com 3 decisões explícitas do usuário registradas na seção "Reconciliação" logo
-  abaixo. **Fase 11 (Gitleaks) já implementada e verificada ao vivo; Fase 11 (Syft) e Fases 10/12/13
-  ainda não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no
-  próprio container, como o GitGuard) está **parcialmente implementada**: Trivy e Gitleaks migrados
-  e verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`, volume compartilhado
-  `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker, migração futura
-  seguindo o mesmo desenho.
+  abaixo. **Fase 11 (Gitleaks + Syft) já implementada e verificada ao vivo; Fases 10/12/13 ainda
+  não.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
+  container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks e Syft migrados e
+  verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`/`syft-scanner`, volume
+  compartilhado `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker,
+  migração futura seguindo o mesmo desenho.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -446,7 +446,7 @@ descreve quando isso colidia com uma decisão de arquitetura já tomada e docume
    aponte, o mesmo raciocínio que já vale pra Trivy/Semgrep/SonarQube não serem "redundantes" com o
    CI mesmo o CI já rodando `govulncheck`/`npm audit`. Ver Fase 11.
 
-### Containerização — cada scanner isolado no próprio container — 🟡 parcial (Trivy e Gitleaks feitos)
+### Containerização — cada scanner isolado no próprio container — 🟡 parcial (Trivy, Gitleaks e Syft feitos)
 
 Decisão do usuário, depois das 3 acima: **"o gitguard usa cada solução containerizada, vamos fazer
 do mesmo jeito"**. Antes desta decisão, Trivy/Semgrep/(sonar-scanner CLI) rodavam como binários
@@ -499,18 +499,21 @@ vez disso o desenho abaixo, que nunca dá ao worker acesso ao Docker em si.
   semgrep+sonar-scanner+JRE, os próximos candidatos a sair); `trivy-scanner` como imagem própria
   fica em ~243MB, só o necessário pro Trivy rodar.
 
-**Gitleaks (Fase 11) já nasceu seguindo este mesmo desenho**, sem precisar de uma migração
-posterior: `cmd/gitleaks-sidecar`/`Dockerfile.gitleaks-sidecar`/serviço `gitleaks-scanner`,
-mesmo UID/GID fixo (`10001`) nos dois Dockerfiles, mesma validação de path dentro de
-`/workspace`, `GitleaksScanner.Execute` chamando o sidecar por HTTP e `ExecuteLocal` rodando o
-binário local — ver Fase 11 abaixo pro que só o Gitleaks precisou (o achado real do path com o
-diretório de clone embutido, corrigido em `parseGitleaksReport`).
+**Gitleaks e Syft (Fase 11) já nasceram seguindo este mesmo desenho**, sem precisar de uma migração
+posterior: `cmd/gitleaks-sidecar`/`Dockerfile.gitleaks-sidecar`/serviço `gitleaks-scanner` e
+`cmd/syft-sidecar`/`Dockerfile.syft-sidecar`/serviço `syft-scanner`, mesmo UID/GID fixo (`10001`)
+em todos os Dockerfiles, mesma validação de path dentro de `/workspace`. Syft é o único caso em que
+o método chamado pelo Service não é `Execute` — é `Inventory` (`domain.InventoryProvider`, ver Fase
+11 abaixo), já que `Execute` em si nunca faz nada pra este scanner. Ver Fase 11 abaixo pro que só o
+Gitleaks precisou de ajuste (o achado real do path com o diretório de clone embutido, corrigido em
+`parseGitleaksReport`).
 
 **Ainda não migrados pro mesmo padrão** (trabalho futuro, mesmo desenho, scanner por scanner):
 Semgrep (`semgrep_scanner.go`, ainda `os/exec` dentro do worker) e o `sonar-scanner` CLI em si
 (`sonar_scanner.go` — o SERVIDOR SonarQube já é seu próprio container desde a Fase 5, só o CLI que
-faz upload ainda roda dentro do worker). Syft (Fase 11 abaixo, ainda não implementada) já nasce
-seguindo este padrão desde o design, não vai precisar de uma migração depois.
+faz upload ainda roda dentro do worker). Syft (Fase 11, sidecar `syft-scanner`) já nasceu seguindo
+este padrão desde o design, sem precisar de uma migração depois — mesmo `Dockerfile`/UID-fixo/
+healthcheck que Trivy/Gitleaks.
 
 ### Fase 10 — Projeto como entidade própria + upload `.zip` — 🔲 não implementada
 
@@ -542,7 +545,7 @@ seguindo este padrão desde o design, não vai precisar de uma migração depois
   preenchido, sem pedir a URL de novo). Formulário de criação com duas abas (URL git / upload
   `.zip`), exatamente como a proposta pede na seção 5.A.
 
-### Fase 11 — Gitleaks e Syft como `CodeScanner` novos — 🟡 parcial (Gitleaks feito, Syft pendente)
+### Fase 11 — Gitleaks e Syft como `CodeScanner` novos — ✅ implementada
 
 - `GitleaksScanner` (`infrastructure/gitleaks_scanner.go`) — **✅ implementado e verificado ao
   vivo**: mesmo esqueleto do `TrivyScanner` JÁ CONTAINERIZADO (ver "Containerização" acima) —
@@ -579,12 +582,12 @@ seguindo este padrão desde o design, não vai precisar de uma migração depois
 - Segredo em claro nunca persiste: `Finding.Snippet` do Gitleaks guarda só as bordas do match
   mascaradas (`maskSecretSnippet` — ex.: `AKI***********PLE`), nunca o valor completo — o próprio
   achado não pode virar um novo vazamento em log, resposta de API ou tela.
-- `SyftScanner` (`infrastructure/syft_scanner.go`) — **ainda não implementada**: **estruturalmente
-  diferente dos outros 5** — os
-  outros produzem `[]Finding` (uma vulnerabilidade/achado é sempre acionável, algo pra corrigir);
-  Syft produz um **inventário** (lista de pacotes/versões), não achados de segurança por si só. Não
-  força esse inventário dentro de `domain.Finding` (perderia a informação real, um pacote não é um
-  "erro"). Em vez disso, `CodeScanner` ganha um segundo método OPCIONAL:
+- `SyftScanner` (`infrastructure/syft_scanner.go`) — **✅ implementado e verificado ao vivo**:
+  **estruturalmente diferente dos outros 5** — os outros produzem `[]Finding` (uma
+  vulnerabilidade/achado é sempre acionável, algo pra corrigir); Syft produz um **inventário**
+  (lista de pacotes/versões), não achados de segurança por si só. Não força esse inventário dentro
+  de `domain.Finding` (perderia a informação real, um pacote não é um "erro"). Em vez disso,
+  `CodeScanner` ganha um segundo método OPCIONAL:
   ```go
   // Inventory é implementado só por scanners que produzem inventário, não
   // achados — hoje só Syft. Um type assertion (`scanner.(domain.InventoryProvider)`)
@@ -595,10 +598,27 @@ seguindo este padrão desde o design, não vai precisar de uma migração depois
       Inventory(ctx context.Context, target string) ([]Package, error)
   }
   ```
-  Nova tabela `scan_packages` (scan_id, name, version, type, license) — consultável junto do scan
-  como uma aba própria "Inventário (SBOM)" na página de um scan (`/seguranca/[scanId]`), ao lado
-  de "Achados por ferramenta" (Fase 9), nunca misturada na mesma lista.
-- RBAC: nenhuma permissão nova — `scanning:read`/`scanning:manage` já cobrem os dois scanners
+  Implementação real: `SyftScanner.Execute` é sempre um no-op (`return nil, nil` — nunca clona
+  nada, nunca aparece na lista de achados de nenhum scan); todo o trabalho acontece em `Inventory`,
+  chamado à parte pelo `Service` (`application/service.go`'s `inventoryFor`, via a mesma type
+  assertion do trecho acima) logo depois de `Execute` — tanto em `runConcurrently`
+  (`ProcessScanJob`, o caminho assíncrono) quanto em `RunScan` (o caminho síncrono). Mesmo desenho
+  containerizado do Gitleaks: `Inventory` clona pro volume `scanning_workspace` e chama o sidecar
+  `cmd/syft-sidecar`/`Dockerfile.syft-sidecar`/serviço `syft-scanner` via HTTP (`syft scan dir:{path}
+  -o json`, o formato JSON nativo do syft — `artifacts[].name/version/type/licenses[].value`);
+  `InventoryLocal` roda o binário local via `os/exec`, sem chamador de produção ainda (mesmo estado
+  que `TrivyScanner.ExecuteLocal` tinha antes da Fase 8).
+  Nova tabela `scan_packages` (scan_id, name, version, type, license), persistida na MESMA transação
+  de `SaveFindings`/o evento de outbox (`persistCompletion`) — um scan concluído nunca fica com
+  achados gravados e inventário perdido, ou vice-versa. Consultável via
+  `GET /api/v1/scanning/scans/{scanID}/packages` (rota nova, `ListPackagesByScanID`), exibida na aba
+  "Inventário (SBOM)" da página de um scan (`/seguranca/[scanId]`, `PackageInventoryTable` — só
+  aparece quando o scan de fato pediu "syft", nunca uma seção vazia à toa), ao lado de "Achados por
+  ferramenta" (Fase 9), nunca misturada na mesma lista/tabela.
+  Verificado contra um repositório público real com dependências de verdade (`OWASP/NodeGoat`) — 419
+  pacotes reais persistidos e consultáveis via a API (`npm`/`github-action`, nome/versão/licença
+  corretos), `findings_count: 0` no mesmo scan (confirma que Syft nunca aparece como achado).
+- RBAC: nenhuma permissão nova — `scanning:read`/`scanning:manage` já cobrem os três scanners
   novos, mesmo princípio de Trivy/Semgrep/SonarQube/ZAP.
 
 ### Fase 12 — Snippet de código no achado + deduplicação — 🔲 não implementada

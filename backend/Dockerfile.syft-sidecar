@@ -1,0 +1,55 @@
+# syntax=docker/dockerfile:1
+
+# Sidecar do Syft (ver cmd/syft-sidecar/main.go e
+# docs/roadmap-secops-orchestrator.md, seção "Containerização") — mesmo
+# padrão do Dockerfile.trivy-sidecar/Dockerfile.gitleaks-sidecar: cada
+# scanner isolado no seu próprio container, com um servidor HTTP fino na
+# frente.
+
+# ---- builder ----
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+
+RUN apk add --no-cache ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/syft-sidecar ./cmd/syft-sidecar
+
+# ---- runtime ----
+FROM alpine:3.20 AS runtime
+
+# Binário oficial + verificação de checksum — mesmo padrão de
+# Dockerfile.trivy-sidecar/Dockerfile.gitleaks-sidecar.
+ARG SYFT_VERSION=1.51.0
+RUN apk add --no-cache ca-certificates curl && \
+    ARCH="$(uname -m)" && \
+    case "$ARCH" in \
+        x86_64) SYFT_ARCH="amd64" ;; \
+        aarch64) SYFT_ARCH="arm64" ;; \
+        *) echo "unsupported architecture for syft: $ARCH" >&2; exit 1 ;; \
+    esac && \
+    cd /tmp && \
+    curl -fsSLO "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${SYFT_ARCH}.tar.gz" && \
+    curl -fsSLO "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt" && \
+    grep "syft_${SYFT_VERSION}_linux_${SYFT_ARCH}.tar.gz" syft_${SYFT_VERSION}_checksums.txt | sha256sum -c - && \
+    tar -xzf "syft_${SYFT_VERSION}_linux_${SYFT_ARCH}.tar.gz" syft && \
+    mv syft /usr/local/bin/syft && \
+    chmod +x /usr/local/bin/syft && \
+    rm -f /tmp/syft_${SYFT_VERSION}_* && \
+    apk del curl
+
+# UID/GID FIXOS (10001) — o MESMO valor que Dockerfile.worker e os outros
+# sidecars usam, pelo mesmo motivo (ver o comentário equivalente em
+# Dockerfile.trivy-sidecar): qualquer container pode ser o primeiro a
+# montar o volume nomeado scanning_workspace ainda vazio, e é esse
+# primeiro mount que decide a ownership inicial dele.
+RUN addgroup -g 10001 -S nix && adduser -u 10001 -S nix -G nix && \
+    mkdir -p /workspace && chown nix:nix /workspace
+USER nix
+WORKDIR /app
+COPY --from=builder --chown=nix:nix /out/syft-sidecar ./syft-sidecar
+
+ENTRYPOINT ["./syft-sidecar"]

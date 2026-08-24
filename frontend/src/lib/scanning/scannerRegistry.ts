@@ -35,6 +35,15 @@ export const SCANNERS: ScannerMeta[] = [
       "Alvo: URL https:// de um repositório git, opcionalmente com #branch. Clona o repositório e escaneia os arquivos como estão no disco (não o histórico de commits).",
   },
   {
+    key: "syft",
+    name: "Syft",
+    category: "Inventário (SBOM)",
+    description:
+      "Não procura vulnerabilidade nenhuma — gera um inventário completo de pacotes/dependências (nome, versão, tipo, licença) do repositório, disponível na aba \"Inventário\" do scan.",
+    usage:
+      "Alvo: URL https:// de um repositório git, opcionalmente com #branch. Nunca aparece na lista de achados (não é esse o objetivo) — o resultado fica só na aba de inventário.",
+  },
+  {
     key: "semgrep",
     name: "Semgrep",
     category: "SAST — análise estática de código",

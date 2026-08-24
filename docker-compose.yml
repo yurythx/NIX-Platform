@@ -14,10 +14,11 @@ volumes:
   # scanning_workspace (§ Containerização — cada scanner isolado no seu
   # próprio container, como o GitGuard, decisão explícita do usuário):
   # compartilhado entre backend-worker (que clona o alvo aqui — leitura E
-  # escrita) e cada sidecar de scanner (trivy-scanner, gitleaks-scanner, e
-  # os que vierem depois — só leitura, ver docker-compose.yml abaixo). O
-  # worker continua dono do ciclo de vida: cria o diretório antes do scan,
-  # apaga depois — nenhum sidecar escreve nem limpa nada aqui.
+  # escrita) e cada sidecar de scanner (trivy-scanner, gitleaks-scanner,
+  # syft-scanner, e os que vierem depois — só leitura, ver
+  # docker-compose.yml abaixo). O worker continua dono do ciclo de vida:
+  # cria o diretório antes do scan, apaga depois — nenhum sidecar escreve
+  # nem limpa nada aqui.
   scanning_workspace:
 
 services:
@@ -220,9 +221,10 @@ services:
       - ./secrets:/run/secrets:ro
       # scanning_workspace (§ Containerização, ver comentário na seção
       # `volumes:` no topo deste arquivo): TrivyScanner.Execute/
-      # GitleaksScanner.Execute clonam o alvo aqui (leitura E escrita — o
-      # worker é dono do ciclo de vida), os sidecars trivy-scanner/
-      # gitleaks-scanner só leem o mesmo caminho.
+      # GitleaksScanner.Execute/SyftScanner.Inventory clonam o alvo aqui
+      # (leitura E escrita — o worker é dono do ciclo de vida), os
+      # sidecars trivy-scanner/gitleaks-scanner/syft-scanner só leem o
+      # mesmo caminho.
       - scanning_workspace:/workspace
     networks:
       - nix_internal
@@ -234,6 +236,8 @@ services:
       trivy-scanner:
         condition: service_healthy
       gitleaks-scanner:
+        condition: service_healthy
+      syft-scanner:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${WORKER_METRICS_PORT:-9100}/health"]
@@ -272,6 +276,25 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.gitleaks-sidecar
+    restart: unless-stopped
+    volumes:
+      - scanning_workspace:/workspace:ro
+    networks:
+      - nix_internal
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # syft-scanner (§ Containerização — Fase 11, mesmo padrão de
+  # trivy-scanner/gitleaks-scanner acima): sidecar de vida longa em torno
+  # do binário `syft`, só lê o volume compartilhado.
+  syft-scanner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.syft-sidecar
     restart: unless-stopped
     volumes:
       - scanning_workspace:/workspace:ro

@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { apiClient } from "@/lib/api/client";
 import { useScanStatusPolling } from "@/lib/scanning/useScanStatusPolling";
-import type { ScanFinding, ScanStatus } from "@/types/api";
+import type { ScanFinding, ScanPackage, ScanStatus } from "@/types/api";
 
+import { PackageInventoryTable } from "./PackageInventoryTable";
 import { ScanProgress } from "./ScanProgress";
 import { ToolFindingsCards } from "./ToolFindingsCards";
 
@@ -22,13 +23,16 @@ export function ScanDetailLive({
   jobId,
   initialStatus,
   initialFindings,
+  initialPackages,
 }: {
   jobId: string;
   initialStatus: ScanStatus;
   initialFindings: ScanFinding[];
+  initialPackages: ScanPackage[];
 }) {
   const { status, polling } = useScanStatusPolling(jobId, initialStatus);
   const [findings, setFindings] = useState(initialFindings);
+  const [packages, setPackages] = useState(initialPackages);
   const refetchedRef = useRef(TERMINAL_STATUSES.has(initialStatus.status));
 
   useEffect(() => {
@@ -44,7 +48,19 @@ export function ScanDetailLive({
         // Best-effort: se a rebusca falhar, os achados iniciais (talvez
         // incompletos) continuam visíveis em vez de sumir da tela.
       });
+
+    // packages (Fase 11 — Syft): mesmo refetch best-effort de findings
+    // acima, pro caso de o Syft só terminar depois da página já aberta.
+    apiClient
+      .get<ScanPackage[]>(`v1/scanning/scans/${jobId}/packages`)
+      .then(({ data }) => setPackages(data))
+      .catch(() => {});
   }, [status, jobId]);
+
+  // A aba de inventário só aparece quando este scan de fato pediu o Syft
+  // — um scan que nunca rodou Syft não deveria mostrar uma seção vazia
+  // "Inventário" só pra dizer "nada aqui".
+  const ranSyft = (status?.requested_scanners ?? []).includes("syft");
 
   return (
     <div className="flex flex-col gap-6">
@@ -55,6 +71,14 @@ export function ScanDetailLive({
             Achados por ferramenta
           </h2>
           <ToolFindingsCards scanId={jobId} status={status} findings={findings} />
+        </div>
+      )}
+      {ranSyft && (
+        <div>
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+            Inventário (SBOM)
+          </h2>
+          <PackageInventoryTable packages={packages} />
         </div>
       )}
     </div>

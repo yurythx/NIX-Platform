@@ -177,9 +177,13 @@ func (s *Service) RunScan(ctx context.Context, scannerName, target string, corre
 	if err != nil {
 		return uuid.Nil, nil, fmt.Errorf("scanning: execute %q against %q: %w", scannerName, target, err)
 	}
+	packages := inventoryFor(ctx, scanner, target, &err)
+	if err != nil {
+		return uuid.Nil, nil, fmt.Errorf("scanning: inventory %q against %q: %w", scannerName, target, err)
+	}
 
 	scanID = uuid.New()
-	outcome := scannerOutcome{scanner: scannerName, findings: findings}
+	outcome := scannerOutcome{scanner: scannerName, findings: findings, packages: packages}
 	if err := s.persistCompletion(ctx, scanID, target, correlationID, []scannerOutcome{outcome}); err != nil {
 		return uuid.Nil, nil, err
 	}
@@ -199,12 +203,16 @@ func (s *Service) RunScan(ctx context.Context, scannerName, target string, corre
 }
 
 // scannerOutcome é o resultado da execução de um scanner contra um alvo —
-// exatamente um erro OU achados (nunca os dois), usado tanto pelo caminho
-// síncrono (RunScan, sempre uma lista de um) quanto pelo assíncrono
-// (ProcessScanJob via runConcurrently, uma lista de N).
+// exatamente um erro OU achados/pacotes (nunca erro junto com um dos dois),
+// usado tanto pelo caminho síncrono (RunScan, sempre uma lista de um)
+// quanto pelo assíncrono (ProcessScanJob via runConcurrently, uma lista de
+// N). packages só é populado por um scanner que também implementa
+// domain.InventoryProvider (Fase 11 — hoje só Syft); a maioria dos
+// scanners nunca preenche este campo.
 type scannerOutcome struct {
 	scanner  string
 	findings []domain.Finding
+	packages []domain.Package
 	err      error
 }
 
@@ -225,6 +233,14 @@ func (s *Service) persistCompletion(ctx context.Context, scanID uuid.UUID, targe
 				continue
 			}
 			if err := s.repo.SaveFindings(ctx, tx, scanID, o.scanner, target, o.findings); err != nil {
+				return err
+			}
+			// SavePackages (Fase 11 — Syft): mesma atomicidade de
+			// SaveFindings, dentro da mesma transação — um scan concluído
+			// nunca fica com achados gravados e inventário perdido, ou
+			// vice-versa. Um outcome sem pacotes (todo scanner exceto
+			// Syft) é um no-op (ver packages_repository.go).
+			if err := s.repo.SavePackages(ctx, tx, scanID, o.packages); err != nil {
 				return err
 			}
 			succeededNames = append(succeededNames, o.scanner)
@@ -251,6 +267,18 @@ func (s *Service) ListFindings(ctx context.Context, scanID uuid.UUID) ([]domain.
 		return nil, fmt.Errorf("scanning: list findings for scan %s: %w", scanID, err)
 	}
 	return findings, nil
+}
+
+// ListPackages retorna o inventário (Fase 11 — Syft) de uma execução de
+// scan, ordem alfabética de nome. Uma lista vazia (scan sem Syft, ou Syft
+// não achou nenhum pacote) não é erro — mesmo princípio de ListFindings
+// devolver uma lista vazia pra um scan limpo.
+func (s *Service) ListPackages(ctx context.Context, scanID uuid.UUID) ([]domain.Package, error) {
+	packages, err := s.repo.ListPackagesByScanID(ctx, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: list packages for scan %s: %w", scanID, err)
+	}
+	return packages, nil
 }
 
 // ScanStatus é a projeção de um job de scan pensada pra consumo HTTP (ver
@@ -576,12 +604,39 @@ func (s *Service) runConcurrently(ctx context.Context, jobID uuid.UUID, scannerN
 			}
 			s.markScannerRunning(ctx, jobID, name)
 			findings, err := scanner.Execute(ctx, target)
-			outcomes[i] = scannerOutcome{scanner: name, findings: findings, err: err}
+			packages := inventoryFor(ctx, scanner, target, &err)
+			outcomes[i] = scannerOutcome{scanner: name, findings: findings, packages: packages, err: err}
 			s.markScannerFinished(ctx, jobID, name, findings, err)
 		}(i, name)
 	}
 	wg.Wait()
 	return outcomes
+}
+
+// inventoryFor chama Inventory (Fase 11 — Syft) se, e só se, scanner
+// também implementar domain.InventoryProvider (type assertion — o mesmo
+// scanner pode participar do fluxo de achados, do de inventário, ou dos
+// dois, ver docs/roadmap-secops-orchestrator.md). Pulado quando *err já
+// aponta uma falha (ex.: Execute já falhou) — não faz sentido tentar
+// inventariar um alvo que o próprio Execute não conseguiu processar. Um
+// erro de Inventory sobrescreve *err: para um scanner cujo Execute é um
+// no-op (Syft, que não produz achados), Inventory é a única chamada real
+// que pode falhar de verdade, então o erro dela precisa ser o que o
+// chamador (runConcurrently/RunScan) trata como a falha do scanner.
+func inventoryFor(ctx context.Context, scanner domain.CodeScanner, target string, err *error) []domain.Package {
+	if *err != nil {
+		return nil
+	}
+	inv, ok := scanner.(domain.InventoryProvider)
+	if !ok {
+		return nil
+	}
+	packages, invErr := inv.Inventory(ctx, target)
+	if invErr != nil {
+		*err = invErr
+		return nil
+	}
+	return packages
 }
 
 // markScannerRunning/markScannerFinished são escritas best-effort de

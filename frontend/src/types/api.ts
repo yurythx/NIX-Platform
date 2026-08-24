@@ -79,6 +79,17 @@ export interface ScanFinding {
   tool: FindingTool;
 }
 
+// GET /api/v1/scanning/scans/{scanID}/packages — inventário (Fase 11 —
+// Syft), sempre vazio pra um scan que não pediu o scanner "syft". Nunca
+// aparece em ScanFinding: Syft não produz achado, produz inventário (ver
+// docs/roadmap-secops-orchestrator.md, seção "Extensão").
+export interface ScanPackage {
+  name: string;
+  version: string;
+  type: string;
+  license: string;
+}
+
 // GET /api/v1/scanning/scans/{scanID} — consultado pela UI logo depois de
 // disparar um scan (TriggerScanForm), via polling até status virar
 // terminal, pra saber qual scanner falhou, de que tipo foi o erro (code,

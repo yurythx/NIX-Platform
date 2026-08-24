@@ -96,6 +96,26 @@ func (h *Handlers) ListFindings(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOK(w, toFindingResponses(findings, h.sonarQubePublicURL))
 }
 
+// ListPackages trata GET /api/v1/scanning/scans/{scanID}/packages — o
+// inventário (Fase 11 — Syft) de uma execução, sempre vazio pra um scan
+// que não pediu o scanner "syft" (nenhum outro scanner grava em
+// scan_packages).
+func (h *Handlers) ListPackages(w http.ResponseWriter, r *http.Request) {
+	scanID, err := uuid.Parse(chi.URLParam(r, "scanID"))
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, apperrors.BadRequest("scanID must be a valid UUID"))
+		return
+	}
+
+	packages, err := h.service.ListPackages(r.Context(), scanID)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, toPackageResponses(packages))
+}
+
 // GetScanStatus trata GET /api/v1/scanning/scans/{scanID} — pensado pra
 // UI fazer polling logo depois de CreateScan até o status virar terminal
 // (completed/failed/dead_letter), e então mostrar não só os achados

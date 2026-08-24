@@ -32,6 +32,13 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans/{scanID}/findings", h.ListFindings)
 
+	// Fase 11 (Syft): inventário de pacotes de uma execução — nunca acha
+	// nada, então nunca aparece em .../findings; rota própria, mesmo
+	// scanID.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scans/{scanID}/packages", h.ListPackages)
+
 	// Fase 9 (UI no frontend): achados recentes entre TODOS os scans, não
 	// escopados a um scan_id — o feed que a UI usa pra listar sem exigir
 	// conhecer um scan_id de antemão.

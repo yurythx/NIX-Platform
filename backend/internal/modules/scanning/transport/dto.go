@@ -125,6 +125,24 @@ func toFindingResponses(list []domain.PersistedFinding, sonarQubePublicURL strin
 	return out
 }
 
+// PackageResponse é o formato público de um pacote do inventário (Fase 11
+// — Syft) — mesmo raciocínio de FindingResponse, snake_case explícito em
+// vez de serializar domain.Package direto.
+type PackageResponse struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Type    string `json:"type"`
+	License string `json:"license"`
+}
+
+func toPackageResponses(list []domain.Package) []PackageResponse {
+	out := make([]PackageResponse, 0, len(list))
+	for _, p := range list {
+		out = append(out, PackageResponse{Name: p.Name, Version: p.Version, Type: p.Type, License: p.License})
+	}
+	return out
+}
+
 // ScannerFailureResponse é o formato público de domain.ScannerFailure,
 // com Hint computado aqui (camada de apresentação) — o texto de "como
 // corrigir" nunca fica persistido, só é derivado de Code/Message/Scanner
