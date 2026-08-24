@@ -59,6 +59,12 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
+// testSonarQubePublicURL simula SCANNING_SONARQUBE_PUBLIC_URL configurado
+// (o endereço que o NAVEGADOR consegue abrir) — testes que precisam
+// verificar que o link "abrir no SonarQube" NÃO aparece usam "" no lugar
+// deste valor diretamente.
+const testSonarQubePublicURL = "http://localhost:9001"
+
 func newTestService(pool *pgxpool.Pool, scanners ...domain.CodeScanner) *application.Service {
 	repo := infrastructure.NewPostgresRepository(pool)
 	jobsRepo := jobs.NewRepository(pool)
@@ -79,7 +85,7 @@ func decodeEnvelope[T any](t *testing.T, body []byte) T {
 
 func TestCreateScan_ValidRequest_Returns202(t *testing.T) {
 	pool := testPool(t)
-	h := NewHandlers(newTestService(pool, &fakeScanner{name: "trivy"}), testLogger())
+	h := NewHandlers(newTestService(pool, &fakeScanner{name: "trivy"}), testLogger(), testSonarQubePublicURL)
 
 	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy"}, Target: "https://example.com/repo.git"})
 	r := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
@@ -101,7 +107,7 @@ func TestCreateScan_ValidRequest_Returns202(t *testing.T) {
 
 func TestCreateScan_UnknownScanner_Returns404(t *testing.T) {
 	pool := testPool(t)
-	h := NewHandlers(newTestService(pool), testLogger()) // nenhum scanner registrado
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL) // nenhum scanner registrado
 
 	body, _ := json.Marshal(createScanRequest{Scanners: []string{"does-not-exist"}, Target: "https://example.com/repo.git"})
 	r := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
@@ -119,7 +125,7 @@ func TestCreateScan_MultipleScanners_RunConcurrentlyAndAggregateFindings(t *test
 	trivy := &fakeScanner{name: "trivy", findings: []domain.Finding{{ID: "CVE-1", Severity: domain.SeverityHigh, Description: "trivy achou algo"}}}
 	semgrep := &fakeScanner{name: "semgrep", findings: []domain.Finding{{ID: "rule-1", Severity: domain.SeverityMedium, Description: "semgrep achou algo"}}}
 	svc := newTestService(pool, trivy, semgrep)
-	h := NewHandlers(svc, testLogger())
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
 
 	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy", "semgrep"}, Target: "https://example.com/repo.git"})
 	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
@@ -155,7 +161,7 @@ func TestCreateScan_MultipleScanners_RunConcurrentlyAndAggregateFindings(t *test
 
 func TestListFindings_InvalidScanID_Returns400(t *testing.T) {
 	pool := testPool(t)
-	h := NewHandlers(newTestService(pool), testLogger())
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
 
 	r := httptest.NewRequest(http.MethodGet, "/scanning/scans/not-a-uuid/findings", nil)
 	rctx := chi.NewRouteContext()
@@ -176,7 +182,7 @@ func TestListFindings_KnownScan_ReturnsSnakeCaseFields(t *testing.T) {
 		{ID: "CVE-2026-0003", OWASPCategory: "A06:2021-Vulnerable and Outdated Components", Severity: domain.SeverityHigh, Description: "achado de teste", File: "go.sum"},
 	}}
 	svc := newTestService(pool, scanner)
-	h := NewHandlers(svc, testLogger())
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
 
 	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy"}, Target: "https://example.com/repo.git"})
 	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
@@ -218,7 +224,7 @@ func TestListRecentFindings_IncludesJustCreatedFinding(t *testing.T) {
 		{ID: "HANDLER-MARKER-1", Severity: domain.SeverityHigh, Description: "achado do teste do handler"},
 	}}
 	svc := newTestService(pool, scanner)
-	h := NewHandlers(svc, testLogger())
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
 
 	if _, _, err := svc.RunScan(context.Background(), marker, "target", uuid.New(), nil); err != nil {
 		t.Fatalf("RunScan: %v", err)
@@ -243,7 +249,7 @@ func TestListRecentFindings_IncludesJustCreatedFinding(t *testing.T) {
 
 func TestGetScanStatus_InvalidScanID_Returns400(t *testing.T) {
 	pool := testPool(t)
-	h := NewHandlers(newTestService(pool), testLogger())
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
 
 	r := httptest.NewRequest(http.MethodGet, "/scanning/scans/not-a-uuid", nil)
 	rctx := chi.NewRouteContext()
@@ -260,7 +266,7 @@ func TestGetScanStatus_InvalidScanID_Returns400(t *testing.T) {
 
 func TestGetScanStatus_UnknownScanID_Returns404(t *testing.T) {
 	pool := testPool(t)
-	h := NewHandlers(newTestService(pool), testLogger())
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
 
 	unknown := uuid.New().String()
 	r := httptest.NewRequest(http.MethodGet, "/scanning/scans/"+unknown, nil)
@@ -304,7 +310,7 @@ func TestGetScanStatus_PartialFailure_IncludesScannerAndHint(t *testing.T) {
 	broken := &fakeScanner{name: "semgrep", err: apperrors.DependencyUnavailable(
 		"scanning: git clone failed: fatal: could not read Username for 'https://github.com': No such device or address")}
 	svc := newTestService(pool, ok, broken)
-	h := NewHandlers(svc, testLogger())
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
 
 	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy", "semgrep"}, Target: "https://example.com/repo.git"})
 	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
@@ -375,7 +381,7 @@ func TestGetScanStatus_DeadLetter_PreservesRealFailureReason(t *testing.T) {
 	broken := &fakeScanner{name: "zap", err: apperrors.DependencyUnavailable(
 		"zap: no hosts are allowlisted (SCANNING_ZAP_ALLOWED_HOSTS is empty) — refusing to scan any target")}
 	svc := newTestService(pool, broken)
-	h := NewHandlers(svc, testLogger())
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
 
 	body, _ := json.Marshal(createScanRequest{Scanners: []string{"zap"}, Target: "https://example.com"})
 	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
@@ -412,7 +418,7 @@ func TestGetScanStatus_DeadLetter_PreservesRealFailureReason(t *testing.T) {
 
 func TestListRecentFindings_InvalidLimit_FallsBackToDefaultInsteadOfErroring(t *testing.T) {
 	pool := testPool(t)
-	h := NewHandlers(newTestService(pool), testLogger())
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
 
 	r := httptest.NewRequest(http.MethodGet, "/scanning/findings?limit=not-a-number", nil)
 	rec := httptest.NewRecorder()
@@ -433,7 +439,7 @@ func TestListScans_IncludesJustCreatedScan(t *testing.T) {
 	const marker = "https://example.com/list-scans-handler-marker.git"
 	scanner := &fakeScanner{name: "trivy", findings: []domain.Finding{{ID: "OK-1", Severity: domain.SeverityLow}}}
 	svc := newTestService(pool, scanner)
-	h := NewHandlers(svc, testLogger())
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
 
 	body, _ := json.Marshal(createScanRequest{Scanners: []string{"trivy"}, Target: marker})
 	createReq := httptest.NewRequest(http.MethodPost, "/scanning/scans", bytes.NewReader(body))
@@ -477,7 +483,7 @@ func TestListScans_IncludesJustCreatedScan(t *testing.T) {
 
 func TestListScans_InvalidLimit_FallsBackToDefaultInsteadOfErroring(t *testing.T) {
 	pool := testPool(t)
-	h := NewHandlers(newTestService(pool), testLogger())
+	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)
 
 	r := httptest.NewRequest(http.MethodGet, "/scanning/scans?limit=not-a-number", nil)
 	rec := httptest.NewRecorder()

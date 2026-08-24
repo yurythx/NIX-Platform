@@ -19,6 +19,7 @@ function makeFinding(overrides: Partial<ScanFinding> = {}): ScanFinding {
     file: "go.sum",
     line: 12,
     created_at: "2026-08-24T12:00:00Z",
+    tool: { name: "Trivy", url: "https://nvd.nist.gov/vuln/detail/CVE-2026-0001" },
     ...overrides,
   };
 }
@@ -50,6 +51,24 @@ describe("FindingsTable", () => {
     // (isso é responsabilidade de remediation.test.ts), só que ALGUM
     // texto de orientação aparece.
     expect(within(dialog).getByText("Como corrigir")).toBeInTheDocument();
+    // Dados da ferramenta — pedido do usuário.
+    expect(within(dialog).getByText("Trivy")).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Abrir na ferramenta →" })).toHaveAttribute(
+      "href",
+      "https://nvd.nist.gov/vuln/detail/CVE-2026-0001",
+    );
+  });
+
+  it("sem tool.url (a ferramenta não permite montar um link), não mostra o link, só o nome", async () => {
+    const finding = makeFinding({ tool: { name: "OWASP ZAP" } });
+    const user = userEvent.setup();
+    render(<FindingsTable findings={[finding]} />);
+
+    await user.click(screen.getByRole("button", { name: /Ver detalhes/ }));
+    const dialog = screen.getByRole("dialog");
+
+    expect(within(dialog).getByText("OWASP ZAP")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("link", { name: "Abrir na ferramenta →" })).not.toBeInTheDocument();
   });
 
   it("teclar Enter numa linha focada também abre o detalhe (acessibilidade de teclado)", async () => {

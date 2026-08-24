@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -9,26 +11,93 @@ import (
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 )
 
+// ToolResponse são os dados da ferramenta que encontrou um achado —
+// pedido do usuário ("quero que esse detalhe tenha os dados da
+// ferramenta"): o nome de exibição (não o slug interno de Scanner, ex.
+// "SonarQube" em vez de "sonarqube") e, quando dá pra montar, um link
+// direto pra abrir ESSE achado na própria ferramenta (ver toolLink).
+type ToolResponse struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
+}
+
+var toolDisplayNames = map[string]string{
+	"trivy":     "Trivy",
+	"semgrep":   "Semgrep",
+	"sonarqube": "SonarQube",
+	"zap":       "OWASP ZAP",
+}
+
+func toolDisplayName(scanner string) string {
+	if name, ok := toolDisplayNames[scanner]; ok {
+		return name
+	}
+	return scanner
+}
+
+// toolLink monta, quando possível, um link pra abrir o achado (ou pelo
+// menos a regra/CVE por trás dele) na própria ferramenta que encontrou:
+//   - sonarqube: a lista de issues do projeto, já filtrada por essa
+//     regra — precisa de sonarQubePublicURL configurado
+//     (SCANNING_SONARQUBE_PUBLIC_URL, o endereço que o NAVEGADOR
+//     consegue abrir, diferente do endereço interno que o worker usa),
+//     senão fica vazio — nunca um link quebrado. A project key é
+//     recalculada por domain.SonarProjectKey a partir do alvo salvo no
+//     achado — a MESMA derivação que o scanner usou pra gravar lá,
+//     nunca precisa ser persistida à parte.
+//   - trivy: quando o ID do achado é um CVE, a página pública da NVD.
+//   - semgrep: a regra no Semgrep Registry (as regras do ruleset
+//     default, p/owasp-top-ten, são todas públicas lá).
+//   - zap: sem achado individual (o ID do alerta não é estável o
+//     bastante entre versões pra montar um link direto por achado),
+//     aponta pro índice de alertas do próprio projeto ZAP.
+func toolLink(scanner, findingID, target, sonarQubePublicURL string) string {
+	switch scanner {
+	case "sonarqube":
+		if sonarQubePublicURL == "" || target == "" {
+			return ""
+		}
+		projectKey := domain.SonarProjectKey(target)
+		return fmt.Sprintf("%s/project/issues?id=%s&rules=%s&resolved=false",
+			strings.TrimRight(sonarQubePublicURL, "/"), url.QueryEscape(projectKey), url.QueryEscape(findingID))
+	case "trivy":
+		if strings.HasPrefix(findingID, "CVE-") {
+			return "https://nvd.nist.gov/vuln/detail/" + findingID
+		}
+		return ""
+	case "semgrep":
+		if findingID == "" {
+			return ""
+		}
+		return "https://semgrep.dev/r/" + findingID
+	case "zap":
+		return "https://www.zaproxy.org/docs/alerts/"
+	default:
+		return ""
+	}
+}
+
 // FindingResponse é o formato público de um achado persistido — mesmo
 // padrão de integrations/transport/dto.go: o domain.PersistedFinding
 // nunca é serializado direto (seus campos não têm tag json, então
 // sairiam em PascalCase, inconsistente com o resto da API, que é sempre
 // snake_case).
 type FindingResponse struct {
-	ID            string    `json:"id"`
-	ScanID        string    `json:"scan_id"`
-	Scanner       string    `json:"scanner"`
-	Target        string    `json:"target"`
-	FindingID     string    `json:"finding_id"`
-	OWASPCategory string    `json:"owasp_category"`
-	Severity      string    `json:"severity"`
-	Description   string    `json:"description"`
-	File          string    `json:"file"`
-	Line          int       `json:"line"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            string       `json:"id"`
+	ScanID        string       `json:"scan_id"`
+	Scanner       string       `json:"scanner"`
+	Target        string       `json:"target"`
+	FindingID     string       `json:"finding_id"`
+	OWASPCategory string       `json:"owasp_category"`
+	Severity      string       `json:"severity"`
+	Description   string       `json:"description"`
+	File          string       `json:"file"`
+	Line          int          `json:"line"`
+	CreatedAt     time.Time    `json:"created_at"`
+	Tool          ToolResponse `json:"tool"`
 }
 
-func toFindingResponse(f domain.PersistedFinding) FindingResponse {
+func toFindingResponse(f domain.PersistedFinding, sonarQubePublicURL string) FindingResponse {
 	return FindingResponse{
 		ID:            f.RecordID.String(),
 		ScanID:        f.ScanID.String(),
@@ -41,13 +110,17 @@ func toFindingResponse(f domain.PersistedFinding) FindingResponse {
 		File:          f.File,
 		Line:          f.Line,
 		CreatedAt:     f.CreatedAt,
+		Tool: ToolResponse{
+			Name: toolDisplayName(f.Scanner),
+			URL:  toolLink(f.Scanner, f.Finding.ID, f.Target, sonarQubePublicURL),
+		},
 	}
 }
 
-func toFindingResponses(list []domain.PersistedFinding) []FindingResponse {
+func toFindingResponses(list []domain.PersistedFinding, sonarQubePublicURL string) []FindingResponse {
 	out := make([]FindingResponse, 0, len(list))
 	for _, f := range list {
-		out = append(out, toFindingResponse(f))
+		out = append(out, toFindingResponse(f, sonarQubePublicURL))
 	}
 	return out
 }

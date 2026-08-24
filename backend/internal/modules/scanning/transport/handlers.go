@@ -25,10 +25,16 @@ import (
 type Handlers struct {
 	service *application.Service
 	logger  *slog.Logger
+	// sonarQubePublicURL é o endereço que o NAVEGADOR do usuário
+	// consegue abrir (SCANNING_SONARQUBE_PUBLIC_URL) — diferente do
+	// endereço interno que o worker usa pra falar com o servidor. Usado
+	// só pra montar o link "abrir no SonarQube" de um achado (ver
+	// dto.go's toolLink); vazio simplesmente omite esse link.
+	sonarQubePublicURL string
 }
 
-func NewHandlers(service *application.Service, logger *slog.Logger) *Handlers {
-	return &Handlers{service: service, logger: logger}
+func NewHandlers(service *application.Service, logger *slog.Logger, sonarQubePublicURL string) *Handlers {
+	return &Handlers{service: service, logger: logger, sonarQubePublicURL: sonarQubePublicURL}
 }
 
 // createScanRequest aceita um ou mais scanners — mais de um dispara todos
@@ -87,7 +93,7 @@ func (h *Handlers) ListFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteOK(w, toFindingResponses(findings))
+	httputil.WriteOK(w, toFindingResponses(findings, h.sonarQubePublicURL))
 }
 
 // GetScanStatus trata GET /api/v1/scanning/scans/{scanID} — pensado pra
@@ -145,7 +151,7 @@ func (h *Handlers) ListRecentFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteOK(w, toFindingResponses(findings))
+	httputil.WriteOK(w, toFindingResponses(findings, h.sonarQubePublicURL))
 }
 
 // correlationIDFromRequest reaproveita o request id (§50) como o

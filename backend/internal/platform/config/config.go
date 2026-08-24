@@ -144,6 +144,17 @@ type ScanningConfig struct {
 	SonarQubeURL             string
 	SonarQubeToken           string
 	SonarQubeAnalysisTimeout time.Duration
+	// SonarQubePublicURL é o endereço que o NAVEGADOR do usuário
+	// consegue abrir (ex.: http://localhost:9001 no docker-compose.dev.yml
+	// deste ambiente) — diferente de SonarQubeURL, que é o endereço
+	// INTERNO que o backend usa pra falar com o servidor
+	// (http://sonarqube:9000, só resolvível dentro da rede Docker).
+	// Usado só pra montar o link "abrir no SonarQube" de um achado (ver
+	// transport/dto.go's toolLink) — vazio por padrão simplesmente
+	// omite esse link, nunca quebra nada (mesmo princípio de
+	// SonarQubeURL vazio reportando o scanner como indisponível em vez
+	// de derrubar o worker).
+	SonarQubePublicURL string
 
 	// ZapURL/ZapAPIKey apontam pro daemon OWASP ZAP (docker-compose.yml,
 	// serviço `zap`) — igual a SonarQubeURL, vazio por padrão reporta o
@@ -361,6 +372,7 @@ func Load() (*Config, error) {
 			SonarQubeURL:             l.str("SCANNING_SONARQUBE_URL", false, ""),
 			SonarQubeToken:           l.secret("SCANNING_SONARQUBE_TOKEN", false, ""),
 			SonarQubeAnalysisTimeout: l.durationVal("SCANNING_SONARQUBE_ANALYSIS_TIMEOUT", false, 5*time.Minute),
+			SonarQubePublicURL:       l.str("SCANNING_SONARQUBE_PUBLIC_URL", false, ""),
 
 			ZapURL:          l.str("SCANNING_ZAP_URL", false, ""),
 			ZapAPIKey:       l.secret("SCANNING_ZAP_API_KEY", false, ""),

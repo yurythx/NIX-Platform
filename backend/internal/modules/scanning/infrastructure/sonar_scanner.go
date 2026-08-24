@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -111,22 +110,12 @@ func (s *SonarScanner) Execute(ctx context.Context, target string) ([]domain.Fin
 	return s.fetchIssues(ctx, projectKey)
 }
 
-// sonarKeyPattern são os caracteres que uma project key do SonarQube
-// aceita — alfanumérico, "-", "_", ".", ":" (verificado contra a API
-// real: chaves fora disso são rejeitadas na submissão da análise).
-var sonarKeyPattern = regexp.MustCompile(`[^A-Za-z0-9._:-]+`)
-
-// sonarProjectKey deriva uma project key estável a partir do alvo git
-// (ignorando o #branch — o Community Edition do SonarQube não tem
-// análise multi-branch, então uma chave por repositório, não por
-// branch, é o que faz sentido). Determinística: escanear o mesmo
-// repositório de novo reaproveita o mesmo projeto no SonarQube (histórico
-// de análise acumulado), em vez de criar um projeto novo a cada scan.
+// sonarProjectKey deriva a project key do SonarQube a partir do alvo —
+// ver domain.SonarProjectKey (movida pra lá porque transport.toolLink
+// também precisa da mesma derivação, pra montar o link "abrir no
+// SonarQube" de um achado já persistido, sem rodar scanner nenhum).
 func sonarProjectKey(target string) string {
-	repoURL, _, _ := strings.Cut(target, "#")
-	repoURL = strings.TrimPrefix(repoURL, "https://")
-	repoURL = strings.TrimSuffix(repoURL, ".git")
-	return "nix-scan_" + sonarKeyPattern.ReplaceAllString(repoURL, "_")
+	return domain.SonarProjectKey(target)
 }
 
 func (s *SonarScanner) runScanner(ctx context.Context, dir, projectKey string) error {

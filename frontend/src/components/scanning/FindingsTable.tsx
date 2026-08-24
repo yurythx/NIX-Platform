@@ -102,6 +102,27 @@ export function FindingsTable({
       >
         {selected && (
           <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto text-sm">
+            {/* Dados da ferramenta — pedido explícito do usuário: "quero
+                que esse detalhe tenha os dados da ferramenta". Nome de
+                exibição (não o slug "sonarqube" que já aparece na
+                tabela) + um link pra abrir esse achado (ou pelo menos a
+                regra/CVE por trás dele) na própria ferramenta, quando o
+                backend consegue montar um (ver toolLink no backend —
+                nem toda ferramenta/achado permite, então o link some em
+                vez de aparecer quebrado). */}
+            <div className="flex flex-wrap items-center gap-2 rounded-md bg-black/5 p-2 dark:bg-white/5">
+              <span className="font-medium text-foreground">{selected.tool?.name ?? selected.scanner}</span>
+              {selected.tool?.url && (
+                <a
+                  href={selected.tool.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  Abrir na ferramenta →
+                </a>
+              )}
+            </div>
             <div>
               <div className="font-medium text-foreground">Descrição</div>
               <p className="text-muted">{selected.description}</p>

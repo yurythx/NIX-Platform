@@ -94,7 +94,7 @@ func buildModules(deps *Dependencies) *Modules {
 	)
 	scanningSvc := scanningApp.NewService(deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, deps.Logger, trivyScanner, semgrepScanner, sonarScanner, zapScanner)
 	m.Scanning.Service = scanningSvc
-	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger)
+	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger, deps.Config.Scanning.SonarQubePublicURL)
 
 	m.ConfigFlags.Handlers = configflags.NewHandlers(deps.Flags, auditWriter, deps.Logger)
 

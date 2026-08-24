@@ -53,6 +53,17 @@ export interface FeatureFlag {
 // GET /api/v1/scanning/findings.
 export type ScanSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
+// FindingTool: pedido do usuário — "quero que esse detalhe [do achado]
+// tenha os dados da ferramenta". Name é o nome de exibição (ex.:
+// "SonarQube", não o slug "sonarqube" já usado em ScanFinding.scanner);
+// url, quando o backend consegue montar (nem toda ferramenta/achado
+// permite), abre esse achado (ou pelo menos a regra/CVE por trás dele)
+// direto na ferramenta que encontrou — ver transport/dto.go's toolLink.
+export interface FindingTool {
+  name: string;
+  url?: string;
+}
+
 export interface ScanFinding {
   id: string;
   scan_id: string;
@@ -65,6 +76,7 @@ export interface ScanFinding {
   file: string;
   line: number;
   created_at: string;
+  tool: FindingTool;
 }
 
 // GET /api/v1/scanning/scans/{scanID} — consultado pela UI logo depois de
