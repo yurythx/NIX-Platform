@@ -47,3 +47,22 @@ export interface FeatureFlag {
   enabled: boolean;
   description?: string;
 }
+
+// Scanning (§ roadmap de segurança — docs/roadmap-secops-orchestrator.md):
+// POST /api/v1/scanning/scans, GET /api/v1/scanning/scans/{scanID}/findings,
+// GET /api/v1/scanning/findings.
+export type ScanSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+
+export interface ScanFinding {
+  id: string;
+  scan_id: string;
+  scanner: string;
+  target: string;
+  finding_id: string;
+  owasp_category: string;
+  severity: ScanSeverity;
+  description: string;
+  file: string;
+  line: number;
+  created_at: string;
+}

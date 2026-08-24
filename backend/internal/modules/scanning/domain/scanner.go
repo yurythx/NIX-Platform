@@ -95,4 +95,11 @@ type Repository interface {
 	// primeiro. Uma lista vazia (scan limpo, ou scanID desconhecido) não
 	// é erro — quem chama decide se isso merece um 404.
 	ListByScanID(ctx context.Context, scanID uuid.UUID) ([]PersistedFinding, error)
+
+	// ListRecent retorna os achados mais graves/recentes entre TODAS as
+	// execuções de scan (não só uma), até limit linhas — o feed que a
+	// Fase 9 (UI no frontend) usa pra listar "achados recentes por
+	// severidade" sem que quem chama precise já saber um scan_id de
+	// antemão (ListByScanID sozinho não serve pra isso).
+	ListRecent(ctx context.Context, limit int) ([]PersistedFinding, error)
 }

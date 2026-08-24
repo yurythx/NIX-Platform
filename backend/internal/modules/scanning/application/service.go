@@ -242,6 +242,35 @@ func (s *Service) ListFindings(ctx context.Context, scanID uuid.UUID) ([]domain.
 	return findings, nil
 }
 
+// maxRecentFindings é o teto de ListRecentFindings — nenhum chamador
+// consegue pedir mais que isso, nem passando um limit maior (evita uma
+// consulta acidentalmente sem paginação nenhuma trazer a tabela inteira
+// pro frontend de uma vez).
+const maxRecentFindings = 200
+
+// ListRecentFindings retorna os achados mais graves/recentes entre TODAS
+// as execuções de scan — a Fase 9 (UI no frontend) usa isto pra listar
+// achados sem exigir que quem chama já saiba um scan_id de antemão
+// (diferente de ListFindings, escopado a um scan só). limit <= 0 usa um
+// default razoável; limit > maxRecentFindings é truncado, nunca rejeitado
+// com erro — um pedido "generoso demais" ainda é atendido, só que com o
+// teto em vez do valor pedido.
+func (s *Service) ListRecentFindings(ctx context.Context, limit int) ([]domain.PersistedFinding, error) {
+	const defaultLimit = 50
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxRecentFindings {
+		limit = maxRecentFindings
+	}
+
+	findings, err := s.repo.ListRecent(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: list recent findings: %w", err)
+	}
+	return findings, nil
+}
+
 // CreateScanJob implementa o "Commit" do fluxo assíncrono (mesmo desenho
 // de diario_oficial.Service.CreateTestJob): valida que todo nome em
 // scannerNames está registrado, cria o job e seu evento de outbox

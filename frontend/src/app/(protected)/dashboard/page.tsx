@@ -44,6 +44,11 @@ export default async function DashboardOverviewPage() {
       </div>
 
       <div className="flex flex-wrap gap-3">
+        <Link href="/seguranca">
+          <Button variant="secondary" size="sm">
+            Ver achados de segurança
+          </Button>
+        </Link>
         <Link href="/integracoes">
           <Button variant="secondary" size="sm">
             Ver integrações

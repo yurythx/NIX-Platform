@@ -502,6 +502,44 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/scanning/findings:
+    get:
+      tags: [scanning]
+      summary: Lista os achados mais graves/recentes entre TODAS as execuções de scan
+      operationId: listRecentFindings
+      description: >
+        Diferente de `GET /api/v1/scanning/scans/{scanID}/findings` (escopado a um scan_id já
+        conhecido), este endpoint não exige saber um scan_id de antemão — o feed usado pela UI
+        (Fase 9 do roadmap de segurança) pra listar achados recentes por severidade.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Máximo de achados a retornar. Valores <= 0 ou ausentes usam o default (50); valores acima de 200 são reduzidos a 200; um valor não numérico é tratado como ausente (nunca 400).
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Achados mais graves/recentes primeiro (lista vazia se nenhum scan rodou ainda).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Finding"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/ws/ticket:
     post:
       tags: [websocket]

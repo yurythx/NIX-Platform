@@ -195,10 +195,11 @@ Com os containers saudáveis:
 | `/dashboard` | autenticada | Visão geral — só isso: status das integrações e atalhos. |
 | `/integracoes` | autenticada | Lista toda integração configurada — cada uma leva pra sua página de detalhe. |
 | `/integracoes/{key}` | autenticada | Página de detalhe genérica (rota dinâmica) de uma integração — status e teste de conectividade. `{key}` é o mesmo valor que a integração tem no backend (`diario-oficial`, e cada integração nova que for adicionada). |
+| `/seguranca` | autenticada | Achados mais graves/recentes entre todos os scans (Trivy, Semgrep, SonarQube, ZAP) — Fase 9 do roadmap de segurança. |
 | `/configuracao` | autenticada | Aba "Sistema" — configuração dinâmica (feature flags, `nix-admin`). |
 | `/configuracao/usuarios` | autenticada | Aba "Usuários" — diretório de usuários. |
 
-`/dashboard`, `/integracoes` e `/configuracao` compartilham um único grupo de rotas autenticado
+`/dashboard`, `/integracoes`, `/seguranca` e `/configuracao` compartilham um único grupo de rotas autenticado
 (`app/(protected)/`, sem segmento próprio na URL) — a checagem de sessão e o shell visual
 (Sidebar/Topbar) são definidos uma única vez ali. Todo nome usado por essas páginas em qualquer
 momento anterior da reestruturação (`/dashboard/users`, `/dashboard/settings[/integrations/diario]`,
@@ -354,11 +355,12 @@ mesmo padrão Strategy/Adapter e o mesmo pipeline job → outbox → fila → wo
 Além da API HTTP, `cmd/secscan` (`nix-secscan scan --repo . --scanners trivy,semgrep`, ou
 `make secscan`) roda Trivy/Semgrep contra um repositório já no disco — sem precisar de
 Postgres/RabbitMQ/Keycloak rodando — usado tanto localmente quanto num job adicional em `ci.yml`
-(`secscan`, que não substitui nenhum dos jobs de scanning já existentes).
+(`secscan`, que não substitui nenhum dos jobs de scanning já existentes). Achados recentes de
+qualquer scanner ficam visíveis em [`/seguranca`](#rotas-do-frontend) no próprio painel — menu
+próprio na Sidebar, `GET /api/v1/scanning/findings` por trás.
 
 TruffleHog (Fase 2) foi pulado por redundância com o gitleaks já no CI. Todas as demais fases
-propostas (1, 3-8) estão implementadas — só a Fase 9 (UI no frontend pra ver achados) segue como
-planejamento.
+propostas estão implementadas — o roadmap está concluído.
 
 ## Observabilidade
 

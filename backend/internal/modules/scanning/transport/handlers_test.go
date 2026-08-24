@@ -208,3 +208,41 @@ func TestListFindings_KnownScan_ReturnsSnakeCaseFields(t *testing.T) {
 		t.Errorf("response body leaked a PascalCase Go field name, got: %s", rec.Body.String())
 	}
 }
+
+func TestListRecentFindings_IncludesJustCreatedFinding(t *testing.T) {
+	pool := testPool(t)
+	const marker = "recent-findings-handler-marker"
+	scanner := &fakeScanner{name: marker, findings: []domain.Finding{
+		{ID: "HANDLER-MARKER-1", Severity: domain.SeverityHigh, Description: "achado do teste do handler"},
+	}}
+	svc := newTestService(pool, scanner)
+	h := NewHandlers(svc, testLogger())
+
+	if _, _, err := svc.RunScan(context.Background(), marker, "target", uuid.New(), nil); err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/findings?limit=200", nil)
+	rec := httptest.NewRecorder()
+	h.ListRecentFindings(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"finding_id":"HANDLER-MARKER-1"`)) {
+		t.Errorf("response should include the finding just created, got: %s", rec.Body.String())
+	}
+}
+
+func TestListRecentFindings_InvalidLimit_FallsBackToDefaultInsteadOfErroring(t *testing.T) {
+	pool := testPool(t)
+	h := NewHandlers(newTestService(pool), testLogger())
+
+	r := httptest.NewRequest(http.MethodGet, "/scanning/findings?limit=not-a-number", nil)
+	rec := httptest.NewRecorder()
+	h.ListRecentFindings(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (an unparseable limit should fall back to the default, not fail the request)", rec.Code)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
@@ -539,5 +540,109 @@ func TestProcessScanJob_UnregisteredScanner_IsTreatedAsThatScannerFailing(t *tes
 	}
 	if fetched.Status != jobs.StatusFailed {
 		t.Errorf("Status = %s, want failed", fetched.Status)
+	}
+}
+
+// A partir daqui: ListRecentFindings (Fase 9 — o feed "achados recentes
+// por severidade" que a UI usa).
+
+func TestListRecentFindings_IncludesFindingsFromMultipleScans(t *testing.T) {
+	pool := testPool(t)
+	// Nome de scanner distinto e improvável de colidir com achados de
+	// outros testes rodando na mesma tabela compartilhada — a asserção
+	// abaixo procura por ele especificamente em vez de comparar
+	// contagem exata, porque scan_findings é uma tabela compartilhada
+	// entre todo teste deste pacote (nenhum limpa depois de si) e
+	// ListRecent, por natureza, não filtra por scan_id.
+	const marker = "recent-findings-marker-scanner"
+	scanner := &fakeScanner{name: marker, findings: []domain.Finding{
+		{ID: "MARKER-1", Severity: domain.SeverityCritical, Description: "achado do teste de ListRecentFindings"},
+	}}
+	svc := newService(pool, scanner)
+	ctx := context.Background()
+
+	scanID, _, err := svc.RunScan(ctx, marker, "target", uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+
+	// Limite generoso — só precisa ser maior que o número total de
+	// achados que a suíte inteira já gravou até este ponto, o que
+	// maxRecentFindings (200) cobre com folga pro tamanho desta suíte.
+	recent, err := svc.ListRecentFindings(ctx, maxRecentFindings)
+	if err != nil {
+		t.Fatalf("ListRecentFindings: %v", err)
+	}
+
+	found := false
+	for _, f := range recent {
+		if f.ScanID == scanID && f.ID == "MARKER-1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("ListRecentFindings did not include the finding just created (scan_id=%s)", scanID)
+	}
+}
+
+func TestListRecentFindings_NeverExceedsMaxEvenWithoutExplicitLimit(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+
+	recent, err := svc.ListRecentFindings(context.Background(), 0) // 0 usa o default, não maxRecentFindings
+	if err != nil {
+		t.Fatalf("ListRecentFindings: %v", err)
+	}
+	if len(recent) > maxRecentFindings {
+		t.Errorf("ListRecentFindings returned %d rows, want at most %d (the hard cap)", len(recent), maxRecentFindings)
+	}
+}
+
+// fakeRepositoryCapturingLimit é um domain.Repository mínimo, sem banco
+// nenhum, só pra provar a lógica de clamping de ListRecentFindings
+// (default quando limit <= 0, teto em maxRecentFindings) sem precisar de
+// Postgres — SaveFindings/ListByScanID nunca deveriam ser chamados por
+// este caminho, então entram em pânico se forem.
+type fakeRepositoryCapturingLimit struct {
+	gotLimit int
+}
+
+func (f *fakeRepositoryCapturingLimit) SaveFindings(context.Context, pgx.Tx, uuid.UUID, string, string, []domain.Finding) error {
+	panic("SaveFindings should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) ListByScanID(context.Context, uuid.UUID) ([]domain.PersistedFinding, error) {
+	panic("ListByScanID should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) ListRecent(_ context.Context, limit int) ([]domain.PersistedFinding, error) {
+	f.gotLimit = limit
+	return nil, nil
+}
+
+func TestListRecentFindings_LimitClamping(t *testing.T) {
+	cases := []struct {
+		name      string
+		requested int
+		want      int
+	}{
+		{"zero uses the default", 0, 50},
+		{"negative uses the default", -5, 50},
+		{"within range is passed through unchanged", 10, 10},
+		{"above the cap is clamped", 10_000, maxRecentFindings},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeRepositoryCapturingLimit{}
+			svc := &Service{repo: repo, logger: testLogger()}
+
+			if _, err := svc.ListRecentFindings(context.Background(), tc.requested); err != nil {
+				t.Fatalf("ListRecentFindings: %v", err)
+			}
+			if repo.gotLimit != tc.want {
+				t.Errorf("limit passed to the repository = %d, want %d", repo.gotLimit, tc.want)
+			}
+		})
 	}
 }

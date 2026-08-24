@@ -55,29 +55,48 @@ func (r *PostgresRepository) SaveFindings(ctx context.Context, tx pgx.Tx, scanID
 	return results.Close()
 }
 
-// ListByScanID retorna todo achado de scanID, mais recente primeiro. Lê
-// direto pelo pool (nunca precisa de atomicidade transacional com mais
+// findingColumns é a lista de colunas compartilhada por ListByScanID e
+// ListRecent — as duas leem a mesma forma de linha, só o WHERE/LIMIT muda.
+const findingColumns = `id, scan_id, scanner, target, finding_id, owasp_category, severity, description, file, line, created_at`
+
+// findingSeverityOrder ordena da mais grave pra menos grave — compartilhado
+// pelas duas queries abaixo.
+const findingSeverityOrder = `
+	CASE severity
+		WHEN 'CRITICAL' THEN 0
+		WHEN 'HIGH' THEN 1
+		WHEN 'MEDIUM' THEN 2
+		WHEN 'LOW' THEN 3
+	END,
+	created_at DESC
+`
+
+// ListByScanID retorna todo achado de scanID, mais grave/recente primeiro.
+// Lê direto pelo pool (nunca precisa de atomicidade transacional com mais
 // nada, ao contrário de SaveFindings).
 func (r *PostgresRepository) ListByScanID(ctx context.Context, scanID uuid.UUID) ([]domain.PersistedFinding, error) {
-	const q = `
-		SELECT id, scan_id, scanner, target, finding_id, owasp_category, severity, description, file, line, created_at
-		FROM scan_findings
-		WHERE scan_id = $1
-		ORDER BY
-			CASE severity
-				WHEN 'CRITICAL' THEN 0
-				WHEN 'HIGH' THEN 1
-				WHEN 'MEDIUM' THEN 2
-				WHEN 'LOW' THEN 3
-			END,
-			created_at DESC
-	`
+	q := fmt.Sprintf(`SELECT %s FROM scan_findings WHERE scan_id = $1 ORDER BY %s`, findingColumns, findingSeverityOrder)
 	rows, err := r.pool.Query(ctx, q, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("scanning: list findings for scan %s: %w", scanID, err)
 	}
 	defer rows.Close()
+	return scanFindingRows(rows)
+}
 
+// ListRecent retorna os achados mais graves/recentes entre TODAS as
+// execuções de scan, até limit linhas — o feed que a Fase 9 (UI) usa.
+func (r *PostgresRepository) ListRecent(ctx context.Context, limit int) ([]domain.PersistedFinding, error) {
+	q := fmt.Sprintf(`SELECT %s FROM scan_findings ORDER BY %s LIMIT $1`, findingColumns, findingSeverityOrder)
+	rows, err := r.pool.Query(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: list recent findings: %w", err)
+	}
+	defer rows.Close()
+	return scanFindingRows(rows)
+}
+
+func scanFindingRows(rows pgx.Rows) ([]domain.PersistedFinding, error) {
 	var out []domain.PersistedFinding
 	for rows.Next() {
 		var f domain.PersistedFinding

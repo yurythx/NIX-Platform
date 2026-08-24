@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, Plug, Settings } from "lucide-react";
+import { LayoutDashboard, Plug, Settings, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
@@ -8,6 +8,7 @@ import { useEffect } from "react";
 const links = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
   { href: "/integracoes", label: "Integrações", icon: Plug },
+  { href: "/seguranca", label: "Segurança", icon: ShieldAlert },
   { href: "/configuracao", label: "Configurações", icon: Settings },
 ];
 

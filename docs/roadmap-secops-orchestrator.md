@@ -1,9 +1,9 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
-- **Status:** Fase 1 (Fundação), Fase 3 (Trivy), Fase 4 (Semgrep), Fase 5 (SonarQube), Fase 6
-  (OWASP ZAP), Fase 7 (Orquestração concorrente) e Fase 8 (CLI + CI/CD) implementadas — ver
-  detalhes na seção "Fases" abaixo. Fase 2 (TruffleHog) foi pulada por redundância com o gitleaks
-  já no CI. Só a Fase 9 (UI no frontend) segue como planejamento.
+- **Status:** todas as fases propostas estão concluídas. Fases 1, 3-9 implementadas (Fundação,
+  Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração concorrente, CLI + CI/CD, Frontend) — ver
+  detalhes na seção "Fases" abaixo. Fase 2 (TruffleHog) foi pulada por decisão explícita do
+  usuário, redundante com o gitleaks já no CI.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -352,10 +352,28 @@ ferramentas estarem prontas para gerar valor.
   ferramenta, não sanear todo achado que ela encontra), mas ficam registrados aqui como
   recomendações reais e verificadas pra quando fizer sentido agir sobre elas.
 
-**Fase 9 — Frontend**
-- Uma aba nova em `/integracoes` (ou uma seção própria) listando achados recentes por severidade
-  — reaproveitando `IntegrationCard`/`StatusIndicator`/o padrão de Server Component já em uso em
-  todo o resto do dashboard, não um design novo.
+**Fase 9 — Frontend — ✅ implementada**
+- Nova rota `/seguranca` (menu próprio na Sidebar, ícone `ShieldAlert`) — uma **seção própria**, não
+  uma aba dentro de `/integracoes` (a opção que o roadmap deixava em aberto): dado o tamanho que o
+  módulo `scanning` já tinha ganhado (quatro scanners reais, RBAC própria), o mesmo raciocínio que já
+  tinha separado Integrações de Configurações nesta plataforma se aplicava aqui. Server Component
+  puro (`app/(protected)/seguranca/page.tsx` + `loading.tsx`), reaproveitando `Table`/`Badge`/
+  `EmptyState`/`ErrorState` do kit de UI já existente — nenhum componente novo além de um
+  `SeverityBadge` fino (`Badge` com o tom mapeado por severidade), zero design novo.
+- **Gap real de backend descoberto implementando**: o roadmap pede "achados recentes por
+  severidade", mas até esta fase só existia `GET /api/v1/scanning/scans/{scanID}/findings`
+  (escopado a um `scan_id` já conhecido) — nada permitia descobrir quais achados existem sem
+  primeiro saber o `scan_id`. Endpoint novo: `GET /api/v1/scanning/findings?limit=N` (default 50,
+  teto rígido 200), consultando `scan_findings` sem filtro de `scan_id`, mesma ordenação por
+  severidade/data. RBAC reaproveitada (`scanning:read`, já existente).
+- **Deliberadamente fora de escopo**: nenhum formulário pra disparar um scan novo pela UI — o
+  roadmap pediu "listar", `POST /api/v1/scanning/scans` já funciona (via API/`cmd/secscan`), um
+  botão "novo scan" é uma extensão natural mas não construída agora, pra não inventar UI sem pedido
+  explícito.
+- Verificado de ponta a ponta contra o app de verdade: login real via NextAuth (fluxo de
+  credenciais, não simulado), scan real disparado via API, página `/seguranca` buscada autenticada
+  — achados reais (CVEs do OWASP/NodeGoat) renderizados com selo de severidade correto (43 CRITICAL,
+  57 HIGH confirmados na resposta HTML).
 
 ## Mapeamento OWASP Top 10 — o que já é real hoje vs. o que este roadmap adiciona
 

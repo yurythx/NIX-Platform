@@ -9,6 +9,7 @@ package transport
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -81,6 +82,21 @@ func (h *Handlers) ListFindings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	findings, err := h.service.ListFindings(r.Context(), scanID)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, toFindingResponses(findings))
+}
+
+// ListRecentFindings trata GET /api/v1/scanning/findings — o feed "achados
+// recentes por severidade" (Fase 9) usado pela UI, que não exige um
+// scan_id de antemão como ListFindings exige.
+func (h *Handlers) ListRecentFindings(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	findings, err := h.service.ListRecentFindings(r.Context(), limit)
 	if err != nil {
 		httputil.WriteError(w, r, h.logger, err)
 		return
