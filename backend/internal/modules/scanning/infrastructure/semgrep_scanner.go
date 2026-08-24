@@ -68,6 +68,13 @@ func (s *SemgrepScanner) Execute(ctx context.Context, target string) ([]domain.F
 	return s.scanSource(ctx, dir)
 }
 
+// ExecuteLocal roda `semgrep scan` direto contra dir, sem clonar nada —
+// usado pela Fase 8 (cmd/secscan), mesmo raciocínio de
+// TrivyScanner.ExecuteLocal. Nunca remove dir.
+func (s *SemgrepScanner) ExecuteLocal(ctx context.Context, dir string) ([]domain.Finding, error) {
+	return s.scanSource(ctx, dir)
+}
+
 func (s *SemgrepScanner) scanSource(ctx context.Context, dir string) ([]domain.Finding, error) {
 	// --quiet suprime a barra de progresso/banner interativo; o exit
 	// code do semgrep é 0 tanto com quanto sem achados por padrão (não

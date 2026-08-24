@@ -79,6 +79,16 @@ backend-format:
 frontend-format:
 	cd frontend && npm run format
 
+## --- Segurança ---
+
+secscan: ## Builda e roda o nix-secscan (Fase 8 do roadmap de segurança) contra o repositório inteiro
+	# Cada linha de receita do Make roda num subshell próprio — o "cd
+	# backend" da primeira linha não vaza pra segunda, que por isso já
+	# roda a partir da raiz do repo (onde "--repo ." precisa apontar,
+	# pra cobrir backend/ e frontend/ juntos).
+	cd backend && go build -o /tmp/nix-secscan ./cmd/secscan
+	/tmp/nix-secscan scan --repo . --scanners trivy,semgrep --fail-on HIGH
+
 ## --- Migrations (Goose) ---
 
 migrate-up: ## Aplica todas as migrations pendentes

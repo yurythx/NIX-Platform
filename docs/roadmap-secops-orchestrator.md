@@ -1,9 +1,9 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
 - **Status:** Fase 1 (Fundação), Fase 3 (Trivy), Fase 4 (Semgrep), Fase 5 (SonarQube), Fase 6
-  (OWASP ZAP) e Fase 7 (Orquestração concorrente) implementadas — ver detalhes na seção "Fases"
-  abaixo. Fase 2 (TruffleHog) foi pulada por redundância com o gitleaks já no CI. Fases 8-9
-  (CLI/CI unificado, UI no frontend) seguem como planejamento futuro.
+  (OWASP ZAP), Fase 7 (Orquestração concorrente) e Fase 8 (CLI + CI/CD) implementadas — ver
+  detalhes na seção "Fases" abaixo. Fase 2 (TruffleHog) foi pulada por redundância com o gitleaks
+  já no CI. Só a Fase 9 (UI no frontend) segue como planejamento.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -316,11 +316,41 @@ ferramentas estarem prontas para gerar valor.
   ponta a ponta na camada de transporte confirmando os dois `scanner` distintos aparecendo juntos
   na resposta HTTP.
 
-**Fase 8 — CLI + CI/CD**
-- Um subcomando novo (`cmd/secscan`, mesmo padrão de `cmd/api`/`cmd/worker`) chamável como
-  `nix-secscan scan --repo .` — usado tanto localmente quanto no `ci.yml`, unificando o que hoje
-  são 4 jobs de CI separados (govulncheck, npm audit, Trivy, gitleaks/CodeQL) atrás de uma única
-  interface, sem remover nenhum deles.
+**Fase 8 — CLI + CI/CD — ✅ implementada**
+- `cmd/secscan` (mesmo padrão de `cmd/api`/`cmd/worker`), chamável como
+  `nix-secscan scan --repo . --scanners trivy,semgrep --fail-on HIGH` (ou `make secscan`). Ao
+  contrário de `cmd/api`/`cmd/worker`, deliberadamente NÃO reaproveita `internal/app.NewDependencies`
+  (que exige Postgres/RabbitMQ/Keycloak configurados) nem o padrão job+outbox+worker — é um binário
+  standalone, síncrono, pra rodar uma vez e sair com um exit code (0 limpo, 1 achado no limiar de
+  `--fail-on` ou mais grave, 2 erro de uso/ferramenta) que um pipeline de CI usa como gate.
+- **Escopo desta fase, deliberado**: só `trivy` e `semgrep` — os dois únicos scanners que leem um
+  diretório local sem depender de um servidor externo já no ar (`sonarqube` exige um servidor
+  rodando e credenciais; `zap` nem se aplica, ataca um serviço vivo, não lê um diretório).
+  `TrivyScanner`/`SemgrepScanner` ganharam um método novo, `ExecuteLocal(ctx, dir)`, que reaproveita
+  a MESMA lógica de scan/parsing/mapeamento OWASP de `Execute` (usada pelo módulo `scanning` via
+  HTTP) — só pula o `cloneShallow` (clonar de uma URL remota), já que o repositório já está no
+  disco. Nenhuma duplicação de lógica entre o CLI e o módulo HTTP.
+- **"Unifica" no sentido literal do roadmap**: `secscan` é um job NOVO e ADICIONAL em `ci.yml`
+  (`--fail-on CRITICAL`, deliberadamente conservador pra não quebrar CI à toa) — os 4 jobs
+  originais (govulncheck, npm audit, Trivy de imagem, gitleaks/CodeQL) continuam exatamente como
+  estavam, nenhum removido. O valor real e imediato é reprodutibilidade local: `make secscan` roda
+  o mesmo comando que o CI antes mesmo de abrir um PR.
+- **Descoberta real testando** (não hipotética): rodar o CLI contra um checkout SEM git funcionando
+  de verdade (ex.: um bind mount Docker com "dubious ownership") faz o semgrep perder sua
+  consciência de `.gitignore` por padrão (`--use-git-ignore`, o comportamento default) e escanear
+  artefatos de build tipo `frontend/.next` — ruído de código gerado/minificado, não código-fonte.
+  `actions/checkout` no CI e um clone local normal sempre preservam a propriedade/o git funcional,
+  então isto nunca acontece na prática — documentado no próprio `cmd/secscan/main.go` como uma
+  premissa explícita, não contornado com flags de exclude extras que mascarariam o problema em vez
+  de indicar que algo está errado com o checkout.
+- Rodando `nix-secscan` contra o próprio NIX Platform, achados reais e genuínos apareceram — não
+  simulados: `GO-2026-5932` (pacote `golang.org/x/crypto/openpgp`, não mantido, LOW) no
+  `backend/go.mod`, `Dockerfile`s sem `HEALTHCHECK` (LOW), e — rodando contra `.github/workflows/`
+  — toda action do próprio CI usando uma tag mutável (`@v4` em vez de um SHA de commit fixo,
+  MEDIUM, um risco real de supply chain) e o `dependabot.yml` sem período de espera (`cooldown`)
+  configurado. Nenhum desses foi corrigido nesta fase (fora de escopo — Fase 8 é sobre construir a
+  ferramenta, não sanear todo achado que ela encontra), mas ficam registrados aqui como
+  recomendações reais e verificadas pra quando fizer sentido agir sobre elas.
 
 **Fase 9 — Frontend**
 - Uma aba nova em `/integracoes` (ou uma seção própria) listando achados recentes por severidade

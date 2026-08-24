@@ -205,3 +205,42 @@ jobs:
           image-ref: nix-platform/frontend:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
+
+  # secscan: Fase 8 do roadmap de segurança
+  # (docs/roadmap-secops-orchestrator.md) — um job ADICIONAL, não um
+  # substituto de nenhum dos jobs acima (govulncheck no job "backend",
+  # npm audit no "frontend", Trivy de imagem e gitleaks/CodeQL nos seus
+  # próprios workflows continuam intactos). O valor aqui é
+  # reprodutibilidade local: `make secscan` roda exatamente o mesmo
+  # comando na máquina de um desenvolvedor antes mesmo de abrir um PR.
+  # Mesmas versões pinadas de trivy/semgrep do backend/Dockerfile.worker
+  # (nunca "latest").
+  secscan:
+    name: nix-secscan (CLI unificado)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: backend/go.sum
+
+      - name: Instala o trivy (mesma versão pinada de backend/Dockerfile.worker, verificada por checksum)
+        run: |
+          TRIVY_VERSION=0.74.0
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" "trivy_${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy
+          sudo mv trivy /usr/local/bin/trivy
+
+      - name: Instala o semgrep (mesma versão pinada de backend/Dockerfile.worker)
+        run: pip install --no-cache-dir --disable-pip-version-check "semgrep==1.174.0"
+
+      - name: Builda o nix-secscan
+        working-directory: backend
+        run: go build -o /usr/local/bin/nix-secscan ./cmd/secscan
+
+      - name: nix-secscan scan (trivy + semgrep contra o repositório inteiro)
+        run: nix-secscan scan --repo . --scanners trivy,semgrep --fail-on CRITICAL

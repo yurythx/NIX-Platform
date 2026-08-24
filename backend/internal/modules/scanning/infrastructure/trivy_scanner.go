@@ -68,6 +68,16 @@ func (t *TrivyScanner) Execute(ctx context.Context, target string) ([]domain.Fin
 	return t.scanFS(ctx, dir)
 }
 
+// ExecuteLocal roda `trivy fs` direto contra dir, sem clonar nada — usado
+// pela Fase 8 (cmd/secscan), onde o repositório já está no disco (um
+// checkout local, ou o próprio CI que já fez `actions/checkout`) e clonar
+// de novo seria redundante. Nunca remove dir: quem chama é dono do
+// diretório (ao contrário de Execute, que é dono do diretório temporário
+// que ele mesmo criou via cloneShallow).
+func (t *TrivyScanner) ExecuteLocal(ctx context.Context, dir string) ([]domain.Finding, error) {
+	return t.scanFS(ctx, dir)
+}
+
 func (t *TrivyScanner) scanFS(ctx context.Context, dir string) ([]domain.Finding, error) {
 	// --scanners vuln,misconfig: deliberadamente sem "secret" (ver
 	// comentário do tipo acima).

@@ -27,10 +27,11 @@ Keycloak (existente, externo) ──OIDC──▶ NIX Platform
   apenas através de um proxy BFF de mesma origem (`/api/backend/*`), então o token de acesso OIDC
   nunca chega ao JavaScript executado no navegador. Atualizações em tempo real chegam por um
   WebSocket autenticado por ticket.
-- **Go** — um único módulo (`backend/go.mod`), dois pontos de entrada: `cmd/api` (HTTP + WebSocket)
-  e `cmd/worker` (consumidores RabbitMQ + publicador do outbox). A regra de negócio mora em
-  `internal/modules/<nome>/{domain,application,infrastructure,transport[,worker]}`, isolada da
-  infraestrutura da plataforma em `internal/platform/*`.
+- **Go** — um único módulo (`backend/go.mod`), três pontos de entrada: `cmd/api` (HTTP + WebSocket),
+  `cmd/worker` (consumidores RabbitMQ + publicador do outbox) e `cmd/secscan` (CLI standalone de
+  scanning — `nix-secscan scan --repo .`, ver "Roadmap de segurança" abaixo). A regra de negócio
+  mora em `internal/modules/<nome>/{domain,application,infrastructure,transport[,worker]}`, isolada
+  da infraestrutura da plataforma em `internal/platform/*`.
 - **PostgreSQL** — dados da aplicação, `jobs`, `outbox_events` (Outbox Transacional), `audit_logs`.
 - **RabbitMQ** — exchange `nix.events` (topic), uma fila + uma dead-letter queue por módulo,
   publisher confirms, ack/nack manual, e retry com backoff controlado pela aplicação.
@@ -333,9 +334,10 @@ Os testes do backend se dividem em dois grupos:
 
 **Roadmap de segurança**: [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md)
 mapeia o que já está implementado (tabela acima) contra o OWASP Top 10. O módulo `scanning`
-(`POST /api/v1/scanning/scans`, `GET /api/v1/scanning/scans/{scanID}/findings`) orquestra quatro
-scanners reais, todos seguindo o mesmo padrão Strategy/Adapter e o mesmo pipeline
-job → outbox → fila → worker → notificação de `diario_oficial`:
+(`POST /api/v1/scanning/scans` — aceita mais de um scanner por chamada, todos rodando em paralelo,
+`GET /api/v1/scanning/scans/{scanID}/findings`) orquestra quatro scanners reais, todos seguindo o
+mesmo padrão Strategy/Adapter e o mesmo pipeline job → outbox → fila → worker → notificação de
+`diario_oficial`:
 
 - **Trivy** — clona o alvo via git e escaneia dependências/Dockerfiles.
 - **Semgrep** — SAST (`p/owasp-top-ten`), mesmo mecanismo de clone.
@@ -349,8 +351,14 @@ job → outbox → fila → worker → notificação de `diario_oficial`:
   recusa todo alvo até um host de staging/homologação ser autorizado). **Nunca aponte para
   produção.**
 
+Além da API HTTP, `cmd/secscan` (`nix-secscan scan --repo . --scanners trivy,semgrep`, ou
+`make secscan`) roda Trivy/Semgrep contra um repositório já no disco — sem precisar de
+Postgres/RabbitMQ/Keycloak rodando — usado tanto localmente quanto num job adicional em `ci.yml`
+(`secscan`, que não substitui nenhum dos jobs de scanning já existentes).
+
 TruffleHog (Fase 2) foi pulado por redundância com o gitleaks já no CI. Todas as demais fases
-propostas (1, 3-6) estão implementadas.
+propostas (1, 3-8) estão implementadas — só a Fase 9 (UI no frontend pra ver achados) segue como
+planejamento.
 
 ## Observabilidade
 
