@@ -47,6 +47,38 @@ describe("ScanProgress", () => {
     expect(screen.getByText("Trivy rodando")).toBeInTheDocument();
   });
 
+  it("scanner com progress_detail (ZAP em andamento) mostra o sub-progresso em tempo real", () => {
+    render(
+      <ScanProgress
+        status={baseStatus({
+          requested_scanners: ["zap"],
+          scanner_runs: [
+            {
+              scanner: "zap",
+              status: "running",
+              started_at: "2026-08-24T12:00:00Z",
+              progress_detail: "ataque ativo: 42%",
+            },
+          ],
+        })}
+        polling
+      />,
+    );
+    expect(screen.getByText("ataque ativo: 42%")).toBeInTheDocument();
+  });
+
+  it("scanner sem progress_detail (a maioria) não mostra nenhuma linha de sub-progresso", () => {
+    render(
+      <ScanProgress
+        status={baseStatus({
+          scanner_runs: [{ scanner: "trivy", status: "running", started_at: "2026-08-24T12:00:00Z" }],
+        })}
+        polling
+      />,
+    );
+    expect(screen.queryByText(/ativo:|spider:/)).not.toBeInTheDocument();
+  });
+
   it("progress_percent aparece como texto e como largura da barra", () => {
     render(<ScanProgress status={baseStatus({ progress_percent: 50 })} polling />);
     expect(screen.getByText("50%")).toBeInTheDocument();

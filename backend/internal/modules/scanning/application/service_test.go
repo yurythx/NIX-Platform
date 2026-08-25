@@ -85,6 +85,26 @@ func (f *fakeLocalScanner) InventoryLocal(ctx context.Context, dir string) ([]do
 var _ domain.LocalScanner = (*fakeLocalScanner)(nil)
 var _ domain.LocalInventoryProvider = (*fakeLocalScanner)(nil)
 
+// fakeProgressReportingScanner é um fakeScanner que também implementa
+// domain.ProgressReportingScanner (ZapScanner é o único caso real hoje)
+// — usado só pelo teste de sub-progresso abaixo, que precisa observar
+// ProgressDetail preenchido ENQUANTO o scanner ainda está rodando, daí
+// reusar o mesmo campo block de fakeScanner (mesmo padrão de
+// TestProcessScanJob_ScannerRuns_ReflectRunningThenTerminalStatus).
+type fakeProgressReportingScanner struct {
+	fakeScanner
+}
+
+func (f *fakeProgressReportingScanner) ExecuteWithProgress(ctx context.Context, target string, report domain.ProgressFunc) ([]domain.Finding, error) {
+	report("ataque ativo: 42%")
+	if f.block != nil {
+		<-f.block
+	}
+	return f.findings, f.err
+}
+
+var _ domain.ProgressReportingScanner = (*fakeProgressReportingScanner)(nil)
+
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -745,6 +765,70 @@ func TestProcessScanJob_ScannerRuns_ReflectRunningThenTerminalStatus(t *testing.
 	}
 }
 
+// TestProcessScanJob_ProgressReportingScanner_WritesAndClearsProgressDetail
+// § pedido do usuário — "quero saber em tempo real como está rodando o
+// ataque": confirma as duas pontas de domain.ProgressReportingScanner —
+// ProgressDetail aparece em GetScanStatus ENQUANTO o scanner ainda está
+// rodando (não só depois que termina, quando já não serviria pra nada) e
+// volta a vazio depois de terminar (ver FinishScannerRun's SET
+// progress_detail = NULL — sub-progresso de uma tentativa concluída não
+// deveria sobreviver pra confundir a próxima).
+func TestProcessScanJob_ProgressReportingScanner_WritesAndClearsProgressDetail(t *testing.T) {
+	pool := testPool(t)
+	block := make(chan struct{})
+	scanner := &fakeProgressReportingScanner{fakeScanner: fakeScanner{name: "zap-like", block: block}}
+	svc := newService(pool, scanner)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"zap-like"}, "https://example.com/", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- svc.ProcessScanJob(ctx, job.ID, corrID) }()
+
+	deadline := time.After(5 * time.Second)
+	observedDetail := ""
+	for observedDetail == "" {
+		select {
+		case <-deadline:
+			close(block)
+			<-done
+			t.Fatal("never observed a non-empty ProgressDetail while the job was in flight")
+		default:
+		}
+		status, err := svc.GetScanStatus(ctx, job.ID)
+		if err != nil {
+			t.Fatalf("GetScanStatus: %v", err)
+		}
+		for _, run := range status.ScannerRuns {
+			if run.Scanner == "zap-like" && run.ProgressDetail != "" {
+				observedDetail = run.ProgressDetail
+			}
+		}
+	}
+	if observedDetail != "ataque ativo: 42%" {
+		t.Errorf("ProgressDetail observado = %q, want %q", observedDetail, "ataque ativo: 42%")
+	}
+
+	close(block) // libera o scanner pra terminar
+	if err := <-done; err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	status, err := svc.GetScanStatus(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanStatus: %v", err)
+	}
+	for _, run := range status.ScannerRuns {
+		if run.ProgressDetail != "" {
+			t.Errorf("depois de terminar, ProgressDetail = %q, want vazio (limpo por FinishScannerRun)", run.ProgressDetail)
+		}
+	}
+}
+
 // Reproduz o bug real encontrado ao consultar ListRecentScans contra os
 // dados de verdade já persistidos neste ambiente: jobs.result gravado
 // ANTES desta fase tinha failed_scanners como uma lista de NOMES
@@ -920,6 +1004,10 @@ func (f *fakeRepositoryCapturingLimit) StartScannerRun(context.Context, uuid.UUI
 
 func (f *fakeRepositoryCapturingLimit) FinishScannerRun(context.Context, uuid.UUID, string, domain.ScannerRunStatus, int, string) error {
 	panic("FinishScannerRun should not be called by ListRecentFindings")
+}
+
+func (f *fakeRepositoryCapturingLimit) UpdateScannerRunProgress(context.Context, uuid.UUID, string, string) error {
+	panic("UpdateScannerRunProgress should not be called by ListRecentFindings")
 }
 
 func (f *fakeRepositoryCapturingLimit) ListScannerRuns(context.Context, uuid.UUID) ([]domain.ScannerRun, error) {

@@ -160,6 +160,11 @@ export interface ScannerRun {
   duration_ms?: number;
   findings_count?: number;
   error?: string;
+  // progress_detail: sub-progresso em texto livre (ex.: "ataque ativo:
+  // 42%") — só o ZAP preenche isto hoje (spider + scan ativo podem levar
+  // minutos), e só enquanto status === "running"; ausente pra todo outro
+  // scanner e depois que este termina.
+  progress_detail?: string;
 }
 
 export interface ScanStatus {

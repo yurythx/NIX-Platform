@@ -233,18 +233,24 @@ type ScannerRunResponse struct {
 	DurationMs    *int64     `json:"duration_ms,omitempty"`
 	FindingsCount *int       `json:"findings_count,omitempty"`
 	Error         string     `json:"error,omitempty"`
+	// ProgressDetail: sub-progresso em texto livre (ex.: "ataque ativo:
+	// 42%") — só um ProgressReportingScanner preenche isto (hoje: ZAP), e
+	// só enquanto Status == "running"; omitido do JSON pros demais
+	// scanners e depois que este termina (ver domain.ScannerRun.ProgressDetail).
+	ProgressDetail string `json:"progress_detail,omitempty"`
 }
 
 func toScannerRunResponses(list []domain.ScannerRun) []ScannerRunResponse {
 	out := make([]ScannerRunResponse, 0, len(list))
 	for _, r := range list {
 		resp := ScannerRunResponse{
-			Scanner:       r.Scanner,
-			Status:        string(r.Status),
-			StartedAt:     r.StartedAt,
-			FinishedAt:    r.FinishedAt,
-			FindingsCount: r.FindingsCount,
-			Error:         r.Error,
+			Scanner:        r.Scanner,
+			Status:         string(r.Status),
+			StartedAt:      r.StartedAt,
+			FinishedAt:     r.FinishedAt,
+			FindingsCount:  r.FindingsCount,
+			Error:          r.Error,
+			ProgressDetail: r.ProgressDetail,
 		}
 		if r.FinishedAt != nil {
 			d := r.FinishedAt.Sub(r.StartedAt).Milliseconds()

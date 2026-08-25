@@ -84,6 +84,33 @@ type CodeScanner interface {
 	Execute(ctx context.Context, target string) ([]Finding, error)
 }
 
+// ProgressFunc reporta sub-progresso de UM scanner enquanto Execute ainda
+// não retornou — texto livre, curto, pronto pra exibir (ex.: "ataque
+// ativo: 42%"). Sempre seguro de chamar de qualquer goroutine, quantas
+// vezes quiser; um implementador nunca deve deixar isso bloquear ou
+// atrapalhar o scan em si (a implementação real, em application.Service,
+// é best-effort — o mesmo espírito de StartScannerRun/FinishScannerRun).
+type ProgressFunc func(detail string)
+
+// ProgressReportingScanner é implementado por um CodeScanner cuja
+// Execute pode levar minutos (hoje: só ZapScanner — spider + scan ativo)
+// — pra esses, "rodando" sozinho (ScannerRunRunning, sem mudar até
+// terminar) não é feedback suficiente; pedido explícito do usuário
+// ("quero saber em tempo real como está rodando o ataque"). Um
+// CodeScanner comum nunca implementa esta interface — runConcurrently/
+// runConcurrentlyLocal fazem um type assertion (mesmo padrão de
+// InventoryProvider/LocalScanner acima) e chamam ExecuteWithProgress no
+// lugar de Execute só quando presente; os demais scanners continuam
+// exatamente como antes, nenhuma mudança de comportamento pra eles.
+//
+// target é o MESMO parâmetro de Execute — ExecuteWithProgress substitui
+// Execute pra quem implementa as duas (não convive com uma segunda
+// chamada), nunca as duas rodam pro mesmo scan.
+type ProgressReportingScanner interface {
+	CodeScanner
+	ExecuteWithProgress(ctx context.Context, target string, report ProgressFunc) ([]Finding, error)
+}
+
 // PersistedFinding é um Finding já gravado, com os metadados que só
 // existem depois da persistência (ID próprio da linha, a que scan
 // pertence, quando foi gravado) — o que ListByScanID devolve. Finding em
@@ -156,6 +183,13 @@ type ScannerRun struct {
 	FinishedAt    *time.Time
 	FindingsCount *int
 	Error         string
+	// ProgressDetail: sub-progresso opcional, só preenchido por um
+	// ProgressReportingScanner (hoje: ZAP) enquanto Status ==
+	// ScannerRunRunning — vazio pra todo outro scanner, e vazio de novo
+	// depois que o scanner termina (FinishScannerRun não herda o último
+	// valor: um scanner concluído não precisa mais de sub-progresso,
+	// Status/FindingsCount/Error já contam a história completa).
+	ProgressDetail string
 }
 
 // Repository persiste e consulta os achados de uma execução de scan.
@@ -208,6 +242,15 @@ type Repository interface {
 	// == ScannerRunFailed). Mesma escrita best-effort de
 	// StartScannerRun.
 	FinishScannerRun(ctx context.Context, jobID uuid.UUID, scanner string, status ScannerRunStatus, findingsCount int, errMsg string) error
+
+	// UpdateScannerRunProgress grava o sub-progresso de UM scanner ainda
+	// rodando — chamado repetidamente enquanto Execute não retorna (ver
+	// ProgressReportingScanner), nunca depois de FinishScannerRun (a
+	// goroutine de runConcurrently já retornou nesse ponto). Mesma
+	// escrita best-effort de StartScannerRun — o valor recebido aqui é
+	// só o mais recente que ListScannerRuns vai devolver, nunca um
+	// histórico de valores anteriores.
+	UpdateScannerRunProgress(ctx context.Context, jobID uuid.UUID, scanner, detail string) error
 
 	// ListScannerRuns retorna o progresso de todo scanner de jobID, na
 	// ordem em que começaram a rodar — funciona pra um job em QUALQUER

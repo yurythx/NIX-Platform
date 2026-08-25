@@ -145,6 +145,18 @@ export function ScanProgress({ status, polling }: { status: ScanStatus; polling:
                   </Badge>
                 )}
               </div>
+              {/* Sub-progresso em tempo real (ex.: "ataque ativo: 42%") —
+                  pedido do usuário ("quero saber em tempo real como está
+                  rodando o ataque"). Só o ZAP preenche isto (spider + scan
+                  ativo, minutos de duração); os demais scanners nunca têm
+                  esse campo, então esta linha simplesmente não aparece pra
+                  eles — "Rodando…" sozinho já era feedback suficiente pra
+                  algo que termina em segundos. */}
+              {row.run?.progress_detail && (
+                <div className="text-xs font-medium text-primary" aria-live="polite">
+                  {row.run.progress_detail}
+                </div>
+              )}
               <div className="text-xs text-muted">
                 {row.run?.duration_ms != null && <span>{formatElapsed(row.run.duration_ms)}</span>}
                 {row.run?.findings_count != null && (

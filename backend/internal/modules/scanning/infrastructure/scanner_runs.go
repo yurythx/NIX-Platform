@@ -35,12 +35,14 @@ func (r *PostgresRepository) StartScannerRun(ctx context.Context, jobID uuid.UUI
 func (r *PostgresRepository) FinishScannerRun(ctx context.Context, jobID uuid.UUID, scanner string, status domain.ScannerRunStatus, findingsCount int, errMsg string) error {
 	const q = `
 		UPDATE scanning_scanner_runs
-		SET status = $3, finished_at = now(), findings_count = $4, error = NULLIF($5, '')
+		SET status = $3, finished_at = now(), findings_count = $4, error = NULLIF($5, ''), progress_detail = NULL
 		WHERE job_id = $1 AND scanner = $2
 	`
 	// findings_count só faz sentido pra quem teve sucesso — NULL nos
 	// demais casos, em vez de um 0 que poderia ser confundido com "achou
-	// zero problemas" numa falha.
+	// zero problemas" numa falha. progress_detail volta a NULL: um
+	// scanner concluído não precisa mais de sub-progresso (ver
+	// domain.ScannerRun.ProgressDetail).
 	var fc *int
 	if status == domain.ScannerRunSucceeded {
 		fc = &findingsCount
@@ -51,11 +53,30 @@ func (r *PostgresRepository) FinishScannerRun(ctx context.Context, jobID uuid.UU
 	return nil
 }
 
+// UpdateScannerRunProgress grava o sub-progresso de UM scanner ainda
+// rodando — ver domain.Repository.UpdateScannerRunProgress. Não filtra
+// por status = 'running' na cláusula WHERE: se FinishScannerRun já
+// correu (corrida rara entre a última chamada do reporter e o retorno de
+// Execute), este UPDATE só reescreve um progress_detail que
+// FinishScannerRun acabou de zerar — inofensivo, a próxima leitura de
+// ListScannerRuns já reflete o job terminado, não este valor solto.
+func (r *PostgresRepository) UpdateScannerRunProgress(ctx context.Context, jobID uuid.UUID, scanner, detail string) error {
+	const q = `
+		UPDATE scanning_scanner_runs
+		SET progress_detail = NULLIF($3, '')
+		WHERE job_id = $1 AND scanner = $2
+	`
+	if _, err := r.pool.Exec(ctx, q, jobID, scanner, detail); err != nil {
+		return fmt.Errorf("scanning: update scanner run progress: %w", err)
+	}
+	return nil
+}
+
 // ListScannerRuns retorna o progresso de todo scanner de jobID — ver
 // domain.Repository.ListScannerRuns.
 func (r *PostgresRepository) ListScannerRuns(ctx context.Context, jobID uuid.UUID) ([]domain.ScannerRun, error) {
 	const q = `
-		SELECT scanner, status, started_at, finished_at, findings_count, COALESCE(error, '')
+		SELECT scanner, status, started_at, finished_at, findings_count, COALESCE(error, ''), COALESCE(progress_detail, '')
 		FROM scanning_scanner_runs
 		WHERE job_id = $1
 		ORDER BY started_at ASC
@@ -70,7 +91,7 @@ func (r *PostgresRepository) ListScannerRuns(ctx context.Context, jobID uuid.UUI
 	for rows.Next() {
 		var run domain.ScannerRun
 		var status string
-		if err := rows.Scan(&run.Scanner, &status, &run.StartedAt, &run.FinishedAt, &run.FindingsCount, &run.Error); err != nil {
+		if err := rows.Scan(&run.Scanner, &status, &run.StartedAt, &run.FinishedAt, &run.FindingsCount, &run.Error, &run.ProgressDetail); err != nil {
 			return nil, fmt.Errorf("scanning: scan scanner run row: %w", err)
 		}
 		run.Status = domain.ScannerRunStatus(status)

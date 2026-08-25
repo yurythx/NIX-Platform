@@ -66,15 +66,31 @@ func NewZapScanner(zapURL, apiKey string, allowedHosts []string, scanTimeout tim
 }
 
 var _ domain.CodeScanner = (*ZapScanner)(nil)
+var _ domain.ProgressReportingScanner = (*ZapScanner)(nil)
 
 func (z *ZapScanner) Name() string { return ZapScannerName }
 
-// Execute valida o alvo contra a allowlist, roda um spider (crawl) pra
-// descobrir a superfície de ataque, depois um scan ativo (os ataques de
-// verdade) sobre o que foi descoberto, e por fim busca os alertas
-// resultantes. Um scan ativo pode levar de minutos a horas dependendo do
-// tamanho do alvo — scanTimeout limita o tempo total (spider + ativo).
+// Execute é o mesmo scan de ExecuteWithProgress, só que sem reportar
+// sub-progresso — existe pra satisfazer domain.CodeScanner sozinho (ex.:
+// um chamador que não se importa com progresso, se algum dia existir);
+// application.Service.executeScanner sempre prefere ExecuteWithProgress
+// quando o scanner (este) implementa domain.ProgressReportingScanner.
 func (z *ZapScanner) Execute(ctx context.Context, target string) ([]domain.Finding, error) {
+	return z.ExecuteWithProgress(ctx, target, func(string) {})
+}
+
+// ExecuteWithProgress valida o alvo contra a allowlist, roda um spider
+// (crawl) pra descobrir a superfície de ataque, depois um scan ativo (os
+// ataques de verdade) sobre o que foi descoberto, e por fim busca os
+// alertas resultantes. Um scan ativo pode levar de minutos a horas
+// dependendo do tamanho do alvo — scanTimeout limita o tempo total
+// (spider + ativo). report é chamado a cada poll de runModule (a cada 5s
+// — ver o loop lá embaixo) com uma string tipo "spider: 100%" ou "ataque
+// ativo: 42%" — pedido explícito do usuário ("quero saber em tempo real
+// como está rodando o ataque"): sem isso, um scan de 15 minutos aparecia
+// como "rodando" parado do início ao fim, sem nenhum sinal de que
+// estava progredindo de verdade.
+func (z *ZapScanner) ExecuteWithProgress(ctx context.Context, target string, report domain.ProgressFunc) ([]domain.Finding, error) {
 	if z.zapURL == "" {
 		return nil, apperrors.DependencyUnavailable("scanning: zap: SCANNING_ZAP_URL is not configured")
 	}
@@ -87,10 +103,10 @@ func (z *ZapScanner) Execute(ctx context.Context, target string) ([]domain.Findi
 	scanCtx, cancel := context.WithTimeout(ctx, z.scanTimeout)
 	defer cancel()
 
-	if err := z.runModule(scanCtx, "spider", targetURL); err != nil {
+	if err := z.runModule(scanCtx, "spider", targetURL, report); err != nil {
 		return nil, err
 	}
-	if err := z.runModule(scanCtx, "ascan", targetURL); err != nil {
+	if err := z.runModule(scanCtx, "ascan", targetURL, report); err != nil {
 		return nil, err
 	}
 
@@ -140,10 +156,22 @@ type zapStatusResponse struct {
 	Status string `json:"status"`
 }
 
+// zapModuleLabel traduz o nome interno do módulo do ZAP pra um rótulo
+// legível — o mesmo vocabulário que o resto desta plataforma já usa
+// ("varredura" já aparece nos textos de scanning; "ataque ativo" nomeia
+// o que o ascan realmente faz, não só o nome técnico da API).
+func zapModuleLabel(module string) string {
+	if module == "spider" {
+		return "varredura (spider)"
+	}
+	return "ataque ativo"
+}
+
 // runModule dispara o módulo (spider ou ascan — os dois compartilham o
 // mesmo formato de action/status) contra targetURL e espera terminar
-// (status 100).
-func (z *ZapScanner) runModule(ctx context.Context, module, targetURL string) error {
+// (status 100), reportando o progresso (report) a cada poll — ver
+// ExecuteWithProgress.
+func (z *ZapScanner) runModule(ctx context.Context, module, targetURL string, report domain.ProgressFunc) error {
 	startURL := fmt.Sprintf("%s/JSON/%s/action/scan/?url=%s&apikey=%s",
 		z.zapURL, module, url.QueryEscape(targetURL), url.QueryEscape(z.apiKey))
 
@@ -155,6 +183,7 @@ func (z *ZapScanner) runModule(ctx context.Context, module, targetURL string) er
 		return apperrors.DependencyUnavailable(fmt.Sprintf("scanning: zap: %s (%s): %s", module, action.Code, action.Message))
 	}
 
+	label := zapModuleLabel(module)
 	statusURL := fmt.Sprintf("%s/JSON/%s/view/status/?scanId=%s&apikey=%s",
 		z.zapURL, module, url.QueryEscape(action.Scan), url.QueryEscape(z.apiKey))
 	for {
@@ -162,6 +191,7 @@ func (z *ZapScanner) runModule(ctx context.Context, module, targetURL string) er
 		if err := z.getJSON(ctx, statusURL, &status); err != nil {
 			return err
 		}
+		report(fmt.Sprintf("%s: %s%%", label, status.Status))
 		if status.Status == "100" {
 			return nil
 		}

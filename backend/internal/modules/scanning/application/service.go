@@ -1008,7 +1008,7 @@ func (s *Service) runConcurrently(ctx context.Context, jobID uuid.UUID, scannerN
 				return
 			}
 			s.markScannerRunning(ctx, jobID, name)
-			findings, err := scanner.Execute(ctx, target)
+			findings, err := s.executeScanner(ctx, jobID, name, scanner, target)
 			packages := inventoryFor(ctx, scanner, target, &err)
 			outcomes[i] = scannerOutcome{scanner: name, findings: findings, packages: packages, err: err}
 			s.markScannerFinished(ctx, jobID, name, findings, err)
@@ -1151,6 +1151,38 @@ func (s *Service) markScannerFinished(ctx context.Context, jobID uuid.UUID, name
 		s.logger.Warn("scanning: failed to record scanner finish (progress tracking only, scan continues)",
 			slog.String("job_id", jobID.String()), slog.String("scanner", name), slog.Any("error", writeErr))
 	}
+}
+
+// reportScannerProgress grava o sub-progresso de UM scanner ainda
+// rodando (ver domain.ProgressReportingScanner) — mesma escrita
+// best-effort de markScannerRunning/markScannerFinished, chamada
+// potencialmente muitas vezes por scan (ZapScanner chama a cada 5s
+// enquanto spider/scan ativo não terminam), então o log de falha aqui é
+// Debug, não Warn: um Warn por tentativa acabaria inundando o log de um
+// scan de 20 minutos sem trazer nada de novo depois da primeira falha.
+func (s *Service) reportScannerProgress(ctx context.Context, jobID uuid.UUID, name, detail string) {
+	if err := s.repo.UpdateScannerRunProgress(ctx, jobID, name, detail); err != nil {
+		s.logger.Debug("scanning: failed to record scanner progress (progress tracking only, scan continues)",
+			slog.String("job_id", jobID.String()), slog.String("scanner", name), slog.Any("error", err))
+	}
+}
+
+// executeScanner chama Execute — ou, quando scanner também implementa
+// domain.ProgressReportingScanner (hoje: só ZapScanner), ExecuteWithProgress
+// com um reporter que grava em scanning_scanner_runs.progress_detail.
+// Extraído de runConcurrently pra manter a checagem de sub-progresso num
+// único lugar, nunca duplicada — runConcurrentlyLocal nunca chama isto:
+// nenhum scanner que implementa LocalScanner (Trivy/Gitleaks/Semgrep/
+// Syft) hoje também implementa ProgressReportingScanner, e ZAP nunca
+// implementa LocalScanner (ataca uma URL viva, nunca um diretório).
+func (s *Service) executeScanner(ctx context.Context, jobID uuid.UUID, name string, scanner domain.CodeScanner, target string) ([]domain.Finding, error) {
+	reporting, ok := scanner.(domain.ProgressReportingScanner)
+	if !ok {
+		return scanner.Execute(ctx, target)
+	}
+	return reporting.ExecuteWithProgress(ctx, target, func(detail string) {
+		s.reportScannerProgress(ctx, jobID, name, detail)
+	})
 }
 
 func splitOutcomes(outcomes []scannerOutcome) (succeeded, failed []scannerOutcome) {
