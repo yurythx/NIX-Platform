@@ -1,13 +1,17 @@
 package infrastructure
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 )
 
@@ -175,6 +179,86 @@ func TestNormalizeSemgrepSeverity(t *testing.T) {
 		if got := normalizeSemgrepSeverity(input); got != want {
 			t.Errorf("normalizeSemgrepSeverity(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+// Containerização (§ docs/roadmap-secops-orchestrator.md): mesmos três
+// testes que TrivyScanner/GitleaksScanner já têm pro par Execute
+// (indisponível sem sidecar)/scanRemote (chamada HTTP de verdade contra
+// um servidor de teste), mais um cobrindo a única diferença real de
+// contrato — o corpo da requisição também carrega `config` (ver
+// comentário em scanRemote).
+
+func TestSemgrepScanner_Execute_NotConfigured_ReturnsDependencyUnavailable(t *testing.T) {
+	scanner := NewSemgrepScanner("semgrep", "", "", "", 0, testLogger(t))
+
+	_, err := scanner.Execute(context.Background(), "https://example.com/repo.git")
+	if err == nil {
+		t.Fatal("expected an error when SCANNING_SEMGREP_SERVICE_URL is not configured")
+	}
+	appErr, ok := apperrors.As(err)
+	if !ok || appErr.Code != apperrors.CodeDependencyUnavailable {
+		t.Errorf("err = %v, want a DEPENDENCY_UNAVAILABLE apperrors.Error", err)
+	}
+}
+
+func TestSemgrepScanner_ScanRemote_SendsPathAndConfig_ParsesSidecarResponse(t *testing.T) {
+	var gotPath, gotConfig string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Path   string `json:"path"`
+			Config string `json:"config"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode sidecar request body: %v", err)
+		}
+		gotPath = body.Path
+		gotConfig = body.Config
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[
+			{"check_id":"achado.via.sidecar","path":"/workspace/nix-scan-abc123/app.py","start":{"line":1},"extra":{"message":"m","severity":"ERROR","metadata":{}}}
+		]}`))
+	}))
+	defer srv.Close()
+
+	scanner := &SemgrepScanner{serviceURL: srv.URL, config: "p/owasp-top-ten", httpClient: srv.Client()}
+	findings, err := scanner.scanRemote(context.Background(), "/workspace/nix-scan-abc123")
+	if err != nil {
+		t.Fatalf("scanRemote: %v", err)
+	}
+
+	if gotPath != "/workspace/nix-scan-abc123" {
+		t.Errorf("sidecar received path = %q, want the exact dir passed to scanRemote", gotPath)
+	}
+	if gotConfig != "p/owasp-top-ten" {
+		t.Errorf("sidecar received config = %q, want the scanner's own config (semgrep-sidecar has no fixed ruleset)", gotConfig)
+	}
+	if len(findings) != 1 || findings[0].ID != "achado.via.sidecar" {
+		t.Errorf("findings = %+v, want the sidecar's response parsed via parseSemgrepReport", findings)
+	}
+}
+
+func TestSemgrepScanner_ScanRemote_SidecarErrorStatus_ReturnsDependencyUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":"invalid configuration file"}`))
+	}))
+	defer srv.Close()
+
+	scanner := &SemgrepScanner{serviceURL: srv.URL, httpClient: srv.Client()}
+	_, err := scanner.scanRemote(context.Background(), "/workspace/nix-scan-abc123")
+	if err == nil {
+		t.Fatal("expected an error when the sidecar responds with a non-200 status")
+	}
+	if !strings.Contains(err.Error(), "invalid configuration file") {
+		t.Errorf("err = %v, want it to carry the sidecar's real error message through", err)
+	}
+	appErr, ok := apperrors.As(err)
+	if !ok || appErr.Code != apperrors.CodeDependencyUnavailable {
+		t.Errorf("err = %v, want a DEPENDENCY_UNAVAILABLE apperrors.Error", err)
 	}
 }
 

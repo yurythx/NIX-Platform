@@ -170,8 +170,15 @@ type ScanningConfig struct {
 	// desta fase) — Semgrep/SonarQube continuam clonando pro temp dir
 	// padrão do worker até serem containerizados também.
 	ScanningWorkspaceDir string
-	SemgrepPath          string
-	SemgrepConfig        string
+	// SemgrepPath só é usado por SemgrepScanner.ExecuteLocal (cmd/secscan
+	// e, sem sidecar configurado, Fase 10/upload .zip) — Execute (o
+	// caminho de produção via worker) usa SemgrepServiceURL abaixo, desde
+	// a containerização do Semgrep (mesmo papel de TrivyServiceURL/
+	// GitleaksServiceURL acima, ver docs/roadmap-secops-orchestrator.md,
+	// seção "Containerização").
+	SemgrepPath       string
+	SemgrepServiceURL string
+	SemgrepConfig     string
 
 	SonarScannerPath         string
 	SonarQubeURL             string
@@ -416,6 +423,7 @@ func Load() (*Config, error) {
 			SyftServiceURL:       l.str("SCANNING_SYFT_SERVICE_URL", false, ""),
 			ScanningWorkspaceDir: l.str("SCANNING_WORKSPACE_DIR", false, ""),
 			SemgrepPath:          l.str("SCANNING_SEMGREP_PATH", false, "semgrep"),
+			SemgrepServiceURL:    l.str("SCANNING_SEMGREP_SERVICE_URL", false, ""),
 			SemgrepConfig:        l.str("SCANNING_SEMGREP_CONFIG", false, ""),
 
 			SonarScannerPath:         l.str("SCANNING_SONAR_SCANNER_PATH", false, "sonar-scanner"),

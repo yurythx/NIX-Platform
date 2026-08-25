@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+
+# Sidecar do Semgrep (ver cmd/semgrep-sidecar/main.go e
+# docs/roadmap-secops-orchestrator.md, seção "Containerização"): mesma
+# decisão do usuário que já moveu Trivy/Gitleaks/Syft pro próprio
+# container cada — o binário/runtime `semgrep` sai da imagem do
+# backend-worker e ganha esta imagem própria, com um servidor HTTP fino
+# na frente.
+
+# ---- builder ----
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+
+RUN apk add --no-cache ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/semgrep-sidecar ./cmd/semgrep-sidecar
+
+# ---- runtime ----
+FROM alpine:3.20 AS runtime
+
+# Mesma instalação que já vivia em Dockerfile.worker antes desta fase —
+# só movida pra cá. Ao contrário do Trivy, o Semgrep não publica um
+# tarball standalone com checksum próprio — é distribuído via PyPI (wheel
+# manylinux/musllinux) — então a garantia de integridade aqui é a cadeia
+# de confiança padrão do pip contra o índice do PyPI (TLS + hash por
+# arquivo verificado pelo próprio pip), não uma verificação de checksum
+# explícita como a do Trivy; documentado como uma diferença real, não uma
+# omissão (ver Dockerfile.trivy-sidecar). Instalado numa venv isolada (o
+# Python do sistema Alpine é "externally managed" desde a 3.11 — um `pip
+# install` direto falharia) e exposto via symlink no PATH.
+ARG SEMGREP_VERSION=1.174.0
+RUN apk add --no-cache python3 py3-pip ca-certificates && \
+    python3 -m venv /opt/semgrep-venv && \
+    /opt/semgrep-venv/bin/pip install --no-cache-dir --disable-pip-version-check "semgrep==${SEMGREP_VERSION}" && \
+    ln -s /opt/semgrep-venv/bin/semgrep /usr/local/bin/semgrep
+
+# UID/GID FIXOS (10001) — o MESMO valor que Dockerfile.worker/
+# Dockerfile.trivy-sidecar/Dockerfile.gitleaks-sidecar/Dockerfile.syft-sidecar
+# usam. Os processos falam com o mesmo caminho no volume compartilhado
+# scanning_workspace (docker-compose.yml, montado em /workspace nos dois
+# lados): o worker escreve (clona o alvo ali), este sidecar só lê — mas
+# qualquer container pode ser o PRIMEIRO a montar o volume ainda vazio
+# (depende da ordem de start do compose), e é esse primeiro mount que
+# decide a ownership inicial do volume nomeado (Docker copia o que já
+# existe nesse caminho dentro da imagem pro volume vazio). Sem este
+# mkdir+chown aqui também, um dia em que este container suba primeiro
+# deixaria o volume root:root, e o WORKER (que precisa escrever)
+# falharia com "permission denied".
+RUN addgroup -g 10001 -S nix && adduser -u 10001 -S nix -G nix && \
+    mkdir -p /workspace && chown nix:nix /workspace
+USER nix
+WORKDIR /app
+COPY --from=builder --chown=nix:nix /out/semgrep-sidecar ./semgrep-sidecar
+
+ENTRYPOINT ["./semgrep-sidecar"]

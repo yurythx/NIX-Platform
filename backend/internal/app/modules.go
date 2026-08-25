@@ -85,7 +85,7 @@ func buildModules(deps *Dependencies) *Modules {
 	trivyScanner := scanningInfra.NewTrivyScanner(deps.Config.Scanning.TrivyPath, deps.Config.Scanning.TrivyServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	gitleaksScanner := scanningInfra.NewGitleaksScanner(deps.Config.Scanning.GitleaksPath, deps.Config.Scanning.GitleaksServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	syftScanner := scanningInfra.NewSyftScanner(deps.Config.Scanning.SyftPath, deps.Config.Scanning.SyftServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
-	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
+	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	sonarScanner := scanningInfra.NewSonarScanner(
 		deps.Config.Scanning.SonarScannerPath, deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,
 		deps.Config.Scanning.CloneTimeout, deps.Config.Scanning.SonarQubeAnalysisTimeout, deps.Logger,

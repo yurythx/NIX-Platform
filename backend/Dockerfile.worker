@@ -25,31 +25,17 @@ FROM sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1 AS sonar-scanner-cli
 # ---- runtime ----
 FROM alpine:3.20 AS runtime
 
-# git continua precisando estar na imagem do worker — TrivyScanner.Execute
-# (o caminho HTTP, produção) clona o alvo aqui e só depois manda o PATH
-# pro sidecar (ver cmd/trivy-sidecar, Dockerfile.trivy-sidecar); o
-# binário `trivy` em si SAIU desta imagem — decisão do usuário de isolar
-# cada scanner no próprio container, como o GitGuard faz (ver
-# docs/roadmap-secops-orchestrator.md, seção "Containerização"). O
-# checksum do binário trivy continua verificado — só que agora no
-# Dockerfile do sidecar, não aqui.
+# git continua precisando estar na imagem do worker — TrivyScanner.Execute/
+# GitleaksScanner.Execute/SemgrepScanner.Execute (o caminho HTTP, produção)
+# clonam o alvo aqui e só depois mandam o PATH pro sidecar correspondente
+# (ver cmd/trivy-sidecar, cmd/gitleaks-sidecar, cmd/semgrep-sidecar); os
+# binários `trivy`/`gitleaks`/`semgrep` em si SAÍRAM desta imagem —
+# decisão do usuário de isolar cada scanner no próprio container, como o
+# GitGuard faz (ver docs/roadmap-secops-orchestrator.md, seção
+# "Containerização"). O checksum do binário trivy e a instalação via pip
+# do semgrep continuam verificados — só que agora nos Dockerfiles dos
+# sidecars, não aqui.
 RUN apk add --no-cache ca-certificates git
-
-# SemgrepScanner (Fase 4 — SAST) precisa do binário semgrep, também só na
-# imagem do worker. Ao contrário do trivy, o Semgrep não publica um
-# tarball standalone com checksum próprio — é distribuído via PyPI (wheel
-# manylinux/musllinux) — então a garantia de integridade aqui é a cadeia
-# de confiança padrão do pip contra o índice do PyPI (TLS + hash por
-# arquivo verificado pelo próprio pip), não uma verificação de checksum
-# explícita como a do trivy acima; documentado aqui como uma diferença
-# real, não uma omissão. Instalado numa venv isolada (o Python do sistema
-# Alpine é "externally managed" desde a 3.11 — apio pip direto falharia)
-# e exposto via symlink no PATH, igual ao trivy.
-ARG SEMGREP_VERSION=1.174.0
-RUN apk add --no-cache python3 py3-pip && \
-    python3 -m venv /opt/semgrep-venv && \
-    /opt/semgrep-venv/bin/pip install --no-cache-dir --disable-pip-version-check "semgrep==${SEMGREP_VERSION}" && \
-    ln -s /opt/semgrep-venv/bin/semgrep /usr/local/bin/semgrep
 
 # SonarScanner (Fase 5 — qualidade de código/bugs via um servidor
 # SonarQube self-hosted, ver docker-compose.yml) precisa do sonar-scanner

@@ -15,8 +15,8 @@ volumes:
   # próprio container, como o GitGuard, decisão explícita do usuário):
   # compartilhado entre backend-worker (que clona o alvo aqui — leitura E
   # escrita) e cada sidecar de scanner (trivy-scanner, gitleaks-scanner,
-  # syft-scanner, e os que vierem depois — só leitura, ver
-  # docker-compose.yml abaixo). O worker continua dono do ciclo de vida:
+  # syft-scanner, semgrep-scanner, e os que vierem depois — só leitura,
+  # ver docker-compose.yml abaixo). O worker continua dono do ciclo de vida:
   # cria o diretório antes do scan, apaga depois — nenhum sidecar escreve
   # nem limpa nada aqui.
   scanning_workspace:
@@ -223,14 +223,32 @@ services:
     environment:
       DB_HOST: postgres
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-nix}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-nix}
+      # Endereços internos dos sidecars de scanning (§ Containerização) +
+      # o diretório compartilhado com eles — nomes de serviço do Compose,
+      # só resolvíveis dentro da rede `nix_internal`. Corrige uma lacuna
+      # real: até esta mudança, nenhum destes 5 valores tinha um default
+      # aqui, então SCANNING_*_SERVICE_URL/SCANNING_WORKSPACE_DIR
+      # dependiam inteiramente de serem preenchidos manualmente num `.env`
+      # não versionado — um `docker compose up` seguindo só o README (`cp
+      # .env.example .env`, sem editar mais nada) reportaria os quatro
+      # scanners containerizados como "indisponível" apesar dos
+      # containers dos sidecars estarem de pé e saudáveis. Sobrescrevem
+      # (nunca são sobrescritos por) qualquer valor vazio herdado do
+      # `env_file: .env` acima, mesmo princípio de DB_HOST/RABBITMQ_URL
+      # já fixados neste mesmo bloco.
+      SCANNING_TRIVY_SERVICE_URL: http://trivy-scanner:8080
+      SCANNING_GITLEAKS_SERVICE_URL: http://gitleaks-scanner:8080
+      SCANNING_SYFT_SERVICE_URL: http://syft-scanner:8080
+      SCANNING_SEMGREP_SERVICE_URL: http://semgrep-scanner:8080
+      SCANNING_WORKSPACE_DIR: /workspace
     volumes:
       - ./secrets:/run/secrets:ro
       # scanning_workspace (§ Containerização, ver comentário na seção
       # `volumes:` no topo deste arquivo): TrivyScanner.Execute/
-      # GitleaksScanner.Execute/SyftScanner.Inventory clonam o alvo aqui
-      # (leitura E escrita — o worker é dono do ciclo de vida), os
-      # sidecars trivy-scanner/gitleaks-scanner/syft-scanner só leem o
-      # mesmo caminho.
+      # GitleaksScanner.Execute/SyftScanner.Inventory/SemgrepScanner.Execute
+      # clonam o alvo aqui (leitura E escrita — o worker é dono do ciclo
+      # de vida), os sidecars trivy-scanner/gitleaks-scanner/syft-scanner/
+      # semgrep-scanner só leem o mesmo caminho.
       - scanning_workspace:/workspace
     networks:
       - nix_internal
@@ -244,6 +262,8 @@ services:
       gitleaks-scanner:
         condition: service_healthy
       syft-scanner:
+        condition: service_healthy
+      semgrep-scanner:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${WORKER_METRICS_PORT:-9100}/health"]
@@ -282,6 +302,28 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.gitleaks-sidecar
+    restart: unless-stopped
+    volumes:
+      - scanning_workspace:/workspace:ro
+    networks:
+      - nix_internal
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # semgrep-scanner (§ Containerização, mesmo padrão de trivy-scanner/
+  # gitleaks-scanner acima): sidecar de vida longa em torno do binário
+  # `semgrep`, só lê o volume compartilhado. Único sidecar de scanning
+  # cujo corpo de requisição também carrega `config` (o ruleset do
+  # Semgrep Registry a rodar) — os outros três têm argumentos fixos, ver
+  # cmd/semgrep-sidecar/main.go.
+  semgrep-scanner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.semgrep-sidecar
     restart: unless-stopped
     volumes:
       - scanning_workspace:/workspace:ro
