@@ -123,9 +123,9 @@ type DiarioOficialConfig struct {
 	Timeout time.Duration
 }
 
-// ScanningConfig guarda as configurações do módulo scanning. TrivyPath,
-// SemgrepPath e SonarScannerPath são só "trivy"/"semgrep"/"sonar-scanner"
-// por padrão (resolvidos via PATH da imagem do worker); CloneTimeout
+// ScanningConfig guarda as configurações do módulo scanning. TrivyPath e
+// SemgrepPath são só "trivy"/"semgrep" por padrão (resolvidos via PATH,
+// só usados por ExecuteLocal sem sidecar configurado); CloneTimeout
 // limita quanto tempo cada scanner espera o `git clone` de um alvo
 // terminar antes de desistir, para que um repositório gigante ou um host
 // lento nunca prenda um worker indefinidamente. SemgrepConfig é o
@@ -180,7 +180,19 @@ type ScanningConfig struct {
 	SemgrepServiceURL string
 	SemgrepConfig     string
 
-	SonarScannerPath         string
+	// SonarScannerServiceURL aponta pro sidecar `sonar-scanner-cli`
+	// (docker-compose.yml) que SonarScanner.Execute chama via HTTP pra
+	// rodar o CLI — mesmo papel de TrivyServiceURL/SemgrepServiceURL
+	// acima, nome deliberadamente diferente (não "SonarScannerServiceURL"
+	// abreviado) pra nunca ser confundido com SonarQubeURL logo abaixo
+	// (o SERVIDOR SonarQube em si — uma URL completamente diferente).
+	// Nunca teve um SonarScannerPath (o caminho de um binário local): ao
+	// contrário de Trivy/Gitleaks/Semgrep, este scanner nunca teve um
+	// ExecuteLocal — SonarQube sempre exigiu um servidor+credenciais,
+	// nunca funcionou "local" de qualquer forma, então não existe mais
+	// nenhum código que precise saber o caminho do binário depois desta
+	// containerização.
+	SonarScannerServiceURL   string
 	SonarQubeURL             string
 	SonarQubeToken           string
 	SonarQubeAnalysisTimeout time.Duration
@@ -426,7 +438,7 @@ func Load() (*Config, error) {
 			SemgrepServiceURL:    l.str("SCANNING_SEMGREP_SERVICE_URL", false, ""),
 			SemgrepConfig:        l.str("SCANNING_SEMGREP_CONFIG", false, ""),
 
-			SonarScannerPath:         l.str("SCANNING_SONAR_SCANNER_PATH", false, "sonar-scanner"),
+			SonarScannerServiceURL:   l.str("SCANNING_SONAR_SCANNER_SERVICE_URL", false, ""),
 			SonarQubeURL:             l.str("SCANNING_SONARQUBE_URL", false, ""),
 			SonarQubeToken:           l.secret("SCANNING_SONARQUBE_TOKEN", false, ""),
 			SonarQubeAnalysisTimeout: l.durationVal("SCANNING_SONARQUBE_ANALYSIS_TIMEOUT", false, 5*time.Minute),

@@ -15,10 +15,12 @@ volumes:
   # próprio container, como o GitGuard, decisão explícita do usuário):
   # compartilhado entre backend-worker (que clona o alvo aqui — leitura E
   # escrita) e cada sidecar de scanner (trivy-scanner, gitleaks-scanner,
-  # syft-scanner, semgrep-scanner, e os que vierem depois — só leitura,
-  # ver docker-compose.yml abaixo). O worker continua dono do ciclo de vida:
-  # cria o diretório antes do scan, apaga depois — nenhum sidecar escreve
-  # nem limpa nada aqui.
+  # syft-scanner, semgrep-scanner — só leitura; sonar-scanner-cli também
+  # precisa de escrita, ver comentário no serviço dele). O worker continua
+  # dono do ciclo de vida do CLONE em si: cria o diretório antes do scan,
+  # apaga depois — nenhum sidecar cria/apaga o diretório clonado (o
+  # sonar-scanner-cli só escreve um subdiretório `.scannerwork/` dentro
+  # dele, nunca o diretório em si).
   scanning_workspace:
 
 services:
@@ -226,29 +228,32 @@ services:
       # Endereços internos dos sidecars de scanning (§ Containerização) +
       # o diretório compartilhado com eles — nomes de serviço do Compose,
       # só resolvíveis dentro da rede `nix_internal`. Corrige uma lacuna
-      # real: até esta mudança, nenhum destes 5 valores tinha um default
+      # real: até esta mudança, nenhum destes 6 valores tinha um default
       # aqui, então SCANNING_*_SERVICE_URL/SCANNING_WORKSPACE_DIR
       # dependiam inteiramente de serem preenchidos manualmente num `.env`
       # não versionado — um `docker compose up` seguindo só o README (`cp
-      # .env.example .env`, sem editar mais nada) reportaria os quatro
-      # scanners containerizados como "indisponível" apesar dos
-      # containers dos sidecars estarem de pé e saudáveis. Sobrescrevem
-      # (nunca são sobrescritos por) qualquer valor vazio herdado do
-      # `env_file: .env` acima, mesmo princípio de DB_HOST/RABBITMQ_URL
-      # já fixados neste mesmo bloco.
+      # .env.example .env`, sem editar mais nada) reportaria os scanners
+      # containerizados como "indisponível" apesar dos containers dos
+      # sidecars estarem de pé e saudáveis. Sobrescrevem (nunca são
+      # sobrescritos por) qualquer valor vazio herdado do `env_file: .env`
+      # acima, mesmo princípio de DB_HOST/RABBITMQ_URL já fixados neste
+      # mesmo bloco.
       SCANNING_TRIVY_SERVICE_URL: http://trivy-scanner:8080
       SCANNING_GITLEAKS_SERVICE_URL: http://gitleaks-scanner:8080
       SCANNING_SYFT_SERVICE_URL: http://syft-scanner:8080
       SCANNING_SEMGREP_SERVICE_URL: http://semgrep-scanner:8080
+      SCANNING_SONAR_SCANNER_SERVICE_URL: http://sonar-scanner-cli:8080
       SCANNING_WORKSPACE_DIR: /workspace
     volumes:
       - ./secrets:/run/secrets:ro
       # scanning_workspace (§ Containerização, ver comentário na seção
       # `volumes:` no topo deste arquivo): TrivyScanner.Execute/
-      # GitleaksScanner.Execute/SyftScanner.Inventory/SemgrepScanner.Execute
-      # clonam o alvo aqui (leitura E escrita — o worker é dono do ciclo
-      # de vida), os sidecars trivy-scanner/gitleaks-scanner/syft-scanner/
-      # semgrep-scanner só leem o mesmo caminho.
+      # GitleaksScanner.Execute/SyftScanner.Inventory/SemgrepScanner.Execute/
+      # SonarScanner.Execute clonam o alvo aqui (leitura E escrita — o
+      # worker é dono do ciclo de vida), os sidecars
+      # trivy-scanner/gitleaks-scanner/syft-scanner/semgrep-scanner leem
+      # o mesmo caminho (só leitura); sonar-scanner-cli também precisa
+      # escrever nele (ver comentário no serviço abaixo).
       - scanning_workspace:/workspace
     networks:
       - nix_internal
@@ -264,6 +269,8 @@ services:
       syft-scanner:
         condition: service_healthy
       semgrep-scanner:
+        condition: service_healthy
+      sonar-scanner-cli:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${WORKER_METRICS_PORT:-9100}/health"]
@@ -346,6 +353,34 @@ services:
     restart: unless-stopped
     volumes:
       - scanning_workspace:/workspace:ro
+    networks:
+      - nix_internal
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # sonar-scanner-cli (§ Containerização — último runtime de scanner a
+  # sair da imagem do backend-worker, mesmo padrão de trivy-scanner/
+  # gitleaks-scanner/semgrep-scanner acima): sidecar de vida longa em
+  # torno do binário `sonar-scanner` (o CLI que faz upload de uma análise
+  # — não confundir com o serviço `sonarqube` abaixo, o SERVIDOR que
+  # processa e guarda os achados; os dois são coisas diferentes, daí o
+  # nome completo em vez de só "sonar-scanner"). Único sidecar de
+  # scanning montado `:rw` (leitura-escrita), não `:ro` como os outros
+  # quatro — o CLI grava `.scannerwork/report-task.txt` dentro do próprio
+  # diretório clonado como parte de como a ferramenta funciona (ver
+  # cmd/sonar-sidecar/main.go), diferente de Trivy/Gitleaks/Syft/Semgrep,
+  # que só leem o que o worker já clonou e nunca escrevem nada nele.
+  sonar-scanner-cli:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.sonar-sidecar
+    restart: unless-stopped
+    volumes:
+      - scanning_workspace:/workspace:rw
     networks:
       - nix_internal
     healthcheck:

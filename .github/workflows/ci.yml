@@ -180,6 +180,60 @@ jobs:
             NEXT_PUBLIC_API_URL=http://localhost:8000
             NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
 
+      # Sidecars de scanning (§ Containerização — cada scanner isolado no
+      # próprio container, ver docs/roadmap-secops-orchestrator.md): 5
+      # imagens a mais que nunca tinham build/scan nenhum aqui antes desta
+      # mudança — cada uma carrega um runtime de terceiro (binário do
+      # trivy/gitleaks/syft, venv Python do semgrep, JRE+Node.js do
+      # sonar-scanner) que pode ter CVE tão real quanto backend-api/
+      # backend-worker/frontend, e ficava fora da única superfície deste
+      # CI que escaneia a imagem OCI final (não só código-fonte/deps
+      # declaradas).
+      - name: Build da imagem trivy-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.trivy-sidecar
+          push: false
+          load: true
+          tags: nix-platform/trivy-scanner:ci
+
+      - name: Build da imagem gitleaks-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.gitleaks-sidecar
+          push: false
+          load: true
+          tags: nix-platform/gitleaks-scanner:ci
+
+      - name: Build da imagem syft-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.syft-sidecar
+          push: false
+          load: true
+          tags: nix-platform/syft-scanner:ci
+
+      - name: Build da imagem semgrep-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.semgrep-sidecar
+          push: false
+          load: true
+          tags: nix-platform/semgrep-scanner:ci
+
+      - name: Build da imagem sonar-scanner-cli
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.sonar-sidecar
+          push: false
+          load: true
+          tags: nix-platform/sonar-scanner-cli:ci
+
       # Escaneia cada imagem já construída em busca de CVEs conhecidas nos
       # pacotes do sistema operacional e nas dependências de linguagem
       # embutidas na imagem final — cobre uma superfície diferente do
@@ -203,6 +257,41 @@ jobs:
         uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: nix-platform/frontend:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem trivy-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/trivy-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem gitleaks-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/gitleaks-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem syft-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/syft-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem semgrep-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/semgrep-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem sonar-scanner-cli (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/sonar-scanner-cli:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
