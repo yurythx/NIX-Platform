@@ -254,6 +254,14 @@ Os testes do backend se dividem em dois grupos:
 
   (Aponte essas variáveis para os containers do `docker-compose.dev.yml`, que publica 5432/5672.)
 
+**E2E (Playwright)**: `cd frontend && npm run test:e2e` — exercita a aplicação de ponta a ponta
+(login local, dashboard, logout completo, páginas públicas) contra uma stack REAL, nunca mockada.
+Exige `docker compose up` rodando primeiro (postgres/rabbitmq/backend-api/frontend, com
+`LOCAL_AUTH_ENABLED=true` — ver [Login local](#login-local-adicional-ao-keycloak) acima) e
+`npx playwright install chromium` uma vez. O job `e2e` do CI (`.github/workflows/ci.yml`) roda a
+mesma coisa do zero a cada PR, incluindo um Keycloak descartável só pro backend completar o
+discovery OIDC no boot.
+
 ## RabbitMQ
 
 - **Exchange**: `nix.events`, tipo `topic`, durável.

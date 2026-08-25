@@ -24,6 +24,8 @@ npm run dev
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Roda a suíte Vitest uma vez |
 | `npm run test:watch` | Vitest em modo watch |
+| `npm run test:e2e` | Playwright, contra uma stack real já rodando (ver README raiz, "Testes") |
+| `npm run test:e2e:ui` | Idem, com a UI interativa do Playwright |
 | `npm run format` | Prettier, modo write |
 
 ## Organização
