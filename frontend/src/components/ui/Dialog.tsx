@@ -32,7 +32,11 @@ export function Dialog({ open, onClose, title, description, children }: DialogPr
       onCancel={onClose}
       aria-labelledby="dialog-title"
       aria-describedby={description ? "dialog-description" : undefined}
-      className="m-auto rounded-xl border border-surface-border bg-surface p-0 text-foreground shadow-lg backdrop:bg-black/40"
+      // max-w-[calc(100vw-2rem)] — § revisão de mobile 2026-08: o <dialog>
+      // nativo já tem um limite de UA (~"calc(100% - 6px)"), mas essa
+      // garantia explícita não depende do navegador/versão pra nunca
+      // encostar na borda da tela num celular estreito.
+      className="m-auto max-w-[calc(100vw-2rem)] rounded-xl border border-surface-border bg-surface p-0 text-foreground shadow-lg backdrop:bg-black/40"
     >
       <div className="w-full max-w-md p-5">
         <h2 id="dialog-title" className="text-base font-semibold">

@@ -63,7 +63,7 @@ export function NotificationBell() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={unreadCount > 0 ? `Notificações, ${unreadCount} não lidas` : "Notificações"}
-        className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+        className="relative inline-flex h-10 w-10 items-center justify-center rounded-md text-muted transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
       >
         <Bell size={17} aria-hidden="true" />
         {unreadCount > 0 && (
@@ -77,9 +77,15 @@ export function NotificationBell() {
       </button>
 
       {open && (
+        // w-80 com max-w-[calc(100vw-2rem)] — § revisão de mobile 2026-08:
+        // 320px fixos podem passar da borda esquerda da viewport num
+        // celular estreito (this button fica perto da borda direita da
+        // Topbar); o max-w garante que o dropdown nunca fica maior que a
+        // tela menos 1rem de respiro de cada lado, mesmo no menor
+        // aparelho.
         <div
           role="menu"
-          className="absolute right-0 top-10 z-50 max-h-96 w-80 overflow-y-auto rounded-md border border-surface-border bg-surface py-1 shadow-lg"
+          className="absolute right-0 top-11 z-50 max-h-96 w-80 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-md border border-surface-border bg-surface py-1 shadow-lg"
         >
           <div className="border-b border-surface-border px-3 py-2 text-sm font-semibold">
             Notificações

@@ -89,12 +89,19 @@ export function LoginCard() {
             error={localError ?? undefined}
             className="pr-10"
           />
+          {/* h-10 w-10 com o ícone centralizado por flex (não só o ícone de
+              16px sozinho, sem padding) — § revisão de mobile 2026-08: um
+              alvo de toque de ~16px fica bem abaixo do mínimo recomendado
+              (24px, WCAG 2.5.5 AA). right-0/top-6 alinham essa caixa maior
+              com a caixa do <input> em si (pula só a altura do label
+              "Senha" acima) — pr-10 no Input reserva exatamente esse
+              espaço, então a caixa clicável não invade o texto digitado. */}
           <button
             type="button"
             onClick={() => setShowPassword((v) => !v)}
             aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
             aria-pressed={showPassword}
-            className="absolute right-2.5 top-8 text-muted hover:text-foreground"
+            className="absolute right-0 top-6 flex h-10 w-10 items-center justify-center text-muted hover:text-foreground"
           >
             {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
           </button>

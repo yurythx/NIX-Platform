@@ -42,7 +42,7 @@ export function ThemeToggle({ initialTheme }: { initialTheme?: "light" | "dark" 
       onClick={toggle}
       aria-label={theme === "dark" ? "Ativar tema claro" : "Ativar tema escuro"}
       title={theme === "dark" ? "Ativar tema claro" : "Ativar tema escuro"}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+      className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
     >
       {theme === "dark" ? <Sun size={17} aria-hidden="true" /> : <Moon size={17} aria-hidden="true" />}
     </button>

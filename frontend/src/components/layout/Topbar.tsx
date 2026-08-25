@@ -41,11 +41,16 @@ export function Topbar({
   return (
     <header className="fixed inset-x-0 top-0 z-50 flex h-14 items-center justify-between border-b border-surface-border bg-surface px-4">
       <div className="flex items-center gap-3">
+        {/* h-10 w-10 (não h-8 w-8) — § revisão de mobile 2026-08: alvo de
+            toque de ~40px, mais confortável que 32px pra quem abre/fecha
+            a Sidebar pelo dedo, não só pelo mouse; mesmo ajuste em
+            ThemeToggle/NotificationBell/UserMenu logo abaixo, os quatro
+            controles interativos desta barra. */}
         <button
           type="button"
           onClick={onToggleSidebar}
           aria-label="Alternar menu lateral"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
         >
           <Menu size={18} aria-hidden="true" />
         </button>

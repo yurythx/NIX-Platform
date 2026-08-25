@@ -67,15 +67,18 @@ export function UserMenu({ userLabel }: { userLabel: string }) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Menu do usuário ${userLabel}`}
-        className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+        className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
       >
         {initialsFrom(userLabel)}
       </button>
 
       {open && (
+        // max-w-[calc(100vw-2rem)] — mesma folga de segurança de
+        // NotificationBell, pro caso raro de userLabel ser um e-mail
+        // longo demais numa tela muito estreita.
         <div
           role="menu"
-          className="absolute right-0 top-10 z-50 w-56 rounded-md border border-surface-border bg-surface py-1 shadow-lg"
+          className="absolute right-0 top-11 z-50 w-56 max-w-[calc(100vw-2rem)] rounded-md border border-surface-border bg-surface py-1 shadow-lg"
         >
           <div className="truncate border-b border-surface-border px-3 py-2 text-sm text-muted">
             {userLabel}
