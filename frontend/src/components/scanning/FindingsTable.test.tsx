@@ -164,7 +164,7 @@ describe("FindingsTable", () => {
     await user.click(screen.getByRole("button", { name: "Copiar prompt pra IA" }));
 
     expect(writeText).toHaveBeenCalledTimes(1);
-    const copied = writeText.mock.calls[0][0] as string;
+    const copied = writeText.mock.calls[0]?.[0] as string;
     expect(copied).toContain("CVE-2026-0001");
     expect(copied).toContain("Trivy");
     expect(await screen.findByText("Prompt copiado")).toBeInTheDocument();

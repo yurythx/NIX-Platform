@@ -30,7 +30,7 @@ async function fullSignOut() {
 
 function initialsFrom(label: string): string {
   const parts = label.replace(/@.*/, "").split(/[.\s_-]+/).filter(Boolean);
-  const chars = parts.length >= 2 ? [parts[0][0], parts[1][0]] : [label[0] ?? "?"];
+  const chars = parts.length >= 2 ? [parts[0]?.[0] ?? "?", parts[1]?.[0] ?? "?"] : [label[0] ?? "?"];
   return chars.join("").toUpperCase();
 }
 

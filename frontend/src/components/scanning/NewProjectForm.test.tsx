@@ -105,7 +105,7 @@ describe("NewProjectForm", () => {
     await user.click(screen.getByRole("button", { name: "Criar projeto" }));
 
     expect(await screen.findByText("Projeto criado")).toBeInTheDocument();
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     expect(JSON.parse(init.body as string)).toEqual({
       name: "projeto-git",
       target: "https://github.com/org/repo.git",

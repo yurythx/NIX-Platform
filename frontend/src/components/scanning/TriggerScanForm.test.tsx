@@ -88,7 +88,7 @@ describe("TriggerScanForm", () => {
     expect(await screen.findByText("Scan disparado")).toBeInTheDocument();
     expect(screen.getByText(/Job 12345678/)).toBeInTheDocument();
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     const body = JSON.parse(init.body as string);
     expect(body.scanners.sort()).toEqual(["semgrep", "trivy"]);
     expect(body.target).toBe("https://github.com/org/repo.git");

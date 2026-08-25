@@ -109,9 +109,14 @@ export function FindingsTable({
     }
     // Alvo com o achado mais recente primeiro — mesma convenção de
     // recência que ScanList/ScanCard já usam em toda a plataforma.
+    // a[0]/b[0] nunca são undefined na prática — toda entrada de
+    // byTarget só existe porque pelo menos um achado foi empurrado nela
+    // no loop acima —, mas noUncheckedIndexedAccess não consegue provar
+    // isso a partir do tipo de Map, daí o "?? ""` (nunca de fato
+    // alcançado).
     return Array.from(byTarget.entries()).sort(
       ([, a], [, b]) =>
-        new Date(b[0].created_at).getTime() - new Date(a[0].created_at).getTime(),
+        new Date(b[0]?.created_at ?? "").getTime() - new Date(a[0]?.created_at ?? "").getTime(),
     );
   }, [filtered, groupByTarget]);
 

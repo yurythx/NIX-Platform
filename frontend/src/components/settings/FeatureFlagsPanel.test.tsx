@@ -67,7 +67,7 @@ describe("FeatureFlagsPanel", () => {
     await user.click(screen.getByRole("switch"));
     expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
 
-    const [path, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [path, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
     expect(path).toBe("/api/backend/v1/admin/feature-flags/scanning_noise_filter_enabled");
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body as string)).toEqual({ enabled: true });

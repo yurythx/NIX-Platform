@@ -27,6 +27,17 @@ beforeEach(() => {
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 });
 
+// firstSocket: todo teste abaixo só chama isto depois de um
+// vi.waitFor(() => instances tem length 1/2) — a instância sempre
+// existe na prática, mas o tipo de array indexado (noUncheckedIndexedAccess)
+// não carrega essa garantia. Lança um erro claro em vez de um "possibly
+// undefined" silenciado, caso essa invariante um dia deixe de valer.
+function firstSocket(): FakeWebSocket {
+  const socket = FakeWebSocket.instances[0];
+  if (!socket) throw new Error("no FakeWebSocket instance connected yet");
+  return socket;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -55,7 +66,7 @@ describe("NotificationClient", () => {
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
 
     expect(getTicket).toHaveBeenCalledOnce();
-    expect(FakeWebSocket.instances[0].url).toBe("ws://localhost:8000/ws?ticket=ticket-abc");
+    expect(firstSocket().url).toBe("ws://localhost:8000/ws?ticket=ticket-abc");
   });
 
   it("forwards a well-formed message and drops a malformed one", async () => {
@@ -68,13 +79,13 @@ describe("NotificationClient", () => {
 
     client.connect();
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const socket = FakeWebSocket.instances[0];
+    const socket = firstSocket();
 
     socket.onmessage?.({ data: "not valid json" });
     socket.onmessage?.({ data: validEnvelope });
 
     expect(onMessage).toHaveBeenCalledOnce();
-    expect(onMessage.mock.calls[0][0].type).toBe("notification.created");
+    expect(onMessage.mock.calls[0]?.[0].type).toBe("notification.created");
   });
 
   it("reports connection state transitions", async () => {
@@ -90,7 +101,7 @@ describe("NotificationClient", () => {
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     expect(onStateChange).toHaveBeenCalledWith("connecting");
 
-    FakeWebSocket.instances[0].onopen?.();
+    firstSocket().onopen?.();
     expect(onStateChange).toHaveBeenCalledWith("open");
   });
 
@@ -110,7 +121,7 @@ describe("NotificationClient", () => {
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     expect(getTicket).toHaveBeenCalledTimes(1);
 
-    FakeWebSocket.instances[0].onclose?.();
+    firstSocket().onclose?.();
 
     await vi.advanceTimersByTimeAsync(1000);
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
@@ -133,7 +144,7 @@ describe("NotificationClient", () => {
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
 
     client.disconnect();
-    expect(FakeWebSocket.instances[0].closeCalls).toBe(1);
+    expect(firstSocket().closeCalls).toBe(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(FakeWebSocket.instances).toHaveLength(1);
