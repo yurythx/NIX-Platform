@@ -30,9 +30,26 @@ const (
 // validTransitions enumera toda aresta Status -> Status permitida. É o
 // mapa que codifica a regra de negócio "que mudanças de estado um job pode
 // sofrer" — qualquer transição fora daqui é rejeitada por CanTransition.
+//
+// StatusDeadLetter alcançável a partir de QUALQUER estado não-terminal
+// (Queued/Processing/Failed), não só Failed — achado real (validação do
+// scanner OWASP ZAP contra um alvo de verdade, §92): o RabbitMQ pode
+// fechar o canal de um consumidor e redistribuir nativamente uma entrega
+// ainda sem ack (consumer_timeout, ver deploy/rabbitmq.conf) enquanto o
+// handler original de fato ainda está processando — a redelivery
+// concorrente esgota suas próprias tentativas de retry e tenta desistir
+// (MarkDeadLetter) num job cujo último status gravado ainda é
+// "processing" (o handler original, legítimo). Antes desta mudança, essa
+// chamada também era rejeitada — o job ficava PRESO pra sempre em
+// "processing", sem nenhum estado terminal nunca registrado.
+// HandleScanDeadLetter (scanning/application/service.go) já documentava
+// essa possibilidade ("job nunca passou por MarkFailed antes de ser dado
+// como esgotado") mas o mapa de transições não cobria o caso — dead-letter
+// é sempre uma desistência ADMINISTRATIVA definitiva, por isso precisa ser
+// alcançável de qualquer estado que ainda não seja terminal.
 var validTransitions = map[Status][]Status{
-	StatusQueued:     {StatusProcessing},
-	StatusProcessing: {StatusCompleted, StatusFailed},
+	StatusQueued:     {StatusProcessing, StatusDeadLetter},
+	StatusProcessing: {StatusCompleted, StatusFailed, StatusDeadLetter},
 	StatusFailed:     {StatusProcessing, StatusDeadLetter}, // uma redelivery com retry volta a processar; retries esgotados vão para dead-letter
 	StatusCompleted:  {},
 	StatusDeadLetter: {},

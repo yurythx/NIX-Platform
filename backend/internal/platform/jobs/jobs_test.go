@@ -39,6 +39,13 @@ func TestCanTransition(t *testing.T) {
 		{StatusFailed, StatusDeadLetter, true},
 		{StatusCompleted, StatusProcessing, false},
 		{StatusDeadLetter, StatusProcessing, false},
+		// dead_letter é uma desistência ADMINISTRATIVA — precisa ser
+		// alcançável de qualquer estado ainda não-terminal (§92, achado
+		// real: consumer_timeout do RabbitMQ redistribuindo nativamente
+		// uma entrega ainda em processamento legítimo — ver
+		// deploy/rabbitmq.conf), não só a partir de "failed".
+		{StatusQueued, StatusDeadLetter, true},
+		{StatusProcessing, StatusDeadLetter, true},
 	}
 	for _, tc := range cases {
 		if got := CanTransition(tc.from, tc.to); got != tc.want {
@@ -127,6 +134,58 @@ func TestRepository_RejectsInvalidTransition(t *testing.T) {
 	_ = tx.Rollback(ctx)
 	if err == nil {
 		t.Fatal("expected MarkCompleted from queued to fail")
+	}
+}
+
+// TestRepository_MarkDeadLetter_FromProcessing_Succeeds: bug real
+// encontrado validando o scanner OWASP ZAP contra um alvo de verdade —
+// antes desta correção, MarkDeadLetter chamado sobre um job cujo último
+// status gravado ainda era "processing" (uma redelivery concorrente do
+// RabbitMQ, causada por consumer_timeout colidindo com um handler
+// legitimamente longo — ver deploy/rabbitmq.conf) era rejeitado por
+// CanTransition, e o job ficava PRESO pra sempre em "processing", sem
+// nenhum estado terminal jamais registrado — nem mesmo a desistência.
+func TestRepository_MarkDeadLetter_FromProcessing_Succeeds(t *testing.T) {
+	pool := testPool(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+
+	job, err := New("test.job", uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := repo.Create(ctx, tx, job); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.MarkProcessing(ctx, tx, job.ID); err != nil {
+		t.Fatalf("MarkProcessing: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	tx, err = pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := repo.MarkDeadLetter(ctx, tx, job.ID, "timed out, giving up"); err != nil {
+		t.Fatalf("MarkDeadLetter from processing should succeed (dead-letter is always reachable as a final override): %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	fetched, err := repo.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if fetched.Status != StatusDeadLetter {
+		t.Errorf("Status = %s, want dead_letter", fetched.Status)
 	}
 }
 

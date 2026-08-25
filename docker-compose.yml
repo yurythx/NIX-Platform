@@ -52,6 +52,12 @@ services:
       RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST:-nix}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      # consumer_timeout mais generoso que qualquer handler síncrono desta
+      # plataforma (deploy/rabbitmq.conf explica o bug real que o padrão de
+      # 30min do RabbitMQ causou, colidindo com o timeout do scan de ZAP) —
+      # sem isto, o RabbitMQ fecha o canal e redistribui uma entrega ainda
+      # legitimamente em processamento, duplicando o handler.
+      - ./deploy/rabbitmq.conf:/etc/rabbitmq/conf.d/consumer_timeout.conf:ro
     networks:
       - nix_internal
     # Neither the AMQP port nor the management UI is published externally
