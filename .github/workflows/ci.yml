@@ -48,9 +48,9 @@ jobs:
         working-directory: backend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.27"
           cache-dependency-path: backend/go.sum
@@ -112,9 +112,9 @@ jobs:
       NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -143,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: docker compose config (validação estrutural)
         run: |
@@ -151,7 +151,7 @@ jobs:
           docker compose config --quiet
 
       - name: Build da imagem backend-api
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./backend
           file: ./backend/Dockerfile.api
@@ -160,7 +160,7 @@ jobs:
           tags: nix-platform/backend-api:ci
 
       - name: Build da imagem backend-worker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./backend
           file: ./backend/Dockerfile.worker
@@ -169,7 +169,7 @@ jobs:
           tags: nix-platform/backend-worker:ci
 
       - name: Build da imagem frontend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
@@ -186,21 +186,21 @@ jobs:
       # govulncheck/npm audit acima (que só olham o código-fonte/deps
       # declaradas, não a imagem OCI resultante com todas as camadas).
       - name: Escaneia a imagem backend-api (Trivy)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: nix-platform/backend-api:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem backend-worker (Trivy)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: nix-platform/backend-worker:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem frontend (Trivy)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: nix-platform/frontend:ci
           severity: "HIGH,CRITICAL"
@@ -219,9 +219,9 @@ jobs:
     name: nix-secscan (CLI unificado)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.27"
           cache-dependency-path: backend/go.sum
