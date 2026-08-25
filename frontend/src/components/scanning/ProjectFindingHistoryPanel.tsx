@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@/components/ui/Table";
-import { apiClient, ApiError } from "@/lib/api/client";
+import { ApiError, useApiQuery } from "@/lib/api/swr";
 import type { ProjectFindingHistory } from "@/types/api";
 
 import { SeverityBadge } from "./SeverityBadge";
@@ -17,29 +15,24 @@ import { SeverityBadge } from "./SeverityBadge";
 // quando o card expande — ver ProjectCard), nunca no carregamento inicial
 // de /seguranca: a maioria dos projetos não vai ter esse painel aberto na
 // maior parte do tempo.
+//
+// useApiQuery (SWR, § auditoria 2026-08) em vez de useEffect+useState
+// manual: reabrir o mesmo card duas vezes na mesma sessão reaproveita o
+// cache em vez de refazer a requisição, e o dedupe automático cobre o
+// caso de dois cards do mesmo projeto abertos quase juntos.
 export function ProjectFindingHistoryPanel({ projectId }: { projectId: string }) {
-  const [history, setHistory] = useState<ProjectFindingHistory[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: history, error: swrError } = useApiQuery<ProjectFindingHistory[]>(
+    `v1/scanning/projects/${projectId}/findings-history`,
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-    apiClient
-      .get<ProjectFindingHistory[]>(`v1/scanning/projects/${projectId}/findings-history`)
-      .then(({ data }) => {
-        if (!cancelled) setHistory(data);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : "Falha ao carregar o histórico");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId]);
-
-  if (error) {
-    return <p className="text-sm text-danger">{error}</p>;
+  if (swrError) {
+    return (
+      <p className="text-sm text-danger">
+        {swrError instanceof ApiError ? swrError.message : "Falha ao carregar o histórico"}
+      </p>
+    );
   }
-  if (history === null) {
+  if (history === undefined) {
     return <p className="text-sm text-muted">Carregando histórico…</p>;
   }
   if (history.length === 0) {
