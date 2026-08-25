@@ -3,6 +3,22 @@
 # não substitui o CI (que continua validando cada PR), mas garante que
 # dependências desatualizadas/vulneráveis não fiquem esquecidas
 # indefinidamente só porque ninguém mexeu no código que as usa.
+#
+# `cooldown` em toda entrada abaixo (achado real do próprio `nix-secscan`
+# rodando contra este repositório, Fase 8 do roadmap de segurança — nunca
+# corrigido até agora): sem ele, o Dependabot abre PR pra uma versão nova
+# no minuto em que ela é publicada, inclusive pra uma release
+# maliciosa/comprometida recém-lançada (o cenário clássico de
+# supply-chain: o pacote legítimo é sequestrado, uma versão nova sai, e
+# quem atualiza rápido demais é quem mais se expõe — a comunidade
+# normalmente já sinalizou/removeu o pacote malicioso dentro de poucos
+# dias). `default-days` dá essa quarentena antes de qualquer PR ser
+# aberto; `semver-major-days` é maior porque um major também costuma
+# trazer breaking changes que merecem a mesma folga pra a
+# documentação/changelog amadurecer antes da revisão manual. Repetido em
+# cada `updates[]` (em vez de um YAML anchor) porque o parser do
+# Dependabot valida contra um schema próprio, não um YAML genérico — não
+# há garantia documentada de que `<<: *anchor` seja suportado.
 version: 2
 updates:
   - package-ecosystem: "gomod"
@@ -16,6 +32,9 @@ updates:
       go-dependencies:
         patterns:
           - "*"
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
 
   - package-ecosystem: "npm"
     directory: "/frontend"
@@ -36,6 +55,9 @@ updates:
           - "next"
           - "react"
           - "react-dom"
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
 
   - package-ecosystem: "docker"
     directory: "/backend"
@@ -43,6 +65,9 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "deps(docker)"
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
 
   - package-ecosystem: "docker"
     directory: "/frontend"
@@ -50,6 +75,9 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "deps(docker)"
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -57,3 +85,6 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "deps(ci)"
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
