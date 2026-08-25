@@ -83,11 +83,22 @@ export function DashboardShell({
             manualmente: pt-14 pela altura da Topbar (sempre presente,
             mobile incluso), pl-16/pl-60 pela largura da Sidebar SÓ no
             desktop (md:), já que no mobile ela fica off-canvas e não
-            ocupa espaço nenhum na página. */}
+            ocupa espaço nenhum na página.
+
+            pt-20/pl-20/pl-64 (em vez de pt-14/pl-16/pl-60 puros — §
+            auditoria de layout 2026-08, "muito colado na barra lateral e
+            na barra superior"): esses três valores são o mínimo pra não
+            ficar ESCONDIDO atrás da Topbar/Sidebar, mas isso sozinho
+            deixa o conteúdo exatamente encostado na borda das duas, sem
+            respiro nenhum. O gutter (1rem a mais em cada lado fixo, 1.5rem
+            no topo) fica só neste <main> — não em cada página
+            individualmente — porque toda rota protegida herda o mesmo
+            espaçamento em relação ao chrome fixo automaticamente, sem
+            repetir a folga em cada page.tsx. */}
         <main
           id="main-content"
-          className={`min-h-screen overflow-x-auto pt-14 px-4 pb-4 transition-[padding] duration-200 sm:px-6 sm:pb-6
-            ${collapsed ? "md:pl-16" : "md:pl-60"}`}
+          className={`min-h-screen overflow-x-auto pt-20 px-4 pb-4 transition-[padding] duration-200 sm:px-6 sm:pb-6
+            ${collapsed ? "md:pl-20" : "md:pl-64"}`}
         >
           {children}
         </main>
