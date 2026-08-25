@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type KeyboardEvent } from "react";
+import { useMemo, useState, type KeyboardEvent } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -10,9 +10,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } fro
 import { useToast } from "@/components/notifications/ToastProvider";
 import { buildAIPrompt } from "@/lib/scanning/aiPrompt";
 import { remediationFor } from "@/lib/scanning/remediation";
-import type { ScanFinding } from "@/types/api";
+import { scannerMeta } from "@/lib/scanning/scannerRegistry";
+import type { ScanFinding, ScanSeverity } from "@/types/api";
 
 import { SeverityBadge } from "./SeverityBadge";
+
+// Ordem de exibição dos filtros de severidade — sempre da mais grave pra
+// menos grave, igual à ordem que qualquer painel de segurança (inclusive
+// o do GitGuard, referência pedida pelo usuário) usa.
+const SEVERITY_ORDER: ScanSeverity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 
 // FindingsTable: pedido do usuário de "poder clicar [nos achados] de
 // forma individual e ver os detalhes de cada erro" — cada linha abre um
@@ -26,6 +32,20 @@ import { SeverityBadge } from "./SeverityBadge";
 // (/seguranca/[scanId]) — só faz sentido na visão AGREGADA de
 // /seguranca (achados de todos os scans misturados); a própria página de
 // um scan específico já é essa página, então passa showScanLink={false}.
+//
+// § Filtro de achados (pedido do usuário — "igual ao que o GitGuard
+// usa"): o mockup do GitGuard mostra achados agrupados por repositório,
+// com selo de severidade (Crítico/Alto/Médio/Baixo) e uma aba "Achados
+// abertos" com contagem. NIX não tem um conceito de "aberto/resolvido"
+// no nível agregado (só por projeto, via still_present do histórico
+// deduplicado — ProjectFindingHistoryPanel) — o que dá pra replicar de
+// verdade, com os dados que o backend já expõe, é: filtro por severidade
+// (com contagem por selo, como as abas do GitGuard) + filtro por
+// ferramenta + busca livre, e — só na visão agregada (showScanLink) —
+// um agrupamento opcional por alvo, espelhando o agrupamento por
+// repositório do GitGuard. Nenhum desses filtros chama a API de novo:
+// tudo client-side sobre a lista já carregada, sem re-fetch a cada
+// clique.
 export function FindingsTable({
   findings,
   showScanLink = false,
@@ -34,6 +54,10 @@ export function FindingsTable({
   showScanLink?: boolean;
 }) {
   const [selected, setSelected] = useState<ScanFinding | null>(null);
+  const [severityFilter, setSeverityFilter] = useState<Set<ScanSeverity>>(new Set());
+  const [scannerFilter, setScannerFilter] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [groupByTarget, setGroupByTarget] = useState(false);
   const { showToast } = useToast();
 
   async function copyAIPrompt(finding: ScanFinding) {
@@ -43,6 +67,70 @@ export function FindingsTable({
     } catch {
       showToast({ title: "Não foi possível copiar", tone: "danger" });
     }
+  }
+
+  // severityCounts/availableScanners: calculados sobre TODOS os achados
+  // (nunca sobre o resultado já filtrado) — os selos de contagem
+  // continuam mostrando "quantos existem no total", não "quantos sobram
+  // depois do filtro atual", mesmo princípio das abas com contador do
+  // GitGuard (a aba em si não desaparece só porque outro filtro reduziu a
+  // lista visível).
+  const severityCounts = useMemo(() => {
+    const counts: Record<ScanSeverity, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+    for (const f of findings) counts[f.severity] += 1;
+    return counts;
+  }, [findings]);
+
+  const availableScanners = useMemo(
+    () => Array.from(new Set(findings.map((f) => f.scanner))).sort(),
+    [findings],
+  );
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return findings.filter((f) => {
+      if (severityFilter.size > 0 && !severityFilter.has(f.severity)) return false;
+      if (scannerFilter.size > 0 && !scannerFilter.has(f.scanner)) return false;
+      if (term) {
+        const haystack = `${f.finding_id} ${f.description} ${f.file} ${f.owasp_category} ${f.target}`.toLowerCase();
+        if (!haystack.includes(term)) return false;
+      }
+      return true;
+    });
+  }, [findings, severityFilter, scannerFilter, search]);
+
+  const groups = useMemo(() => {
+    if (!groupByTarget) return null;
+    const byTarget = new Map<string, ScanFinding[]>();
+    for (const f of filtered) {
+      const list = byTarget.get(f.target) ?? [];
+      list.push(f);
+      byTarget.set(f.target, list);
+    }
+    // Alvo com o achado mais recente primeiro — mesma convenção de
+    // recência que ScanList/ScanCard já usam em toda a plataforma.
+    return Array.from(byTarget.entries()).sort(
+      ([, a], [, b]) =>
+        new Date(b[0].created_at).getTime() - new Date(a[0].created_at).getTime(),
+    );
+  }, [filtered, groupByTarget]);
+
+  function toggleSeverity(s: ScanSeverity) {
+    setSeverityFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+  }
+
+  function toggleScanner(s: string) {
+    setScannerFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
   }
 
   if (findings.length === 0) {
@@ -61,51 +149,155 @@ export function FindingsTable({
     }
   }
 
+  function renderRows(list: ScanFinding[]) {
+    return list.map((finding) => (
+      <TableRow
+        key={finding.id}
+        onClick={() => setSelected(finding)}
+        onKeyDown={(e) => handleRowKeyDown(e, finding)}
+        role="button"
+        tabIndex={0}
+        aria-label={`Ver detalhes do achado ${finding.finding_id}`}
+        className="cursor-pointer hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary dark:hover:bg-white/5"
+      >
+        <TableCell>
+          <SeverityBadge severity={finding.severity} />
+        </TableCell>
+        <TableCell>
+          <div className="font-medium text-foreground">{finding.finding_id}</div>
+          <div className="max-w-md truncate text-muted" title={finding.description}>
+            {finding.description}
+          </div>
+        </TableCell>
+        <TableCell className="text-muted">{finding.owasp_category || "—"}</TableCell>
+        <TableCell className="text-muted">{finding.scanner}</TableCell>
+        <TableCell className="text-muted">
+          {finding.file ? (finding.line > 0 ? `${finding.file}:${finding.line}` : finding.file) : "—"}
+        </TableCell>
+        <TableCell className="whitespace-nowrap text-muted">
+          {new Date(finding.created_at).toLocaleString()}
+        </TableCell>
+      </TableRow>
+    ));
+  }
+
+  const columnHeaders = (
+    <TableHead>
+      <TableRow>
+        <TableHeaderCell>Severidade</TableHeaderCell>
+        <TableHeaderCell>Achado</TableHeaderCell>
+        <TableHeaderCell>Categoria OWASP</TableHeaderCell>
+        <TableHeaderCell>Scanner</TableHeaderCell>
+        <TableHeaderCell>Local</TableHeaderCell>
+        <TableHeaderCell>Quando</TableHeaderCell>
+      </TableRow>
+    </TableHead>
+  );
+
   return (
     <>
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableHeaderCell>Severidade</TableHeaderCell>
-            <TableHeaderCell>Achado</TableHeaderCell>
-            <TableHeaderCell>Categoria OWASP</TableHeaderCell>
-            <TableHeaderCell>Scanner</TableHeaderCell>
-            <TableHeaderCell>Local</TableHeaderCell>
-            <TableHeaderCell>Quando</TableHeaderCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {findings.map((finding) => (
-            <TableRow
-              key={finding.id}
-              onClick={() => setSelected(finding)}
-              onKeyDown={(e) => handleRowKeyDown(e, finding)}
-              role="button"
-              tabIndex={0}
-              aria-label={`Ver detalhes do achado ${finding.finding_id}`}
-              className="cursor-pointer hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary dark:hover:bg-white/5"
-            >
-              <TableCell>
-                <SeverityBadge severity={finding.severity} />
-              </TableCell>
-              <TableCell>
-                <div className="font-medium text-foreground">{finding.finding_id}</div>
-                <div className="max-w-md truncate text-muted" title={finding.description}>
-                  {finding.description}
-                </div>
-              </TableCell>
-              <TableCell className="text-muted">{finding.owasp_category || "—"}</TableCell>
-              <TableCell className="text-muted">{finding.scanner}</TableCell>
-              <TableCell className="text-muted">
-                {finding.file ? (finding.line > 0 ? `${finding.file}:${finding.line}` : finding.file) : "—"}
-              </TableCell>
-              <TableCell className="whitespace-nowrap text-muted">
-                {new Date(finding.created_at).toLocaleString()}
-              </TableCell>
-            </TableRow>
+      <div className="mb-4 flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {SEVERITY_ORDER.map((sev) => {
+            const count = severityCounts[sev];
+            const active = severityFilter.has(sev);
+            if (count === 0) return null;
+            return (
+              <button
+                key={sev}
+                type="button"
+                aria-pressed={active}
+                aria-label={`Filtrar por severidade ${sev} (${count})`}
+                onClick={() => toggleSeverity(sev)}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+                  active
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-surface-border bg-surface text-muted hover:text-foreground"
+                }`}
+              >
+                {sev}
+                <span className={active ? "text-primary" : "text-muted"}>{count}</span>
+              </button>
+            );
+          })}
+
+          {availableScanners.length > 1 &&
+            availableScanners.map((key) => {
+              const active = scannerFilter.has(key);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => toggleScanner(key)}
+                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+                    active
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-surface-border bg-surface text-muted hover:text-foreground"
+                  }`}
+                >
+                  {scannerMeta(key).name}
+                </button>
+              );
+            })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por ID, descrição, arquivo ou categoria…"
+            aria-label="Buscar achados"
+            className="min-w-0 flex-1 rounded-md border border-surface-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary sm:max-w-xs"
+          />
+          {showScanLink && (
+            <label className="flex items-center gap-1.5 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={groupByTarget}
+                onChange={(e) => setGroupByTarget(e.target.checked)}
+                className="accent-primary"
+              />
+              Agrupar por alvo
+            </label>
+          )}
+          <span className="text-xs text-muted">
+            {filtered.length} de {findings.length} achado{findings.length === 1 ? "" : "s"}
+          </span>
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState
+          title="Nenhum achado corresponde aos filtros"
+          description="Ajuste ou limpe os filtros de severidade/ferramenta/busca acima pra ver os achados de novo."
+        />
+      ) : groups ? (
+        <div className="flex flex-col gap-4">
+          {groups.map(([target, groupFindings]) => (
+            <div key={target}>
+              <div className="mb-2 flex items-center gap-2">
+                <span className="truncate text-sm font-medium text-foreground" title={target}>
+                  {target}
+                </span>
+                <span className="shrink-0 text-xs text-muted">
+                  {groupFindings.length} achado{groupFindings.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <Table>
+                {columnHeaders}
+                <TableBody>{renderRows(groupFindings)}</TableBody>
+              </Table>
+            </div>
           ))}
-        </TableBody>
-      </Table>
+        </div>
+      ) : (
+        <Table>
+          {columnHeaders}
+          <TableBody>{renderRows(filtered)}</TableBody>
+        </Table>
+      )}
 
       <Dialog
         open={selected !== null}
