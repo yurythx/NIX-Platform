@@ -9,14 +9,11 @@
   abaixo. **Fases 10-13 (Projeto + upload .zip; Gitleaks + Syft; snippet + deduplicação; filtro de
   ruído + prompt de IA) TODAS implementadas e verificadas ao vivo — a extensão inteira está
   completa.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
-  container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks e Syft migrados e
-  verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`/`syft-scanner`, volume
-  compartilhado `scanning_workspace`); Semgrep migrado seguindo o mesmo desenho (sidecar
-  `semgrep-scanner`, `cmd/semgrep-sidecar`) mas **ainda não verificado ao vivo** — implementado e
-  coberto por teste (`go build`/`go vet`/`go test` passam), sem Docker disponível na sessão em que
-  foi escrito para de fato subir os containers e rodar um scan de ponta a ponta contra eles, ao
-  contrário de todo outro item marcado "verificado ao vivo" neste documento; confirmar com `docker
-  compose up --build` + um scan real antes de considerar equivalente a Trivy/Gitleaks/Syft. Só
+  container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks, Syft e agora
+  Semgrep migrados e **verificados ao vivo** (sidecars `trivy-scanner`/`gitleaks-scanner`/
+  `syft-scanner`/`semgrep-scanner`, volume compartilhado `scanning_workspace`) — um scan real com os
+  4 simultâneos contra `OWASP/NodeGoat` completou com sucesso total (86/3/0/21 achados
+  respectivamente; ver Fase 11/Containerização abaixo para o achado real de um scan). Só
   sonar-scanner CLI ainda roda dentro do worker depois disso — o SERVIDOR SonarQube já é seu próprio
   container desde a Fase 5, só o CLI que faz upload segue de fora deste padrão.
 - **Nota de manutenção:** `scanning/application/service.go` foi dividido em `service.go` (núcleo —
@@ -509,12 +506,12 @@ vez disso o desenho abaixo, que nunca dá ao worker acesso ao Docker em si.
   qualquer chamada ao sidecar) continua chegando íntegra até a UI.
 - Imagem do `backend-worker` caiu de ~982MB pra bem menos sem o binário do trivy (na época,
   ainda carregava semgrep+sonar-scanner+JRE — o semgrep também saiu depois, ver mais abaixo);
-  `trivy-scanner` como imagem própria fica em ~243MB, só o necessário pro Trivy rodar. O tamanho
-  do worker sem o runtime Python do semgrep e da imagem `semgrep-scanner` isolada ainda não foram
-  medidos contra uma imagem construída de verdade (sem Docker disponível na sessão em que essa
-  migração foi escrita) — só a expectativa qualitativa (o worker deveria cair bastante, já que era
-  o runtime Python completo do semgrep o maior contribuinte pro salto de ~150MB pra ~916MB
-  registrado na Fase 4).
+  `trivy-scanner` como imagem própria fica em ~243MB, só o necessário pro Trivy rodar. **Medido ao
+  vivo** depois de extrair também o semgrep (sessão seguinte, com Docker disponível): `backend-worker`
+  em **348MB** (só git + sonar-scanner CLI + JRE agora — o próximo e último candidato a sair, ver
+  abaixo) e `semgrep-scanner` isolado em **658MB**, quase todo runtime Python do próprio semgrep
+  (esperado — era o maior contribuinte pro salto de ~150MB pra ~916MB do worker já registrado na
+  Fase 4; isolar num container próprio não reduz esse peso, só tira do worker principal).
 
 **Gitleaks e Syft (Fase 11) já nasceram seguindo este mesmo desenho**, sem precisar de uma migração
 posterior: `cmd/gitleaks-sidecar`/`Dockerfile.gitleaks-sidecar`/serviço `gitleaks-scanner` e
@@ -531,9 +528,22 @@ scanRemote de Trivy/Gitleaks, mesmo UID/GID fixo (`10001`), mesma validação de
 `/workspace`. Única diferença real de contrato: o corpo da requisição HTTP também carrega
 `config` (o ruleset do Semgrep Registry) — Trivy/Gitleaks/Syft têm argumentos fixos no sidecar, o
 Semgrep não, então o ruleset continua decidido pelo worker (`SCANNING_SEMGREP_CONFIG`) a cada
-chamada, em vez de fixado na imagem do sidecar. **Implementado mas não verificado ao vivo** (ver
-nota no topo deste documento) — `go build`/`go vet`/`go test` passam, sem Docker disponível na
-sessão em que foi escrito pra confirmar um scan de ponta a ponta contra os containers de verdade.
+chamada, em vez de fixado na imagem do sidecar.
+
+**✅ Verificado ao vivo** (sessão seguinte, com Docker disponível): as 5 imagens (`semgrep-scanner`
++ `backend-worker`/`backend-api` reconstruídos) buildaram limpo; os 4 sidecars (`trivy-scanner`,
+`gitleaks-scanner`, `syft-scanner`, `semgrep-scanner`) subiram saudáveis. Um scan real via
+`POST /api/v1/scanning/scans` (login local, `admin`/`Admin123!`) contra `OWASP/NodeGoat` com os 4
+scanners simultâneos completou com sucesso total — `trivy`: 86 achados (o MESMO número já
+registrado na Fase 3/Containerização original, confirmando que a migração do Semgrep não teve
+efeito colateral nenhum nos outros três), `gitleaks`: 3, `syft`: 0 achados de vulnerabilidade (SBOM
+puro, esperado — `Execute` do Syft é sempre no-op), `semgrep`: **21 achados reais**, incluindo
+`javascript.lang.security.audit.code-string-concat.code-string-concat` (A03:2021-Injection,
+`app/routes/contributions.js`, `eval(req.body.preTax)`) com snippet/fingerprint/link pro Semgrep
+Registry corretos na resposta da API. Isso também confirmou, na prática, o bug do parágrafo acima
+sobre `docker-compose.yml` nunca injetar `SCANNING_*_SERVICE_URL`/`SCANNING_WORKSPACE_DIR`: antes
+da correção, um `docker compose up` do zero teria os 4 sidecars saudáveis mas o worker reportando
+todos os 4 scanners como indisponíveis.
 
 **Ainda não migrado pro mesmo padrão** (trabalho futuro): o `sonar-scanner` CLI em si
 (`sonar_scanner.go` — o SERVIDOR SonarQube já é seu próprio container desde a Fase 5, só o CLI que
