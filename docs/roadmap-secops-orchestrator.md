@@ -9,13 +9,17 @@
   abaixo. **Fases 10-13 (Projeto + upload .zip; Gitleaks + Syft; snippet + deduplicação; filtro de
   ruído + prompt de IA) TODAS implementadas e verificadas ao vivo — a extensão inteira está
   completa.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
-  container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks, Syft e agora
-  Semgrep migrados e **verificados ao vivo** (sidecars `trivy-scanner`/`gitleaks-scanner`/
-  `syft-scanner`/`semgrep-scanner`, volume compartilhado `scanning_workspace`) — um scan real com os
-  4 simultâneos contra `OWASP/NodeGoat` completou com sucesso total (86/3/0/21 achados
-  respectivamente; ver Fase 11/Containerização abaixo para o achado real de um scan). Só
-  sonar-scanner CLI ainda roda dentro do worker depois disso — o SERVIDOR SonarQube já é seu próprio
-  container desde a Fase 5, só o CLI que faz upload segue de fora deste padrão.
+  container, como o GitGuard) está **✅ completa**: Trivy, Gitleaks, Syft, Semgrep e agora
+  sonar-scanner CLI migrados e **verificados ao vivo** (sidecars `trivy-scanner`/`gitleaks-scanner`/
+  `syft-scanner`/`semgrep-scanner`/`sonar-scanner-cli`, volume compartilhado `scanning_workspace`) —
+  um scan real com os 4 primeiros simultâneos contra `OWASP/NodeGoat` completou com sucesso total
+  (86/3/0/21 achados respectivamente), e um scan separado com `sonar-scanner-cli` contra o mesmo
+  alvo completou com **112 achados reais** depois de um achado real corrigido na primeira tentativa
+  (ver "sonar-scanner-cli" abaixo, na seção Containerização: os analisadores SonarJS/TS do
+  sonar-scanner precisam de um runtime Node.js próprio, não documentado pela SonarSource como
+  dependência do CLI — a imagem original também nunca o teve). O SERVIDOR
+  SonarQube já era seu próprio container desde a Fase 5 — agora o CLI que faz upload também é.
+  `backend-worker` não carrega mais runtime de scanner nenhum: só `git` + o binário Go do worker.
 - **Nota de manutenção:** `scanning/application/service.go` foi dividido em `service.go` (núcleo —
   `Service`/`NewService`), `scans.go`, `findings.go` e `projects.go` depois de passar de 1400
   linhas — as referências a `application/service.go` no restante deste documento descrevem o
@@ -504,14 +508,17 @@ vez disso o desenho abaixo, que nunca dá ao worker acesso ao Docker em si.
   de que a migração não mudou nenhum resultado, só onde o binário roda. O caminho de erro também
   verificado (alvo inexistente) — a mensagem real do `git clone` (capturada no worker, antes de
   qualquer chamada ao sidecar) continua chegando íntegra até a UI.
-- Imagem do `backend-worker` caiu de ~982MB pra bem menos sem o binário do trivy (na época,
-  ainda carregava semgrep+sonar-scanner+JRE — o semgrep também saiu depois, ver mais abaixo);
-  `trivy-scanner` como imagem própria fica em ~243MB, só o necessário pro Trivy rodar. **Medido ao
-  vivo** depois de extrair também o semgrep (sessão seguinte, com Docker disponível): `backend-worker`
-  em **348MB** (só git + sonar-scanner CLI + JRE agora — o próximo e último candidato a sair, ver
-  abaixo) e `semgrep-scanner` isolado em **658MB**, quase todo runtime Python do próprio semgrep
-  (esperado — era o maior contribuinte pro salto de ~150MB pra ~916MB do worker já registrado na
-  Fase 4; isolar num container próprio não reduz esse peso, só tira do worker principal).
+- Imagem do `backend-worker` caiu de ~982MB pra bem menos sem o binário do trivy (na época, ainda
+  carregava semgrep+sonar-scanner+JRE). **Medido ao vivo** (sessão que containerizou
+  Semgrep+sonar-scanner CLI, com Docker disponível), tamanhos finais de todas as imagens de
+  scanning: `backend-worker` **62.5MB** (só `git` + o binário Go do worker — nenhum runtime de
+  scanner a mais, depois de extrair também o sonar-scanner CLI, o último a sair), `trivy-scanner`
+  **243MB**, `syft-scanner` **139MB**, `gitleaks-scanner` **53.8MB**, `semgrep-scanner` **658MB**
+  (quase todo runtime Python do próprio semgrep — esperado, era o maior contribuinte pro salto de
+  ~150MB pra ~916MB do worker já registrado na Fase 4; isolar num container próprio não reduz esse
+  peso, só tira do worker principal) e `sonar-scanner-cli` **385MB** (JRE + a JAR do scanner +
+  Node.js, ver achado real na seção "sonar-scanner-cli" abaixo). `backend-api`, que nunca carregou
+  nenhum runtime de scanner, continua em ~46MB.
 
 **Gitleaks e Syft (Fase 11) já nasceram seguindo este mesmo desenho**, sem precisar de uma migração
 posterior: `cmd/gitleaks-sidecar`/`Dockerfile.gitleaks-sidecar`/serviço `gitleaks-scanner` e
@@ -545,11 +552,51 @@ sobre `docker-compose.yml` nunca injetar `SCANNING_*_SERVICE_URL`/`SCANNING_WORK
 da correção, um `docker compose up` do zero teria os 4 sidecars saudáveis mas o worker reportando
 todos os 4 scanners como indisponíveis.
 
-**Ainda não migrado pro mesmo padrão** (trabalho futuro): o `sonar-scanner` CLI em si
-(`sonar_scanner.go` — o SERVIDOR SonarQube já é seu próprio container desde a Fase 5, só o CLI que
-faz upload ainda roda dentro do worker). Syft (Fase 11, sidecar `syft-scanner`) já nasceu seguindo
-este padrão desde o design, sem precisar de uma migração depois — mesmo `Dockerfile`/UID-fixo/
-healthcheck que Trivy/Gitleaks/Semgrep.
+**sonar-scanner CLI migrado pro mesmo padrão** (`sonar_scanner.go`) — último runtime de scanner a
+sair da imagem do `backend-worker`, que a partir desta migração carrega só `git` + o próprio
+binário Go, nenhum runtime de scanner a mais. Diferença estrutural real em relação aos outros
+quatro sidecars (o único motivo de `cmd/sonar-sidecar` não ser uma cópia mecânica deles):
+
+1. **Volume compartilhado em leitura-escrita** (`scanning_workspace:/workspace:rw`, não `:ro`) — o
+   `sonar-scanner` CLI grava `.scannerwork/report-task.txt` DENTRO do próprio diretório clonado
+   como parte de como a ferramenta funciona; Trivy/Gitleaks/Syft/Semgrep só leem o que o worker já
+   clonou e nunca escrevem nada nele.
+2. **O CLI não devolve o resultado da análise** — só faz upload de um relatório e sai (a Compute
+   Engine do servidor processa depois, em segundo plano — mesma assincronia em dois níveis já
+   documentada na Fase 5). O sidecar lê `ceTaskId` de `.scannerwork/report-task.txt` (que ele mesmo
+   escreveu) e devolve como JSON `{"ce_task_id": "..."}`, em vez do JSON nativo de uma ferramenta
+   que os outros quatro sidecars repassam sem reinterpretar — `readReportTask` (que vivia em
+   `sonar_scanner.go`) se mudou pra `cmd/sonar-sidecar/main.go` como `readCETaskID`, já que agora é
+   este processo, não mais o worker, quem tem acesso direto ao arquivo recém-criado.
+   `waitForAnalysis`/`fetchIssues` continuam em `sonar_scanner.go`, falando HTTP direto com o
+   servidor SonarQube de verdade — não são afetados pela containerização do CLI, um passo local
+   anterior a essas duas chamadas.
+3. **host_url/token/project_key viajam no corpo da requisição**, decididos pelo worker a cada
+   chamada — mesmo raciocínio de `config` no semgrep-sidecar.
+4. **Nunca teve um `ExecuteLocal`/`LocalScanner`** (ao contrário de Trivy/Gitleaks/Semgrep): a Fase
+   8 (`cmd/secscan`) já escopava isso fora de propósito — SonarQube sempre exigiu servidor +
+   credenciais, nunca funcionou "local" de qualquer forma. `SonarScannerPath`/
+   `SCANNING_SONAR_SCANNER_PATH` (o caminho de um binário local) removidos do código — ficaram
+   mortos depois desta migração, nenhum caminho os lia mais.
+
+**✅ Verificado ao vivo** (mesma sessão que verificou o Semgrep acima, com Docker disponível): a
+imagem buildou limpo; subiu saudável junto dos outros quatro sidecars, com um SonarQube real
+(`docker-compose.yml`, serviços `sonarqube`/`sonarqube-db`) também de pé. **Achado real na primeira
+tentativa**: o scan falhou com `Cannot run program "node": Exec failed, error: 2 (No such file or
+directory)` — os analisadores SonarJS/TS do sonar-scanner rodam sobre um runtime Node.js próprio
+que o CLI invoca como subprocesso, dependência não documentada explicitamente pela SonarSource
+como requisito do CLI (a imagem original do worker, antes desta containerização, também nunca
+instalou Node.js — só nunca foi testada ao vivo contra um alvo com arquivos `.js`/`.ts`, então isso
+nunca tinha aparecido). Corrigido adicionando `nodejs` ao `Dockerfile.sonar-sidecar`; rebuild +
+novo scan contra `OWASP/NodeGoat` completou com sucesso: **112 achados reais**, incluindo
+`javascript:S1523` (injeção/execução de código dinâmica insegura, CRITICAL,
+`app/routes/contributions.js:32`) e `secrets:S6706` (chave privada commitada, CRITICAL,
+`artifacts/cert/server.key`) — severidade/arquivo/linha/fingerprint corretos na resposta da API,
+`owasp_category` vazio como já esperado (limitação documentada desta versão do SonarQube, ver Fase
+5 acima).
+
+Syft (Fase 11, sidecar `syft-scanner`) já nasceu seguindo este padrão desde o design, sem precisar
+de uma migração depois — mesmo `Dockerfile`/UID-fixo/healthcheck que Trivy/Gitleaks/Semgrep.
 
 ### Fase 10 — Projeto como entidade própria + upload `.zip` — ✅ implementada
 

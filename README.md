@@ -23,10 +23,14 @@ Keycloak (existente, externo) ──OIDC──▶ NIX Platform
                                           └── RabbitMQ (exchange nix.events, filas + DLQs por módulo)
 ```
 
-- **Next.js (App Router, TypeScript, Tailwind)** — o painel. Os Client Components chamam a API Go
-  apenas através de um proxy BFF de mesma origem (`/api/backend/*`), então o token de acesso OIDC
-  nunca chega ao JavaScript executado no navegador. Atualizações em tempo real chegam por um
-  WebSocket autenticado por ticket.
+- **Next.js (App Router, TypeScript, Tailwind, React Compiler)** — o painel. Toda página busca seus
+  dados iniciais num Server Component (direto contra a API Go, server-side); Client Components
+  entram só onde há interação de verdade — formulários, toggles, e os poucos casos que genuinamente
+  precisam revalidar depois do carregamento inicial (polling de status de scan, um painel aberto
+  sob demanda), estes sobre SWR (`lib/api/swr.ts`) para dedupe/cache entre componentes. Todos os
+  Client Components chamam a API Go apenas através de um proxy BFF de mesma origem
+  (`/api/backend/*`), então o token de acesso OIDC nunca chega ao JavaScript executado no navegador.
+  Atualizações em tempo real chegam por um WebSocket autenticado por ticket.
 - **Go** — um único módulo (`backend/go.mod`), três pontos de entrada: `cmd/api` (HTTP + WebSocket),
   `cmd/worker` (consumidores RabbitMQ + publicador do outbox) e `cmd/secscan` (CLI standalone de
   scanning — `nix-secscan scan --repo .`, ver "Roadmap de segurança" abaixo). A regra de negócio
@@ -302,6 +306,11 @@ Os testes do backend se dividem em dois grupos:
   possível usar `style=""`/`<script>` inline sem nonce em nenhum componente (por isso os
   indicadores de status usam classes Tailwind geradas a partir de tokens de cor, nunca `style`
   inline).
+- **Headers de segurança complementares** (`frontend/next.config.ts`, `headers()`): `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` desligando
+  câmera/microfone/geolocalização/USB/pagamento (nenhum usado por este dashboard) e
+  `Strict-Transport-Security` — cada um cobre algo que a CSP não cobre (`frame-ancestors 'none'` na
+  CSP já substitui `X-Frame-Options` pra clickjacking, não repetido aqui).
 - **Logout completo (RP-Initiated Logout)**: o botão "Sair" não apenas limpa a sessão local — ele
   também redireciona o navegador para o endpoint de logout do próprio Keycloak
   (`/api/auth/keycloak-logout-url` monta essa URL usando o `id_token` lido no servidor), então a
@@ -318,10 +327,15 @@ Os testes do backend se dividem em dois grupos:
   comentário na migration para o que fazer nesse caso).
 - **Gestão de segredos via arquivo**: ver a seção [Configuração](#configuração) acima.
 - **Scanning contínuo** (`.github/`): Dependabot atualiza dependências semanalmente
-  (`dependabot.yml`), gitleaks varre todo push/PR em busca de segredos vazados
-  (`workflows/gitleaks.yml`), CodeQL faz análise estática de segurança em Go e TypeScript
-  (`workflows/codeql.yml`), e o job `docker` do CI escaneia as três imagens já construídas com
-  Trivy em busca de CVEs conhecidas.
+  (`dependabot.yml`, com `cooldown` — uma versão nova só vira PR alguns dias depois de publicada,
+  tempo pra uma release comprometida/sequestrada ser sinalizada pela comunidade antes de chegar
+  aqui), gitleaks varre todo push/PR em busca de segredos vazados (`workflows/gitleaks.yml`),
+  CodeQL faz análise estática de segurança em Go e TypeScript (`workflows/codeql.yml`), e o job
+  `docker` do CI escaneia com Trivy as oito imagens já construídas (backend-api, backend-worker,
+  frontend e os cinco sidecars de scanning — `trivy-scanner`/`gitleaks-scanner`/`syft-scanner`/
+  `semgrep-scanner`/`sonar-scanner-cli`) em busca de CVEs conhecidas. Toda `uses:` de Action nos
+  workflows é fixada por commit SHA (comentário com a versão ao lado), não por tag mutável — o
+  Dependabot continua atualizando sozinho (reconhece o formato `@<sha> # vX.Y.Z`).
 - **Criptografia em repouso**: é primariamente uma decisão de infraestrutura, não algo que o
   código da aplicação resolve sozinho. Em produção, use um provedor de PostgreSQL gerenciado com
   criptografia em repouso habilitada por padrão (Amazon RDS, Google Cloud SQL, Azure Database for
