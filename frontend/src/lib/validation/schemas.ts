@@ -38,11 +38,20 @@ export const integrationStatusPayloadSchema = z.object({
 // job_id (scanning.scan.failed, esse sim, carrega job_id — ver
 // jobRefPayload no backend — e por isso continua usando o schema
 // genérico de job).
+// critical_count/high_count (Fase 14 — Maturidade de AppSec, backend
+// scanCompletedPayload): opcionais no schema — .default(0), não
+// .optional() puro — porque um payload de ANTES desta fase (já
+// publicado no outbox, esperando ser entregue quando o backend foi
+// atualizado) não tem essas chaves, e o parser precisa continuar aceitando
+// isso como "0 achados graves", nunca rejeitar a notificação inteira só
+// por faltar um campo novo.
 export const scanCompletedPayloadSchema = z.object({
   scan_id: z.string(),
   scanners: z.array(z.string()),
   target: z.string(),
   findings_count: z.number(),
+  critical_count: z.number().default(0),
+  high_count: z.number().default(0),
 });
 
 /** Faz o parse e valida uma mensagem bruta de WebSocket; retorna null para

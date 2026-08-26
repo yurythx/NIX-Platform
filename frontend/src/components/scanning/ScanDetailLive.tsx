@@ -67,9 +67,24 @@ export function ScanDetailLive({
       {status && <ScanProgress status={status} polling={polling} />}
       {status && (
         <div>
-          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-            Achados por ferramenta
-          </h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Achados por ferramenta
+            </h2>
+            {findings.length > 0 && (
+              // Exportação CSV (Fase 14 — Maturidade de AppSec): link
+              // simples pro proxy BFF, não apiClient — é uma navegação de
+              // download, não uma chamada JSON (ver
+              // app/api/backend/[...path]/route.ts's propagação de
+              // Content-Disposition).
+              <a
+                href={`/api/backend/v1/scanning/scans/${jobId}/findings.csv`}
+                className="text-sm text-primary hover:underline"
+              >
+                Exportar CSV →
+              </a>
+            )}
+          </div>
           <ToolFindingsCards scanId={jobId} status={status} findings={findings} />
         </div>
       )}

@@ -83,4 +83,14 @@ export const apiClient = {
       method: "PATCH",
       body: body !== undefined ? JSON.stringify(body) : undefined,
     }),
+  // put/delete (Fase 14 — Maturidade de AppSec): triar/reabrir um achado
+  // (PUT/DELETE .../findings/{fingerprint}/triage) — os dois primeiros
+  // usos destes verbos neste cliente; mesmo formato de corpo/erro que
+  // post/patch já têm, nada específico de triagem aqui.
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "PUT",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }),
+  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };

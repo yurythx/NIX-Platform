@@ -91,6 +91,12 @@ export interface ScanFinding {
 // GET /api/v1/scanning/projects/{projectID}/findings-history (Fase 12 —
 // deduplicação por fingerprint): UM achado deduplicado ENTRE re-scans do
 // MESMO projeto — "apareceu pela primeira vez em X, ainda presente em Y".
+// TriageStatus (Fase 14 — Maturidade de AppSec): "" é o estado implícito
+// "aberto, nunca triado" — nunca um quarto valor de string solto, sempre
+// um dos três abaixo ou vazio. Mesmos três nomes que
+// domain.TriageStatus usa no backend.
+export type TriageStatus = "" | "false_positive" | "wont_fix" | "risk_accepted";
+
 export interface ProjectFindingHistory {
   fingerprint: string;
   scanner: string;
@@ -104,6 +110,38 @@ export interface ProjectFindingHistory {
   scan_count: number;
   still_present: boolean;
   tool: FindingTool;
+  triage_status: TriageStatus;
+  triage_reason?: string;
+}
+
+// GET /api/v1/scanning/posture (Fase 14 — Maturidade de AppSec) — o card
+// de postura de segurança do dashboard.
+export interface ProjectPosture {
+  project_id: string;
+  project_name: string;
+  open_critical: number;
+  open_high: number;
+}
+
+// PaginationMeta é o formato de "meta" no envelope {data, error, meta} —
+// devolvido por GET /api/v1/scanning/findings desde a Fase 14
+// (Maturidade de AppSec: paginação de verdade, ver
+// internal/domain/pagination.Meta no backend).
+export interface PaginationMeta {
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+}
+
+export interface SecurityPosture {
+  open_critical: number;
+  open_high: number;
+  open_medium: number;
+  open_low: number;
+  triaged_count: number;
+  projects_scanned: number;
+  top_vulnerable: ProjectPosture[];
 }
 
 // GET/POST /api/v1/scanning/projects (Fase 10 — Projeto persistente +

@@ -1,14 +1,14 @@
 import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Section } from "@/components/ui/Section";
-import { FindingsTable } from "@/components/scanning/FindingsTable";
 import { NewProjectForm } from "@/components/scanning/NewProjectForm";
+import { PaginatedFindingsFeed } from "@/components/scanning/PaginatedFindingsFeed";
 import { ProjectCard } from "@/components/scanning/ProjectCard";
 import { ScanList } from "@/components/scanning/ScanList";
 import { TriggerScanForm } from "@/components/scanning/TriggerScanForm";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
-import type { Project, ScanFinding, ScanStatus } from "@/types/api";
+import type { PaginationMeta, Project, ScanFinding, ScanStatus } from "@/types/api";
 
 // Segurança (Fase 9 do roadmap de segurança —
 // docs/roadmap-secops-orchestrator.md): originalmente só um feed de
@@ -38,11 +38,18 @@ export default async function SegurancaPage() {
     scansError = err instanceof ApiError ? err.message : "Falha ao carregar scans recentes";
   }
 
+  // Fase 14 (Maturidade de AppSec): só a PRIMEIRA página é buscada aqui
+  // (Server Component, primeiro paint rápido) — páginas seguintes são
+  // responsabilidade do PaginatedFindingsFeed (Client Component,
+  // "Carregar mais"), que recebe findings/meta já prontos em vez de
+  // buscar tudo de novo.
   let findings: ScanFinding[] = [];
+  let findingsMeta: PaginationMeta | undefined;
   let findingsError: string | null = null;
   try {
-    const { data } = await serverApiGet<ScanFinding[]>("v1/scanning/findings?limit=100");
+    const { data, meta } = await serverApiGet<ScanFinding[]>("v1/scanning/findings?page=1&page_size=50");
     findings = data;
+    findingsMeta = meta as PaginationMeta | undefined;
   } catch (err) {
     findingsError = err instanceof ApiError ? err.message : "Falha ao carregar achados";
   }
@@ -102,7 +109,7 @@ export default async function SegurancaPage() {
         {findingsError ? (
           <ErrorState message={findingsError} />
         ) : (
-          <FindingsTable findings={findings} showScanLink />
+          <PaginatedFindingsFeed initialFindings={findings} initialMeta={findingsMeta} />
         )}
       </Section>
     </div>

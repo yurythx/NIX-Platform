@@ -55,19 +55,24 @@ export function NotificationCenter({
       if (event.type === "scanning.scan.completed") {
         const result = scanCompletedPayloadSchema.safeParse(event.payload);
         if (result.success) {
-          const { scanners, findings_count } = result.data;
-          // "success" (nada encontrado) vs "info" (achou algo — vale
-          // conferir em /seguranca; não "danger" aqui, porque ToastTone
-          // só tem info/success/danger e a severidade de cada achado já
-          // é o que de fato importa — esta notificação só avisa que o
-          // scan terminou, não julga o resultado).
-          const tone: ToastTone = findings_count === 0 ? "success" : "info";
+          const { scanners, findings_count, critical_count, high_count } = result.data;
+          // Fase 14 (Maturidade de AppSec): até aqui todo scan com achado
+          // nenhum virava "info", não importa a gravidade — um scan que
+          // achou 1 CRITICAL merece o mesmo destaque visual (tone
+          // "danger") que uma falha de scan já tinha, não o mesmo "info"
+          // neutro de "achou 3 coisas de baixa severidade". CRITICAL
+          // sempre fala por si na descrição; HIGH só aparece ali quando
+          // não há CRITICAL nenhum (evita "1 crítico, 3 altos" competindo
+          // por atenção — o crítico é a manchete).
+          const tone: ToastTone = findings_count === 0 ? "success" : critical_count > 0 ? "danger" : "info";
+          const severityNote =
+            critical_count > 0 ? `, ${critical_count} crítico(s)!` : high_count > 0 ? `, ${high_count} alto(s)` : "";
           const notification = {
             title: `Scan concluído (${scanners.join(", ")})`,
             description:
               findings_count === 0
                 ? "Nenhum achado."
-                : `${findings_count} achado(s) — veja em Segurança.`,
+                : `${findings_count} achado(s)${severityNote} — veja em Segurança.`,
             tone,
           };
           showToast(notification);

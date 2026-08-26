@@ -97,6 +97,42 @@ describe("NotificationCenter", () => {
     expect(screen.getByText("3 achado(s) — veja em Segurança.")).toBeInTheDocument();
   });
 
+  it("scanning.scan.completed com CRITICAL destaca a contagem e usa tom de perigo", () => {
+    renderCenter();
+    act(() =>
+      capturedHandler!(
+        envelope("scanning.scan.completed", {
+          scan_id: "scan-1",
+          scanners: ["trivy"],
+          target: "https://github.com/org/repo.git",
+          findings_count: 5,
+          critical_count: 2,
+          high_count: 1,
+        }),
+      ),
+    );
+
+    expect(screen.getByText("5 achado(s), 2 crítico(s)! — veja em Segurança.")).toBeInTheDocument();
+  });
+
+  it("scanning.scan.completed sem CRITICAL mas com HIGH menciona só o HIGH", () => {
+    renderCenter();
+    act(() =>
+      capturedHandler!(
+        envelope("scanning.scan.completed", {
+          scan_id: "scan-1",
+          scanners: ["semgrep"],
+          target: "https://github.com/org/repo.git",
+          findings_count: 4,
+          critical_count: 0,
+          high_count: 3,
+        }),
+      ),
+    );
+
+    expect(screen.getByText("4 achado(s), 3 alto(s) — veja em Segurança.")).toBeInTheDocument();
+  });
+
   it("eventos de job (diario_oficial.job.completed) usam o schema genérico de job_id", () => {
     renderCenter();
     act(() =>
