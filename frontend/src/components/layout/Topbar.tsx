@@ -16,6 +16,11 @@ const connectionCopy: Record<ConnectionState, { label: string; dotClass: string 
   connecting: { label: "Conectando…", dotClass: "bg-status-unknown" },
   open: { label: "Ao vivo", dotClass: "bg-status-online" },
   closed: { label: "Reconectando…", dotClass: "bg-status-degraded" },
+  // Sessão expirada (§ NotificationClient.open) — nunca vai virar "Ao
+  // vivo" sozinho, ao contrário de "closed"/"Reconectando…"; só um login
+  // novo resolve. Vermelho (bg-status-offline), não âmbar, porque não é
+  // transitório.
+  unauthorized: { label: "Sessão expirada — atualize a página", dotClass: "bg-status-offline" },
 };
 
 // Barra superior (§ Sidebar/Topbar no layout do papermoon.cloud): fixa,

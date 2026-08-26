@@ -106,16 +106,85 @@ func (r *PostgresRepository) ListByScanIDs(ctx context.Context, scanIDs []uuid.U
 	return scanFindingRows(rows)
 }
 
-// ListRecent retorna os achados mais graves/recentes entre TODAS as
-// execuções de scan, até limit linhas — o feed que a Fase 9 (UI) usa.
-func (r *PostgresRepository) ListRecent(ctx context.Context, limit int) ([]domain.PersistedFinding, error) {
-	q := fmt.Sprintf(`SELECT %s FROM scan_findings ORDER BY %s LIMIT $1`, findingColumns, findingSeverityOrder)
-	rows, err := r.pool.Query(ctx, q, limit)
+// CountBySeverity retorna, por scanID, quantos achados existem por
+// severidade — ver domain.Repository.
+func (r *PostgresRepository) CountBySeverity(ctx context.Context, scanIDs []uuid.UUID) (map[uuid.UUID]map[domain.Severity]int, error) {
+	if len(scanIDs) == 0 {
+		return nil, nil
+	}
+	const q = `
+		SELECT scan_id, severity, count(*)
+		FROM scan_findings
+		WHERE scan_id = ANY($1)
+		GROUP BY scan_id, severity
+	`
+	rows, err := r.pool.Query(ctx, q, scanIDs)
 	if err != nil {
-		return nil, fmt.Errorf("scanning: list recent findings: %w", err)
+		return nil, fmt.Errorf("scanning: count findings by severity: %w", err)
 	}
 	defer rows.Close()
-	return scanFindingRows(rows)
+
+	out := make(map[uuid.UUID]map[domain.Severity]int)
+	for rows.Next() {
+		var scanID uuid.UUID
+		var severity string
+		var count int
+		if err := rows.Scan(&scanID, &severity, &count); err != nil {
+			return nil, fmt.Errorf("scanning: scan severity count row: %w", err)
+		}
+		if out[scanID] == nil {
+			out[scanID] = make(map[domain.Severity]int)
+		}
+		out[scanID][domain.Severity(severity)] = count
+	}
+	return out, rows.Err()
+}
+
+// ListRecentPage retorna uma página de achados, mais grave/recente
+// primeiro, mais o total de linhas na tabela inteira (sem paginação) —
+// ver domain.Repository. count(*) OVER() calcula o total na MESMA
+// query (uma window function sobre o resultado já filtrado/ordenado,
+// antes do OFFSET/LIMIT recortar a página) — uma segunda viagem
+// separada ao banco só pra contar seria mais simples de ler, mas
+// dobraria o custo de toda chamada a este método, que a Fase 9 (UI) já
+// faz a cada carregamento de /seguranca.
+func (r *PostgresRepository) ListRecentPage(ctx context.Context, offset, limit int) ([]domain.PersistedFinding, int64, error) {
+	q := fmt.Sprintf(`SELECT %s, count(*) OVER() FROM scan_findings ORDER BY %s OFFSET $1 LIMIT $2`, findingColumns, findingSeverityOrder)
+	rows, err := r.pool.Query(ctx, q, offset, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("scanning: list recent findings page: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.PersistedFinding
+	var total int64
+	for rows.Next() {
+		var f domain.PersistedFinding
+		var severity string
+		if err := rows.Scan(&f.RecordID, &f.ScanID, &f.Scanner, &f.Target, &f.ID, &f.OWASPCategory, &severity, &f.Description, &f.File, &f.Line, &f.Snippet, &f.FindingFingerprint, &f.CreatedAt, &total); err != nil {
+			return nil, 0, fmt.Errorf("scanning: scan finding page row: %w", err)
+		}
+		f.Severity = domain.Severity(severity)
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("scanning: scan finding page rows: %w", err)
+	}
+	// count(*) OVER() só aparece numa linha se a página tiver ALGUMA
+	// linha — uma página vazia (offset além do total, ex.: página 99 de
+	// uma tabela com 3 achados) nunca escreve `total`, então ficaria 0
+	// mesmo que a tabela tenha achados — errado (o cliente perguntaria
+	// "página 99 de quantas ao todo?" e receberia "0 ao todo", quando na
+	// verdade só essa página específica está vazia). Uma segunda consulta,
+	// só pro caso raro de uma página sem nenhuma linha, corrige isso sem
+	// pagar o custo dessa consulta extra no caminho comum (página com
+	// conteúdo).
+	if len(out) == 0 {
+		if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM scan_findings`).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("scanning: count findings for empty page: %w", err)
+		}
+	}
+	return out, total, nil
 }
 
 func scanFindingRows(rows pgx.Rows) ([]domain.PersistedFinding, error) {

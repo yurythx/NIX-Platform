@@ -91,6 +91,12 @@ export interface ScanFinding {
 // GET /api/v1/scanning/projects/{projectID}/findings-history (Fase 12 —
 // deduplicação por fingerprint): UM achado deduplicado ENTRE re-scans do
 // MESMO projeto — "apareceu pela primeira vez em X, ainda presente em Y".
+// TriageStatus (Fase 14 — Maturidade de AppSec): "" é o estado implícito
+// "aberto, nunca triado" — nunca um quarto valor de string solto, sempre
+// um dos três abaixo ou vazio. Mesmos três nomes que
+// domain.TriageStatus usa no backend.
+export type TriageStatus = "" | "false_positive" | "wont_fix" | "risk_accepted";
+
 export interface ProjectFindingHistory {
   fingerprint: string;
   scanner: string;
@@ -104,6 +110,59 @@ export interface ProjectFindingHistory {
   scan_count: number;
   still_present: boolean;
   tool: FindingTool;
+  triage_status: TriageStatus;
+  triage_reason?: string;
+  // triage_expires_at/triage_expired (Fase 14, continuação — expiração
+  // de triagem): ambos ausentes quando não há prazo (ou não há
+  // triagem). Um achado com triage_expired=true continua carregando
+  // triage_status/triage_reason (a decisão fica registrada), mas volta
+  // a contar como aberto — ver still_present acima, que é ortogonal.
+  triage_expires_at?: string;
+  triage_expired?: boolean;
+}
+
+// GET /api/v1/scanning/posture (Fase 14 — Maturidade de AppSec) — o card
+// de postura de segurança do dashboard.
+export interface ProjectPosture {
+  project_id: string;
+  project_name: string;
+  open_critical: number;
+  open_high: number;
+}
+
+// PaginationMeta é o formato de "meta" no envelope {data, error, meta} —
+// devolvido por GET /api/v1/scanning/findings desde a Fase 14
+// (Maturidade de AppSec: paginação de verdade, ver
+// internal/domain/pagination.Meta no backend).
+export interface PaginationMeta {
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+}
+
+export interface SecurityPosture {
+  open_critical: number;
+  open_high: number;
+  open_medium: number;
+  open_low: number;
+  triaged_count: number;
+  projects_scanned: number;
+  top_vulnerable: ProjectPosture[];
+}
+
+// GET /api/v1/scanning/posture/history (Fase 14, continuação —
+// tendência histórica) — um ponto da série temporal que alimenta o
+// gráfico de tendência do dashboard. date é "YYYY-MM-DD" (string, não
+// timestamp — só a data importa, ver o backend's domain.PostureSnapshot).
+export interface PostureSnapshot {
+  date: string;
+  open_critical: number;
+  open_high: number;
+  open_medium: number;
+  open_low: number;
+  triaged_count: number;
+  projects_scanned: number;
 }
 
 // GET/POST /api/v1/scanning/projects (Fase 10 — Projeto persistente +
@@ -171,6 +230,11 @@ export interface ScanStatus {
   job_id: string;
   status: JobStatus;
   target: string;
+  // project_id (revisão de exibição de resultados): ausente pra um scan
+  // avulso — presente quando este scan foi disparado a partir de um
+  // Project (Fase 10). Usado pra saber se os achados deste scan podem
+  // ser triados (a triagem é escopada a projeto, ver TriageStatus).
+  project_id?: string;
   requested_scanners: string[];
   succeeded_scanners: string[] | null;
   failed_scanners: ScannerFailure[];
@@ -184,4 +248,64 @@ export interface ScanStatus {
   created_at: string;
   started_at?: string;
   finished_at?: string;
+  // findings_by_severity (revisão de exibição de resultados — "quais
+  // erros e warnings foram achados" na tela de histórico de scans):
+  // ausente pra um scan que ainda não persistiu achado nenhum. Chaves
+  // são CRITICAL/HIGH/MEDIUM/LOW — nunca todas presentes, só as que têm
+  // pelo menos 1 achado (ver o backend's toScanStatusResponse).
+  findings_by_severity?: Partial<Record<ScanSeverity, number>>;
+}
+
+// GET /api/v1/scanning/scanners/health (revisão de exibição de
+// resultados — "quero ter uma tela onde mostra a saúde das
+// ferramentas... antes de iniciá-las").
+export interface ScannerHealth {
+  scanner: string;
+  healthy: boolean;
+  message?: string;
+  checked_at: string;
+}
+
+// MVP de monitoramento real do Diário Oficial via DJEN — o que o
+// usuário quer acompanhar (OAB+UF, número de processo, ou texto livre;
+// pelo menos um preenchido, validado no backend). Espelha
+// transport.monitoredTermResponse.
+export interface MonitoredTerm {
+  id: string;
+  label: string;
+  oab_number?: string;
+  oab_uf?: string;
+  process_number?: string;
+  free_text?: string;
+  active: boolean;
+  last_synced_at?: string;
+  created_at: string;
+}
+
+// GET /api/v1/diario-oficial/health — mesmo shape que ScannerHealth
+// (source no lugar de scanner): a checagem síncrona da fonte de dados
+// configurada (DJEN hoje), pra uma tela mostrar "está respondendo?"
+// antes do usuário estranhar por que nada de novo apareceu.
+export interface SourceHealth {
+  source: string;
+  healthy: boolean;
+  message?: string;
+  checked_at: string;
+}
+
+// Uma publicação do DJEN que casou com um MonitoredTerm — espelha
+// transport.matchedPublicationResponse.
+export interface MatchedPublication {
+  id: string;
+  tribunal: string;
+  orgao: string;
+  tipo_comunicacao: string;
+  texto: string;
+  process_number: string;
+  process_number_masked: string;
+  availability_date: string;
+  link?: string;
+  monitored_term_id: string;
+  monitored_term_label: string;
+  matched_at: string;
 }

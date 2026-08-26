@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import { SecurityPostureCard } from "@/components/scanning/SecurityPostureCard";
 import { authOptions } from "@/lib/auth/options";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
-import type { Integration } from "@/types/api";
+import type { Integration, PostureSnapshot, SecurityPosture } from "@/types/api";
 
 // Visão geral (§ Reestruturação de rotas): a partir de agora /dashboard
 // serve SÓ isto — status do sistema e atalhos. Usuários, integrações e
@@ -32,6 +33,31 @@ export default async function DashboardOverviewPage() {
     integrations = data;
   } catch (err) {
     errorMessage = err instanceof ApiError ? err.message : "Falha ao carregar";
+  }
+
+  // SecurityPosture (Fase 14 — Maturidade de AppSec): best-effort, mesmo
+  // princípio de integrations acima — uma falha aqui não deveria impedir
+  // o resto do dashboard de renderizar.
+  let posture: SecurityPosture | null = null;
+  try {
+    const { data } = await serverApiGet<SecurityPosture>("v1/scanning/posture");
+    posture = data;
+  } catch {
+    // Card simplesmente não aparece — mesmo tratamento silencioso que o
+    // resto desta página já dá a uma seção opcional que falhou.
+  }
+
+  // history (Fase 14, continuação — tendência histórica): busca
+  // separada e best-effort da mesma forma — um projeto novo, sem
+  // snapshot nenhum gravado ainda pelo worker, não deveria impedir o
+  // card de postura em si de aparecer, só o gráfico de tendência dentro
+  // dele.
+  let postureHistory: PostureSnapshot[] = [];
+  try {
+    const { data } = await serverApiGet<PostureSnapshot[]>("v1/scanning/posture/history?days=30");
+    postureHistory = data;
+  } catch {
+    // Sem gráfico de tendência — o card ainda mostra o resumo atual.
   }
 
   return (
@@ -70,6 +96,8 @@ export default async function DashboardOverviewPage() {
           </Button>
         </Link>
       </div>
+
+      {posture && <SecurityPostureCard posture={posture} history={postureHistory} />}
 
       <Card>
         <CardHeader>

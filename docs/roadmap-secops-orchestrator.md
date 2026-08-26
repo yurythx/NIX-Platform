@@ -1,5 +1,11 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
+- **Fase 14 (Maturidade de AppSec — triagem, paginação de verdade, notificação de crítico, postura
+  de segurança, exportação CSV) ✅ completa**, sua **continuação (expiração de triagem + tendência
+  histórica) ✅ completa**, e a **revisão de exibição de resultados (mestre-detalhe, navegação por
+  teclado, link direto por achado, ordenação, barra de severidade, triagem em mais telas) ✅
+  completa** — ver as três seções próprias no fim deste documento. RBAC por projeto, fingerprint
+  resiliente a deslocamento de linha e exportação SARIF continuam adiados, com o motivo de cada um.
 - **Status:** Fases 1, 3-9 concluídas (Fundação, Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração
   concorrente, CLI + CI/CD, Frontend). Fase 2 (TruffleHog) pulada por decisão explícita do usuário,
   redundante com o gitleaks já no CI (decisão revisitada na Fase 11 abaixo — sob demanda deixou de
@@ -9,10 +15,27 @@
   abaixo. **Fases 10-13 (Projeto + upload .zip; Gitleaks + Syft; snippet + deduplicação; filtro de
   ruído + prompt de IA) TODAS implementadas e verificadas ao vivo — a extensão inteira está
   completa.** **"Containerização"** (uma quarta decisão, posterior às 3 — cada scanner isolado no próprio
-  container, como o GitGuard) está **parcialmente implementada**: Trivy, Gitleaks e Syft migrados e
-  verificados ao vivo (sidecars `trivy-scanner`/`gitleaks-scanner`/`syft-scanner`, volume
-  compartilhado `scanning_workspace`); Semgrep/sonar-scanner CLI ainda rodam dentro do worker,
-  migração futura seguindo o mesmo desenho.
+  container, como o GitGuard) está **✅ completa**: Trivy, Gitleaks, Syft, Semgrep e agora
+  sonar-scanner CLI migrados e **verificados ao vivo** (sidecars `trivy-scanner`/`gitleaks-scanner`/
+  `syft-scanner`/`semgrep-scanner`/`sonar-scanner-cli`, volume compartilhado `scanning_workspace`) —
+  um scan real com os 4 primeiros simultâneos contra `OWASP/NodeGoat` completou com sucesso total
+  (86/3/0/21 achados respectivamente), e um scan separado com `sonar-scanner-cli` contra o mesmo
+  alvo completou com **112 achados reais** depois de um achado real corrigido na primeira tentativa
+  (ver "sonar-scanner-cli" abaixo, na seção Containerização: os analisadores SonarJS/TS do
+  sonar-scanner precisam de um runtime Node.js próprio, não documentado pela SonarSource como
+  dependência do CLI — a imagem original também nunca o teve). O SERVIDOR
+  SonarQube já era seu próprio container desde a Fase 5 — agora o CLI que faz upload também é.
+  `backend-worker` não carrega mais runtime de scanner nenhum: só `git` + o binário Go do worker.
+- **Nota de manutenção:** `scanning/application/service.go` foi dividido em `service.go` (núcleo —
+  `Service`/`NewService`), `scans.go`, `findings.go` e `projects.go` depois de passar de 1400
+  linhas — as referências a `application/service.go` no restante deste documento descrevem o
+  estado de quando cada fase foi escrita e continuam válidas como histórico, mesmo que o código
+  citado tenha se mudado de arquivo desde então. `scans.go` passou pelo mesmo processo de novo
+  (voltou a crescer, 950 linhas): a mecânica de orquestração concorrente (`runConcurrently`,
+  `inventoryFor`, `ProcessScanJob`, `HandleScanDeadLetter` e o resto do que suporta o caminho
+  assíncrono) está agora em `scan_orchestration.go`; `scans.go` ficou só com o CRUD/status de scan
+  jobs. Referências abaixo a essas funções em `application/scans.go` valem como histórico pelo
+  mesmo motivo.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
@@ -496,9 +519,17 @@ vez disso o desenho abaixo, que nunca dá ao worker acesso ao Docker em si.
   de que a migração não mudou nenhum resultado, só onde o binário roda. O caminho de erro também
   verificado (alvo inexistente) — a mensagem real do `git clone` (capturada no worker, antes de
   qualquer chamada ao sidecar) continua chegando íntegra até a UI.
-- Imagem do `backend-worker` caiu de ~982MB pra bem menos sem o binário do trivy (ainda carrega
-  semgrep+sonar-scanner+JRE, os próximos candidatos a sair); `trivy-scanner` como imagem própria
-  fica em ~243MB, só o necessário pro Trivy rodar.
+- Imagem do `backend-worker` caiu de ~982MB pra bem menos sem o binário do trivy (na época, ainda
+  carregava semgrep+sonar-scanner+JRE). **Medido ao vivo** (sessão que containerizou
+  Semgrep+sonar-scanner CLI, com Docker disponível), tamanhos finais de todas as imagens de
+  scanning: `backend-worker` **62.5MB** (só `git` + o binário Go do worker — nenhum runtime de
+  scanner a mais, depois de extrair também o sonar-scanner CLI, o último a sair), `trivy-scanner`
+  **243MB**, `syft-scanner` **139MB**, `gitleaks-scanner` **53.8MB**, `semgrep-scanner` **658MB**
+  (quase todo runtime Python do próprio semgrep — esperado, era o maior contribuinte pro salto de
+  ~150MB pra ~916MB do worker já registrado na Fase 4; isolar num container próprio não reduz esse
+  peso, só tira do worker principal) e `sonar-scanner-cli` **385MB** (JRE + a JAR do scanner +
+  Node.js, ver achado real na seção "sonar-scanner-cli" abaixo). `backend-api`, que nunca carregou
+  nenhum runtime de scanner, continua em ~46MB.
 
 **Gitleaks e Syft (Fase 11) já nasceram seguindo este mesmo desenho**, sem precisar de uma migração
 posterior: `cmd/gitleaks-sidecar`/`Dockerfile.gitleaks-sidecar`/serviço `gitleaks-scanner` e
@@ -509,12 +540,74 @@ o método chamado pelo Service não é `Execute` — é `Inventory` (`domain.Inv
 Gitleaks precisou de ajuste (o achado real do path com o diretório de clone embutido, corrigido em
 `parseGitleaksReport`).
 
-**Ainda não migrados pro mesmo padrão** (trabalho futuro, mesmo desenho, scanner por scanner):
-Semgrep (`semgrep_scanner.go`, ainda `os/exec` dentro do worker) e o `sonar-scanner` CLI em si
-(`sonar_scanner.go` — o SERVIDOR SonarQube já é seu próprio container desde a Fase 5, só o CLI que
-faz upload ainda roda dentro do worker). Syft (Fase 11, sidecar `syft-scanner`) já nasceu seguindo
-este padrão desde o design, sem precisar de uma migração depois — mesmo `Dockerfile`/UID-fixo/
-healthcheck que Trivy/Gitleaks.
+**Semgrep migrado pro mesmo padrão** (`semgrep_scanner.go`): sidecar `semgrep-scanner`
+(`cmd/semgrep-sidecar`, `Dockerfile.semgrep-sidecar`), mesmo esqueleto Execute/ExecuteLocal/
+scanRemote de Trivy/Gitleaks, mesmo UID/GID fixo (`10001`), mesma validação de path dentro de
+`/workspace`. Única diferença real de contrato: o corpo da requisição HTTP também carrega
+`config` (o ruleset do Semgrep Registry) — Trivy/Gitleaks/Syft têm argumentos fixos no sidecar, o
+Semgrep não, então o ruleset continua decidido pelo worker (`SCANNING_SEMGREP_CONFIG`) a cada
+chamada, em vez de fixado na imagem do sidecar.
+
+**✅ Verificado ao vivo** (sessão seguinte, com Docker disponível): as 5 imagens (`semgrep-scanner`
++ `backend-worker`/`backend-api` reconstruídos) buildaram limpo; os 4 sidecars (`trivy-scanner`,
+`gitleaks-scanner`, `syft-scanner`, `semgrep-scanner`) subiram saudáveis. Um scan real via
+`POST /api/v1/scanning/scans` (login local, `admin`/`Admin123!`) contra `OWASP/NodeGoat` com os 4
+scanners simultâneos completou com sucesso total — `trivy`: 86 achados (o MESMO número já
+registrado na Fase 3/Containerização original, confirmando que a migração do Semgrep não teve
+efeito colateral nenhum nos outros três), `gitleaks`: 3, `syft`: 0 achados de vulnerabilidade (SBOM
+puro, esperado — `Execute` do Syft é sempre no-op), `semgrep`: **21 achados reais**, incluindo
+`javascript.lang.security.audit.code-string-concat.code-string-concat` (A03:2021-Injection,
+`app/routes/contributions.js`, `eval(req.body.preTax)`) com snippet/fingerprint/link pro Semgrep
+Registry corretos na resposta da API. Isso também confirmou, na prática, o bug do parágrafo acima
+sobre `docker-compose.yml` nunca injetar `SCANNING_*_SERVICE_URL`/`SCANNING_WORKSPACE_DIR`: antes
+da correção, um `docker compose up` do zero teria os 4 sidecars saudáveis mas o worker reportando
+todos os 4 scanners como indisponíveis.
+
+**sonar-scanner CLI migrado pro mesmo padrão** (`sonar_scanner.go`) — último runtime de scanner a
+sair da imagem do `backend-worker`, que a partir desta migração carrega só `git` + o próprio
+binário Go, nenhum runtime de scanner a mais. Diferença estrutural real em relação aos outros
+quatro sidecars (o único motivo de `cmd/sonar-sidecar` não ser uma cópia mecânica deles):
+
+1. **Volume compartilhado em leitura-escrita** (`scanning_workspace:/workspace:rw`, não `:ro`) — o
+   `sonar-scanner` CLI grava `.scannerwork/report-task.txt` DENTRO do próprio diretório clonado
+   como parte de como a ferramenta funciona; Trivy/Gitleaks/Syft/Semgrep só leem o que o worker já
+   clonou e nunca escrevem nada nele.
+2. **O CLI não devolve o resultado da análise** — só faz upload de um relatório e sai (a Compute
+   Engine do servidor processa depois, em segundo plano — mesma assincronia em dois níveis já
+   documentada na Fase 5). O sidecar lê `ceTaskId` de `.scannerwork/report-task.txt` (que ele mesmo
+   escreveu) e devolve como JSON `{"ce_task_id": "..."}`, em vez do JSON nativo de uma ferramenta
+   que os outros quatro sidecars repassam sem reinterpretar — `readReportTask` (que vivia em
+   `sonar_scanner.go`) se mudou pra `cmd/sonar-sidecar/main.go` como `readCETaskID`, já que agora é
+   este processo, não mais o worker, quem tem acesso direto ao arquivo recém-criado.
+   `waitForAnalysis`/`fetchIssues` continuam em `sonar_scanner.go`, falando HTTP direto com o
+   servidor SonarQube de verdade — não são afetados pela containerização do CLI, um passo local
+   anterior a essas duas chamadas.
+3. **host_url/token/project_key viajam no corpo da requisição**, decididos pelo worker a cada
+   chamada — mesmo raciocínio de `config` no semgrep-sidecar.
+4. **Nunca teve um `ExecuteLocal`/`LocalScanner`** (ao contrário de Trivy/Gitleaks/Semgrep): a Fase
+   8 (`cmd/secscan`) já escopava isso fora de propósito — SonarQube sempre exigiu servidor +
+   credenciais, nunca funcionou "local" de qualquer forma. `SonarScannerPath`/
+   `SCANNING_SONAR_SCANNER_PATH` (o caminho de um binário local) removidos do código — ficaram
+   mortos depois desta migração, nenhum caminho os lia mais.
+
+**✅ Verificado ao vivo** (mesma sessão que verificou o Semgrep acima, com Docker disponível): a
+imagem buildou limpo; subiu saudável junto dos outros quatro sidecars, com um SonarQube real
+(`docker-compose.yml`, serviços `sonarqube`/`sonarqube-db`) também de pé. **Achado real na primeira
+tentativa**: o scan falhou com `Cannot run program "node": Exec failed, error: 2 (No such file or
+directory)` — os analisadores SonarJS/TS do sonar-scanner rodam sobre um runtime Node.js próprio
+que o CLI invoca como subprocesso, dependência não documentada explicitamente pela SonarSource
+como requisito do CLI (a imagem original do worker, antes desta containerização, também nunca
+instalou Node.js — só nunca foi testada ao vivo contra um alvo com arquivos `.js`/`.ts`, então isso
+nunca tinha aparecido). Corrigido adicionando `nodejs` ao `Dockerfile.sonar-sidecar`; rebuild +
+novo scan contra `OWASP/NodeGoat` completou com sucesso: **112 achados reais**, incluindo
+`javascript:S1523` (injeção/execução de código dinâmica insegura, CRITICAL,
+`app/routes/contributions.js:32`) e `secrets:S6706` (chave privada commitada, CRITICAL,
+`artifacts/cert/server.key`) — severidade/arquivo/linha/fingerprint corretos na resposta da API,
+`owasp_category` vazio como já esperado (limitação documentada desta versão do SonarQube, ver Fase
+5 acima).
+
+Syft (Fase 11, sidecar `syft-scanner`) já nasceu seguindo este padrão desde o design, sem precisar
+de uma migração depois — mesmo `Dockerfile`/UID-fixo/healthcheck que Trivy/Gitleaks/Semgrep.
 
 ### Fase 10 — Projeto como entidade própria + upload `.zip` — ✅ implementada
 
@@ -657,7 +750,7 @@ healthcheck que Trivy/Gitleaks.
   ```
   Implementação real: `SyftScanner.Execute` é sempre um no-op (`return nil, nil` — nunca clona
   nada, nunca aparece na lista de achados de nenhum scan); todo o trabalho acontece em `Inventory`,
-  chamado à parte pelo `Service` (`application/service.go`'s `inventoryFor`, via a mesma type
+  chamado à parte pelo `Service` (`application/scans.go`'s `inventoryFor`, via a mesma type
   assertion do trecho acima) logo depois de `Execute` — tanto em `runConcurrently`
   (`ProcessScanJob`, o caminho assíncrono) quanto em `RunScan` (o caminho síncrono). Mesmo desenho
   containerizado do Gitleaks: `Inventory` clona pro volume `scanning_workspace` e chama o sidecar
@@ -808,3 +901,455 @@ healthcheck que Trivy/Gitleaks.
   metadado — nome, alvo, histórico — nunca o checkout em si.
 - Qualquer execução automática deste roadmap nesta sessão — este documento é o planejamento;
   implementação começa quando o usuário escolher uma fase.
+
+## Fase 14 — Maturidade de AppSec
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`go test ./...`
+limpos, suíte inteira — incluindo os testes de integração contra Postgres real deste módulo, que
+antes desta sessão nunca rodavam de fato aqui por falta de `TEST_DATABASE_URL` — passando contra um
+Postgres isolado subido só pra este fim, nunca o Postgres do `docker-compose` que o usuário estava
+testando ao vivo; frontend: `tsc --noEmit`/`eslint`/`vitest run` (165 testes)/`next build` de
+produção, todos limpos).
+
+**Origem:** pedido direto do usuário depois de uma análise da sessão sobre front-end + regras de
+negócio de scanning: "existe responsabilidades? existe jeito melhor de listar e mostrar os
+resultados? como as grandes empresas fazem? quão maduro estamos?". A resposta (maturidade ~2,5/5)
+apontou a maior lacuna real: a plataforma **achava** vulnerabilidade muito bem, mas não tinha
+NENHUM jeito de **gerenciar o ciclo de vida** dela — sem paginação de verdade no feed agregado, sem
+triagem, sem visão executiva, sem exportação, sem destaque pra achado crítico nas notificações.
+
+### O que foi implementado
+
+1. **Triagem** (`false_positive`/`wont_fix`/`risk_accepted`, com motivo obrigatório) — a lacuna mais
+   séria: até aqui, um achado só tinha dois estados possíveis, os dois INFERIDOS automaticamente por
+   re-scan (`still_present` sim/não), nunca um humano decidindo "isto é falso positivo" ou "risco
+   aceito por ora". Sem isto, o mesmo falso positivo reaparecia pra sempre, todo re-scan.
+   - Nova tabela `scanning_finding_triage` (migration 000023), chave `(project_id, fingerprint)` —
+     não por achado/scan individual: o mesmo raciocínio que `ListProjectFindingsHistory` (Fase 12)
+     já usa pra "este problema, entre re-scans, é o fingerprint dentro de um projeto" — e por isso
+     escopado a PROJETO, não a scan avulso, pelo mesmo motivo que o histórico deduplicado já é: só
+     um projeto persistente tem "próxima execução" garantida pra uma triagem valer a pena.
+   - `domain.TriageRepository` — interface PRÓPRIA, não mais um método em `domain.Repository`
+     (que já carrega achados/pacotes/progresso de scanner/projetos): a mesma `PostgresRepository`
+     implementa as duas, mas nenhum fake de teste do `domain.Repository` precisou ganhar métodos que
+     não usa.
+   - `Service.WithTriageRepository(...)` — setter pós-construção, não mais um parâmetro posicional
+     em `NewService` (que já tinha 9 + variádicos): `triageRepo` é opcional (nil tolerado, mesmo
+     princípio de `flags`), então um parâmetro a mais obrigaria todo call site — produção e cada
+     teste — a mudar só pra passar nil na maioria dos casos.
+   - `PUT`/`DELETE /api/v1/scanning/projects/{projectID}/findings/{fingerprint}/triage`
+     (`scanning:manage`, mesma permissão de disparar scan/criar projeto) — reason vazio é rejeitado
+     (400): suprimir um achado sem justificativa registrada é exatamente o tipo de decisão que uma
+     auditoria de segurança depois cobra explicação. `audit.ActionFindingTriaged`/
+     `ActionFindingUntriaged` gravam quem/quando/por quê.
+   - `ProjectFindingHistory` ganhou `TriageStatus`/`TriageReason`; a ordenação passou a priorizar
+     "ainda presente E NUNCA triado" (precisa de atenção AGORA) acima de "ainda presente mas já
+     triado" (alguém já decidiu o que fazer) — mesmo raciocínio de por que um item triado deveria
+     afundar na fila de trabalho ativo sem desaparecer da vista.
+   - UI: `ProjectFindingHistoryPanel` ganhou coluna "Triagem" (botão "Triar…" abre um Dialog com
+     status + motivo obrigatório; achado já triado mostra o motivo e um link "Reabrir").
+2. **Paginação de verdade em `GET /scanning/findings`** — antes, um `limit` sem `OFFSET` (teto fixo
+   de 200): qualquer achado além disso simplesmente nunca aparecia em lugar nenhum da UI, sem nem um
+   aviso de que havia mais. Trocado por `page`/`page_size`, reaproveitando o contrato compartilhado
+   `internal/domain/pagination` (o mesmo que `users.List` já usa) em vez de uma segunda convenção
+   `limit`/`maxRecentFindings` só deste módulo. `ListRecentPage` no repositório usa
+   `count(*) OVER()` (uma window function, não uma segunda query `COUNT(*)` separada) pra devolver a
+   página E o total na mesma viagem ao banco, com um fallback pro caso raro de uma página vazia (o
+   `OVER()` não aparece se nenhuma linha bate o `OFFSET`/`LIMIT`). Frontend:
+   `PaginatedFindingsFeed` — a primeira página continua vindo do Server Component (primeiro paint
+   rápido), um botão "Carregar mais" busca as seguintes e ACUMULA (o filtro client-side de
+   severidade/ferramenta/busca que `FindingsTable` já fazia precisa da lista completa carregada até
+   agora, não só da última página).
+3. **Notificação de achado crítico** — o evento `scanning.scan.completed` (WebSocket, já existia)
+   ganhou `critical_count`/`high_count` no payload; `NotificationCenter` (frontend) agora usa tom
+   "danger" (não mais o mesmo "info" neutro de sempre) e destaca a contagem quando um scan encontra
+   pelo menos 1 CRITICAL. Reaproveitou 100% da infraestrutura já existente (Hub de WebSocket,
+   outbox, `NotificationCenter`) — só o payload e a lógica de apresentação mudaram.
+4. **Postura de segurança** — `Service.SecurityPosture` agrega, entre TODO projeto persistente, os
+   achados ABERTOS (ainda presentes no scan mais recente E não triados — nunca um `COUNT(*)` direto
+   em `scan_findings`, que contaria o mesmo achado uma vez por re-scan em que apareceu) por
+   severidade, mais os projetos com mais crítico/alto aberto (`TopVulnerable`). Custo O(projetos)
+   documentado (`maxPostureProjects = 200`) — aceitável na escala de uso interno de um time que esta
+   plataforma atende hoje, não um SaaS multi-tenant. `GET /scanning/posture` alimenta o card novo
+   `SecurityPostureCard` no `/dashboard` — a primeira vez que a plataforma responde "quantos
+   problemas abertos existem AGORA, no total" sem abrir Segurança e contar na mão.
+5. **Exportação CSV** — `GET /scanning/scans/{scanID}/findings.csv` (um scan) e
+   `GET /scanning/projects/{projectID}/findings-history.csv` (deduplicado, com triagem) — a primeira
+   exportação desta plataforma; até aqui, tirar um achado da NIX significava copiar da tela na mão
+   ou consumir a API JSON. O proxy BFF (`app/api/backend/[...path]/route.ts`) precisou propagar
+   `Content-Disposition` (só repassava `Content-Type` antes) e ganhar `PUT`/`DELETE` (usados pela
+   triagem, item 1) — os dois únicos ajustes de infraestrutura que esta fase exigiu fora do módulo
+   scanning em si.
+
+### Fase 14, continuação — expiração de triagem e tendência histórica
+
+**Status: ✅ implementada e verificada** (mesmo rigor da Fase 14 original: Postgres isolado, suíte
+inteira com `-p 1`, `gofmt`/`go vet`/`staticcheck`/`deadcode` limpos; frontend `tsc`/`eslint`/`vitest`
+(175 testes)/`next build` limpos).
+
+**Origem:** pedido direto do usuário — "o que mais podemos fazer pra melhorar o que as grandes
+empresas fazem?" — depois da Fase 14 original. Das quatro opções levantadas (expiração de
+triagem+tendência, Slack, Jira, CI comentando em PR), o usuário escolheu a de menor risco/maior
+reaproveitamento do que já existia.
+
+1. **Expiração de triagem** — `scanning_finding_triage` ganhou `expires_at` opcional (migration
+   000024). `domain.Triage.Expired(now)` é puro (recebe `now` como parâmetro, não `time.Now()`
+   direto — testável sem depender do relógio real). Uma triagem VENCIDA nunca é apagada
+   automaticamente (a decisão que alguém tomou fica registrada — auditoria de "o que foi decidido e
+   quando" não desaparece só porque o prazo passou); em vez disso, `TriageExpired=true` faz o achado
+   voltar a contar como ABERTO em `ListProjectFindingsHistory` (bucket de ordenação) e
+   `SecurityPosture` (`OpenCritical`/`OpenHigh`/etc., não `TriagedCount`) — exatamente como se nunca
+   tivesse sido triado, até alguém revisar de novo. UI: campo de data opcional no diálogo de
+   triagem ("Revisar até"), selo "Vencida: <status>" em vermelho + botão "Renovar…" (pré-preenche o
+   diálogo com a triagem anterior) quando expirado.
+2. **Tendência histórica** — `scanning_posture_snapshots` (migration 000025, PRIMARY KEY em
+   `snapshot_date` — no máximo uma linha "oficial" por dia). Gravado por um processor NOVO do worker
+   (`PostureSnapshotLoop`, mesmo padrão de `ratelimit.Cleanup`/`idempotency.Cleanup` — ver
+   `internal/app/worker.go`), uma vez por dia (24h), com uma diferença deliberada do padrão usual: o
+   PRIMEIRO snapshot roda imediatamente ao iniciar o worker, não só depois do primeiro tick — com um
+   intervalo de 24h, esperar o tick faria o gráfico só ganhar seu primeiro ponto um dia inteiro
+   depois de habilitado. `GET /scanning/posture/history?days=30` alimenta `PostureTrendChart`, um
+   SVG desenhado à mão no frontend (2 séries — crítico/alto, as únicas que mudam a decisão de "está
+   piorando?" — sem biblioteca de gráfico nova: nenhuma já existe nas dependências, e a
+   complexidade não justificava adicionar uma só pra isto).
+
+Achado real durante a verificação (não um bug em produção, nunca chegou a rodar contra dado real —
+pego pela suíte de testes contra o Postgres isolado antes de qualquer commit): a primeira versão de
+`ListSnapshots` usava `($1 || ' days')::interval` pra construir a janela de dias — o operador `||`
+força o pgx a tentar codificar o parâmetro inteiro como texto, e falha em tempo de execução
+("cannot find encode plan") porque o Go `int` não tem um plano de codificação pra OID texto. Corrigido
+pra `make_interval(days => $1)`, o mesmo padrão que `internal/platform/idempotency/postgres.go`'s
+`Cleanup` já usa pra construir intervalo a partir de um inteiro do Go.
+
+### Adiado, com motivo — não esquecimento
+
+- **RBAC por projeto** (só o dono/time consegue ver ou disparar scan de um projeto específico) —
+  meu recomendação inicial na análise, mas a investigação encontrou que **nenhum recurso desta
+  plataforma tem controle de acesso por-recurso hoje** (RBAC é só role→permissão GLOBAL —
+  `scanning:read`/`scanning:manage`, sem escopo por projeto/repositório), o módulo `users` não tem
+  nenhum conceito de time/organização pra ancorar isso, e o próprio Hub de WebSocket já documenta
+  (`internal/platform/ws/hub.go`) que segmentar notificação por usuário "exigiria primeiro um schema
+  de evento que carregasse o dono, não existe ainda". Construir ACL por projeto só pra scanning,
+  sozinho, seria inconsistente com o resto da plataforma e arriscaria um falso senso de fronteira de
+  segurança meio-implementado. É um épico de produto de verdade (Times/Organizações), não um item
+  desta fase — fica registrado pra quando o usuário decidir priorizar.
+- **Fingerprint resiliente a deslocamento de linha** — hoje `SHA256(scanner, findingID, file, line)`
+  (Fase 10): inserir uma linha acima da vulnerabilidade muda `line`, muda o fingerprint, e o
+  histórico/triagem tratam como um achado NOVO mesmo sendo o mesmo bug (GitHub/Semgrep sobrevivem a
+  isso hashando o snippet ao redor, que esta plataforma já captura — daria pra reaproveitar).
+  Trocar o algoritmo de fingerprint é uma mudança de schema/semântica que invalida todo histórico
+  JÁ GRAVADO (inclusive na demo ao vivo que o usuário estava testando durante esta sessão) sem uma
+  estratégia de versionamento/backfill — risco real de corromper dado que o usuário está usando
+  agora, por um ganho de robustez menor que os 5 itens acima. Adiado até ter um plano de migração
+  explícito, não decidido sozinho no meio desta fase.
+- ~~**Exportação SARIF**~~ — **implementada**, ver "Exportação SARIF — shift-left de verdade" mais
+  abaixo. Na época deste adiamento não havia ferramenta de validação contra o schema oficial neste
+  ambiente; isso deixou de ser verdade (`ajv-cli` via npm, ver seção abaixo), então o motivo do
+  adiamento não se aplica mais.
+
+## Revisão de exibição de resultados
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`go test ./...`
+com `-p 1` contra um Postgres isolado, limpos; frontend: `tsc --noEmit`/`eslint --max-warnings=0`
+(inclusive a regra `react-hooks/set-state-in-effect`, ver achado abaixo)/`vitest run` (196
+testes)/`next build` de produção, todos limpos).
+
+**Origem:** pedido direto do usuário — "quero focar em como esses resultados são mostrados, quero a
+melhor prática" — depois da Fase 14. Comparando `FindingsTable` (o componente que toda tela de
+achados usa) com GitHub Advanced Security/Snyk/GitLab Secure, a lacuna mais visível era estrutural:
+um modal por cima da lista pra ver o detalhe de um achado — fechar, clicar no próximo, abrir de
+novo, sem seta de teclado, sem link direto pra UM achado específico. O usuário escolheu a opção mais
+ampla das três levantadas (reescrever pra mestre-detalhe + os itens menores juntos, não só um dos
+dois).
+
+### O que mudou
+
+- **Mestre-detalhe, não mais modal** — `FindingsTable` agora é lista (esquerda/topo) + painel de
+  detalhe (direita/embaixo), sempre visível, nunca sobrepondo a lista. Seleção automática do
+  primeiro achado da lista quando nada foi escolhido ainda — um painel mestre-detalhe nunca fica
+  vazio só porque ninguém clicou em nada.
+- **Navegação sem soltar o teclado** — seta para cima/baixo na lista, botões "← Anterior"/"Próximo
+  →" no painel de detalhe (desabilitados nas pontas), Enter numa linha focada. Todos operam sobre a
+  MESMA lista ordenada (`orderedFindings`) que a tela mostra, respeitando filtro/agrupamento/ordenação
+  atuais.
+- **Link direto por achado** — `?finding=<id>` na URL reflete a seleção (via
+  `window.history.replaceState`, não o router do Next.js: nunca recarrega, nunca empilha uma entrada
+  de histórico por clique). Compartilhar/atualizar a página abre exatamente o mesmo achado. Um id
+  que não existe mais na lista (filtro mudou, ou o link está errado) cai pro primeiro achado, nunca
+  quebra.
+- **Ordenação escolhida pelo usuário** — "Mais grave primeiro" (default, igual antes)/"Mais recente
+  primeiro"/"Mais antigo primeiro"/"Arquivo (A-Z)".
+- **Barra de distribuição de severidade** (`SeverityDistributionBar`) — proporção visual
+  crítico/alto/médio/baixo acima da lista, cores PRÓPRIAS (vermelho/laranja/âmbar/cinza) —
+  deliberadamente diferentes do selo `Badge` genérico, que funde CRITICAL+HIGH no mesmo vermelho
+  (correto pra um selo com texto, errado pra uma barra só de cor).
+- **Triagem alcançável de mais lugares** — `ScanStatusResponse` ganhou `project_id` (já existia
+  internamente desde a Fase 10, nunca tinha chegado à API); a página de achados de uma ferramenta
+  específica (`/seguranca/[scanId]/[scanner]`) agora sabe se aquele scan pertence a um projeto e, se
+  sim, passa `projectId` pro painel de detalhe — que mostra `TriageControls` (extraído de
+  `ProjectFindingHistoryPanel` pra ser reaproveitado nos dois lugares) buscando
+  `GET .../findings-history` só pra decorar o achado selecionado com sua triagem atual. A visão
+  AGREGADA (`/seguranca`, achados de scans/projetos misturados) continua sem triagem — nenhum
+  `projectId` único faz sentido ali, mesma restrição que já existia.
+
+### Achado real durante a verificação
+
+`eslint` (regra `react-hooks/set-state-in-effect`, já em vigor no projeto — ver
+`lib/theme/usePrefersDark.ts`/`lib/layout/sidebarCollapsedStore.ts`) rejeitou a primeira versão:
+dois `useEffect` chamando `setSelectedId` diretamente (um pra seleção automática quando a lista
+filtrada muda, outro pra ler `?finding=` da URL no mount). Corrigido derivando a seleção
+PURAMENTE durante o render — `useSyncExternalStore` pra ler a URL (mesma primitiva que
+`usePrefersDark` já usa pra `matchMedia`, sem o mismatch SSR/hidratação que um `useState` lido de
+`window` na inicialização teria) + um `useMemo` combinando "o que o usuário escolheu nesta
+sessão" → "o que já estava na URL" → "o primeiro achado da lista", sem nenhum `useEffect`
+"corrigindo" estado. Resultado colateral bom: a página agora abre um achado vindo de `?finding=`
+já no PRIMEIRO paint (sem o pequeno flash que o `useEffect`-no-mount original teria).
+
+## Reestruturação de /seguranca — histórico primeiro, "Novo scan" separado, saúde das ferramentas
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`go test ./...`
+com `-p 1` contra um Postgres isolado, limpos; frontend: `tsc --noEmit`/`eslint --max-warnings=0`/
+`vitest run` (203 testes)/`next build` de produção, todos limpos).
+
+**Origem:** pedido direto do usuário, na sequência da revisão de exibição de resultados acima —
+"não seria melhor abrir uma tela inicial em segurança com os scans que já foram feitos, quais
+ferramentas foram usadas nesse scan e quais erros e warnings foram achados? e ter um botão chamado
+novo scan que vai nos levar pra página que temos hoje com as opções de scan? também seria legal ter
+uma tela onde mostra a saúde das ferramentas que estamos usando antes de iniciá-las".
+
+### O que mudou
+
+- **`/seguranca` virou a tela de histórico** — `ScanList` (cada execução: alvo, ferramentas usadas
+  pelo NOME de exibição, contagem de erro/warning por severidade, status, quando) é o primeiro
+  conteúdo da página, não mais um formulário de disparo. "Achados recentes" (a visão agregada entre
+  todos os scans) continua existindo, só rebaixada pro fim da página.
+- **`/seguranca/novo` (rota nova)** — literalmente a página que existia em `/seguranca` antes desta
+  reestruturação (`TriggerScanForm` + Projetos), só movida de rota. Um botão "Novo scan" em destaque
+  no topo de `/seguranca` leva pra cá. Coexiste sem conflito com a rota dinâmica
+  `/seguranca/[scanId]` — Next.js resolve segmento estático antes de dinâmico, então `/seguranca/novo`
+  nunca é interpretado como um `scanId` literal "novo".
+- **Contagem de erro/warning por scan** (`ScanStatusResponse.findings_by_severity`) — nova consulta
+  agregada (`Repository.CountBySeverity`, `GROUP BY scan_id, severity` numa viagem só pra uma PÁGINA
+  inteira de scans, não uma consulta por scan) alimentando `GetScanStatus`/`ListRecentScans`. "erro"
+  no frontend = CRITICAL+HIGH, "warning" = MEDIUM+LOW — a MESMA divisão que `ToolFindingsCards` já
+  usava, nunca uma segunda convenção de severidade só pra esta lista.
+- **Saúde das ferramentas** (`ScannerHealthPanel`, no topo de `/seguranca/novo`) — `domain.HealthChecker`
+  é uma interface opcional nova (mesmo padrão de `InventoryProvider`/`LocalScanner`) que os 6
+  scanners registrados implementam: os 5 com sidecar (Trivy/Gitleaks/Syft/Semgrep/SonarQube) checam
+  `GET {sidecar}/health`; SonarQube também confere `GET {servidor}/api/system/status` (status "UP" é
+  o único que significa "pronto pra receber análise") — a única dependência desta plataforma com um
+  servidor de análise separado do sidecar; ZAP (sem sidecar próprio) checa a API real dele
+  (`GET /JSON/core/view/version/`, sem efeito colateral). `Service.CheckScannersHealth` roda as 6
+  checagens em PARALELO com um timeout curto (5s) por scanner — pensado pra uma tela que o usuário
+  olha ANTES de disparar um scan, então precisa responder rápido mesmo se um sidecar estiver
+  travado, não só fora do ar. `GET /scanning/scanners/health` (novo endpoint,
+  `scanning:read`) expõe isso; o frontend busca via SWR (revalida sozinho ao voltar pra aba, mais um
+  botão "Verificar de novo").
+
+## Exportação SARIF — shift-left de verdade
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`deadcode`
+limpos — `deadcode` confirma os mesmos 6 itens intencionais de sempre; testes puros de
+`buildSarifLog`/helpers rodam sem depender de Postgres e passam 100%; os testes de handler HTTP de
+ponta a ponta seguem o mesmo padrão de todo o resto da suíte — pulados sem `TEST_DATABASE_URL`, não
+rodados nesta sessão por falta de acesso ao socket do Docker neste ambiente específico, ver adiante;
+frontend: `tsc --noEmit`/`eslint --max-warnings=0` limpos. **Validação extra, específica deste
+formato:** o schema oficial SARIF 2.1.0 foi baixado de
+`raw.githubusercontent.com/schemastore/schemastore` e um documento de amostra gerado por
+`buildSarifLog` (cobrindo: achado com CVE repetido em 2 arquivos, achado sem OWASP category, achado
+sem File/Line — DAST, e um scanner que "rodou" e não achou nada) foi validado com `ajv-cli`
+(`--spec=draft7 -c ajv-formats`, o mesmo draft que o `$schema` do SARIF 2.1.0 declara) contra esse
+schema — `sample.sarif.json valid`, não só "parece certo".
+
+**Origem:** pedido direto do usuário — "o que mais podemos fazer pra melhorar o que as grandes
+empresas fazem?" — depois da reestruturação de `/seguranca` acima. Das quatro opções levantadas
+(SARIF, scans agendados, gate de CI/PR, alertas Slack/Jira), o usuário escolheu a de menor risco: já
+estava mapeada como "próximo passo natural" desde a Fase 14 (ver `csv_export.go`), sem exigir mudança
+de schema/histórico nenhuma.
+
+### O que mudou
+
+- **`GET /scanning/scans/{scanID}/findings.sarif`** (novo endpoint, `scanning:read`) — devolve o
+  documento SARIF 2.1.0 CRU na raiz da resposta, nunca dentro do envelope `{data, error, meta}`
+  padrão desta API: um consumidor de SARIF (GitHub Code Scanning incluso) espera
+  `{"version": ..., "runs": [...]}` direto, o schema oficial não conhece nem toleraria um envelope
+  por cima. Mesmo escopo de `ExportFindings` (CSV) — um scan, sem deduplicação entre re-scans: SARIF
+  representa UMA execução de análise.
+- **Um `run` por scanner, não por scan** — o modelo do SARIF é "uma ferramenta de análise produziu
+  este conjunto de resultados". `buildSarifLog` recebe `ScanStatus.SucceededScanners` (não só os
+  achados) justamente pra garantir um run com `results: []` pra todo scanner que RODOU e não achou
+  nada — sem isso, um scanner limpo ficaria indistinguível de um scanner que nunca rodou aos olhos
+  de quem consome o SARIF.
+- **Uma `rule` por `Finding.ID` distinto, dentro de cada run** — o mesmo CVE encontrado em 2 arquivos
+  vira 1 `rule` (deduplicada) + 2 `results` (um por ocorrência), nunca 2 rules idênticas.
+- **Severidade → `level`** — CRITICAL/HIGH viram `"error"` (o único nível que barra um gate de CI por
+  padrão no GitHub Code Scanning), MEDIUM vira `"warning"`, LOW vira `"note"`. Cada `rule` carrega
+  também `properties["security-severity"]` (convenção do GitHub, score 0.0–10.0 em texto) pra colorir
+  a severidade na aba Security — sem isso todo achado apareceria com a mesma cor neutra lá.
+- **`Region` nunca com `startLine: 0`** — o schema oficial exige `minimum: 1` em `startLine`; um
+  achado sem `File`/`Line` (ex.: DAST contra uma API rodando, sem arquivo específico) omite
+  `Locations` inteiro, nunca manda uma linha zero.
+- **Frontend** — `ScanDetailLive` ganhou "Exportar SARIF →" ao lado de "Exportar CSV →" (mesmo padrão
+  de link direto pro proxy BFF, é navegação de download, não uma chamada `apiClient`).
+
+### Achado real durante a verificação
+
+Sem acesso ao socket do Docker nesta sessão específica (usuário está configurando `sudo` sem senha
+pra Docker, ver histórico da conversa — pendente), não foi possível subir um Postgres isolado como em
+toda rodada anterior desta sessão. Os testes de handler HTTP de ponta a ponta
+(`sarif_export_test.go`) foram escritos seguindo o mesmo padrão de `csv_export_test.go`, mas ainda
+não RODARAM contra banco nenhum — só compilam e pulam (`t.Skip`) como o resto da suíte sem
+`TEST_DATABASE_URL`, o mesmo comportamento de sempre, não uma falha nova. Os testes puros de
+`buildSarifLog` (`sarif_build_test.go`, sem dependência de banco) e a validação `ajv-cli` contra o
+schema oficial cobrem a lógica de construção do documento com confiança real; falta rodar a suíte de
+integração completa (handler HTTP → `ProcessScanJob` → `ListFindings`) assim que houver acesso ao
+Docker de novo — registrado como pendência, não esquecido.
+
+## Diário Oficial — monitoramento real via DJEN
+
+**Status: ✅ implementada, verificação parcial** (backend: `go build`/`go vet`/`staticcheck`/
+`deadcode` limpos — mesmos 6 itens intencionais de sempre; testes puros (`domain`,
+`syncSinceDate`) rodam sem depender de Postgres e passam 100%; os testes de aplicação/handler HTTP
+de ponta a ponta (criação/listagem/remoção de termo, `SyncAll` com dedupe/idempotência, feed de
+publicações) foram escritos seguindo o mesmo rigor de toda fase anterior desta sessão, mas — mesma
+ressalva da seção de SARIF acima — não RODARAM contra banco nesta sessão por falta de acesso ao
+socket do Docker aqui; frontend: `tsc --noEmit`/`eslint --max-warnings=0`/`vitest run` (210
+testes)/`next build` de produção, todos limpos).
+
+**Origem:** pedido direto do usuário — "vamos ver a integração do diário oficial... quero saber
+como as grandes empresas especializadas fazem, quero aplicar as melhores implementações e as
+melhores práticas". Investigação: até este ponto, `diario_oficial` era literalmente só um teste de
+conectividade (`GET` numa URL configurada, sem ler nada do diário) — o `README.md` já chamava isso
+explicitamente de "módulo de referência" pro pipeline job→outbox→worker→notificação que qualquer
+integração nova reaproveita, não um produto de monitoramento de verdade. Comparado com
+Jusbrasil/Escavador/Turivius/Codilo, o núcleo do produto que faltava era: cadastrar um termo (OAB,
+número de processo, texto livre), buscar periodicamente no diário oficial de VERDADE, e alertar
+quando uma publicação nova casa com o termo. O usuário escolheu a opção "MVP real com DJEN"
+(recomendada) entre 4 levantadas (a alternativa "arquitetura pronta, fonte depois" ficaria sem valor
+demonstrável; "só amadurecer o teste de conectividade" não endereçava o pedido de verdade).
+
+**A fonte de dados é real, não simulada:** DJEN (Diário de Justiça Eletrônico Nacional, mantido pelo
+CNJ, `comunicaapi.pje.jus.br`) — API pública gratuita que cobre a maior parte dos tribunais
+brasileiros eletronicamente, a mesma base que boa parte do mercado de legaltech usa. Os parâmetros
+de busca (`numeroOab`/`ufOab`/`numeroProcesso`/`texto`/`dataDisponibilizacaoInicio`/`pagina`/
+`itensPorPagina`) e o formato de resposta foram confirmados contra a API ao vivo durante o
+desenvolvimento (não documentação de terceiro) — `infrastructure.HTTPClient.Search`/os testes com
+`httptest.NewServer` fixam o formato real capturado.
+
+### O que mudou
+
+- **`domain.MonitoredTerm`** (nova entidade) — o que o usuário quer acompanhar: `label` +
+  `oab_number`+`oab_uf` (sempre juntos) OU `process_number` OU `free_text`, pelo menos um
+  preenchido (`Validate()`, espelhado por uma `CHECK` constraint no banco — migration `000026`).
+- **`domain.Client` ganhou `Search`** — ao lado do `Check` (teste de conectividade) já existente,
+  mesma interface, mesmo circuit breaker/métricas `nix_integration_*` compartilhados (as duas são a
+  MESMA dependência externa aos olhos da resiliência). `infrastructure.HTTPClient.Search` monta a
+  URL do DJEN com só os parâmetros que a busca de fato usa, decodifica a resposta preservando o
+  JSON bruto de cada item (`raw_payload`, sem perda) além de extrair os campos estruturados que a
+  plataforma usa hoje.
+- **`Service.SyncAll`** — chamado periodicamente por `worker.DiarioOficialSyncLoop` (mesmo padrão
+  de `scanning.worker.PostureSnapshotLoop`: primeiro sync IMEDIATO ao subir o worker, depois a cada
+  6h), respeitando a MESMA feature flag que já protegia `CreateTestJob`
+  (`diario_oficial_scraping_enabled`). Pra cada termo ATIVO: busca no DJEN desde a última
+  sincronização (com uma margem de 24h de sobreposição — o DJEN filtra por DATA, não data+hora, de
+  disponibilização), grava publicação+match numa única transação com `ON CONFLICT DO NOTHING` nas
+  duas tabelas (idempotente — re-sincronizar a mesma janela nunca duplica nem re-notifica), e
+  publica `diario_oficial.publication.matched` no outbox só pra casamento REALMENTE novo.
+- **Migration `000026`** — três tabelas novas: `diario_oficial_monitored_terms`,
+  `diario_oficial_publications` (`external_id` do DJEN é a chave de deduplicação,
+  `UNIQUE(external_id)`), `diario_oficial_publication_matches` (n:n termo↔publicação,
+  `UNIQUE(publication_id, monitored_term_id)`) — as três com FK `ON DELETE CASCADE` entre si
+  (diferente do resto da plataforma, que evita FK entre tabelas de MÓDULOS diferentes por
+  desacoplamento — aqui são as 3 tabelas do MESMO submódulo).
+- **Endpoints novos** (permissões novas `diario_oficial:read`/`diario_oficial:manage`, concedidas
+  ao mesmo role que já gerencia integrações/scanning): `POST`/`GET
+  /diario-oficial/monitored-terms`, `DELETE /diario-oficial/monitored-terms/{termID}`, `GET
+  /diario-oficial/monitored-terms/{termID}/publications`, `GET /diario-oficial/publications` (feed
+  agregado).
+- **`DefaultDiarioOficialBaseURL`** — ao contrário de `SonarQubeURL`/outras integrações com servidor
+  PRÓPRIO por operador (vazio até alguém configurar), o DJEN é um serviço público ÚNICO — o mesmo
+  endpoint serve todo mundo, então vem configurado por padrão
+  (`https://comunicaapi.pje.jus.br/api/v1/comunicacao`). A feature flag continua sendo o
+  interruptor de emergência real (setar a variável de ambiente vazia NÃO desativa — o loader trata
+  `""` igual a "não definida" e volta pro default, mesmo comportamento de toda outra configuração
+  desta plataforma).
+- **Frontend** — item PRÓPRIO na navegação principal (`/diario-oficial`, não mais só uma entrada
+  dentro de Integrações): `MonitoredTermsPanel` (cadastro por abas OAB/processo/texto livre, lista
+  com selo Ativo/Pausado + remoção) e `MatchedPublicationsFeed` (feed agregado, texto sem as tags
+  HTML que o DJEN às vezes inclui), os dois Client Components via SWR — mesmo raciocínio de
+  `ScannerHealthPanel`: criar/remover termo precisa de feedback imediato na lista, e o feed se
+  beneficia de revalidar sozinho ao voltar pra aba.
+
+### Achado real durante a verificação
+
+`DeleteMonitoredTerm` originalmente respondia `204 No Content` (sem corpo) — consistente com a
+convenção REST genérica, mas **inconsistente com o resto desta API**: `apiClient` (frontend) sempre
+tenta decodificar um `Envelope` JSON de toda resposta (`res.json()`), e um corpo vazio faz isso
+lançar `INVALID_RESPONSE` mesmo com a exclusão tendo funcionado — o mesmo motivo pelo qual
+`UntriageFinding` (Fase 14) já respondia `200` com um envelope vazio em vez de `204`. Pego pelo
+teste de handler antes de qualquer chamada real do frontend (`TestCreateAndListAndDeleteMonitoredTerm_FullLifecycle`
+esperava 204 na primeira versão, corrigido pra 200 depois de checar o padrão estabelecido) — nunca
+chegou a quebrar a UI de verdade, mas teria se o teste não tivesse pego.
+
+### Adiado, com motivo — não esquecimento
+
+- **"Sincronizar agora" sob demanda** — esta versão só sincroniza automaticamente (a cada 6h,
+  `worker.DiarioOficialSyncLoop`); não há botão/endpoint pra forçar um ciclo imediato depois de
+  cadastrar um termo novo. Reaproveitaria o mesmo pipeline job→outbox→worker que `CreateTestJob` já
+  usa (só precisa branch por `job.Type`), mas foi deixado de fora pra manter o escopo deste MVP
+  contido — o primeiro sync automático já roda "imediatamente" ao subir o worker (mesmo padrão de
+  `PostureSnapshotLoop`), então o atraso prático pra um termo cadastrado é no máximo o tempo até o
+  próximo tick do worker, não 6h fixas sempre.
+- **Contagem regressiva de prazo processual** — publicação encontrada não vira automaticamente
+  "prazo de N dias úteis a contar de hoje" (o que Jusbrasil/Escavador/Turivius também oferecem).
+  Contar prazo processual corretamente exige o calendário de feriados forenses de CADA tribunal
+  (municipal/estadual/federal) — uma fonte de dado nova que este MVP não tem, e calcular errado
+  seria pior que não calcular (um prazo perdido por um cálculo errado é um risco real, não só uma
+  imprecisão de UI). Fica como próximo passo natural, precisa de uma fonte confiável de calendário
+  forense antes de começar.
+- ~~**Paginação "carregar mais" no feed de publicações**~~ — **implementada**, ver "Filtros, saúde
+  da fonte e paginação" logo abaixo.
+- **RBAC por termo monitorado** (só quem cadastrou um termo consegue vê-lo/removê-lo) — mesmo motivo
+  já registrado pra RBAC por projeto (scanning, ver "Adiado" da Fase 14 acima): esta plataforma não
+  tem NENHUM controle de acesso por-recurso hoje, só role→permissão global. Fica registrado pra
+  quando o usuário decidir priorizar o épico de Times/Organizações.
+
+### Filtros, saúde da fonte e paginação
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`deadcode`
+limpos, mesmos 6 itens intencionais de sempre; `CheckHealth` testado puro — construído por struct
+literal direto, sem `NewService`, então roda sem depender de Postgres, ao contrário do resto deste
+módulo; frontend: `tsc`/`eslint --max-warnings=0`/`vitest run` (216 testes)/`next build`, todos
+limpos).
+
+**Origem:** perguntas diretas do usuário depois do MVP — "quando eu tiver acesso à API do diário
+oficial da minha prefeitura vou conseguir integrar? como vou visualizar as informações, como serão
+feitos os filtros?". A resposta pra prefeitura ficou registrada como explicação (fonte diferente do
+DJEN, cada município tem sua própria API, o adapter só pode ser escrito depois de ver a API real —
+mesmo cuidado que levou ao DJEN ser confirmado por `curl` antes de qualquer código). Pra "como vou
+visualizar/filtrar", o usuário escolheu implementar as 3 sugestões levantadas: filtro por termo/
+tribunal/tipo, paginação, e um painel de saúde da fonte.
+
+- **`GET /diario-oficial/health`** (novo endpoint, `diario_oficial:read`) — `Service.CheckHealth`
+  chama `client.Check` direto (timeout de 5s), sem job/outbox: mesmo espírito de
+  `scanning.CheckScannersHealth` (reestruturação de /seguranca), escopo menor (uma fonte, não N
+  scanners em paralelo). `SourceHealthPanel` (frontend) no topo de `/diario-oficial`, mesmo padrão
+  de `ScannerHealthPanel` (SWR, botão "Verificar de novo").
+- **Filtro por termo** — `MatchedPublicationsFeed` ganhou um seletor que troca a ORIGEM da busca
+  entre o feed global (`GET /diario-oficial/publications`) e `GET /diario-oficial/monitored-terms/
+  {termID}/publications` — endpoint que já existia desde o MVP, só não estava exposto na UI.
+  Filtro por tribunal/tipo de comunicação é client-side, sobre o que já foi carregado (mesmo
+  raciocínio de `FindingsTable`'s filtro de severidade/ferramenta).
+- **Paginação "carregar mais"** — acumula páginas em memória (mesmo padrão de
+  `PaginatedFindingsFeed`, scanning); trocar de termo reinicia a paginação do zero.
+- **Achado real de lint**: a primeira versão de `MatchedPublicationsFeed` chamava `setLoading(true)`/
+  `setError(null)` SÍNCRONO no corpo de um `useEffect` (pra resetar estado antes de buscar a página
+  1 de um termo novo) — `react-hooks/set-state-in-effect` acusou, o mesmo achado real que já tinha
+  pego `FindingsTable` na revisão de exibição de resultados. Corrigido movendo esses `setState`
+  síncronos pra `handleTermFilterChange` (um event handler de verdade, chamado pelo `onChange` do
+  `<select>`), deixando o `useEffect` só com `setState` dentro de callbacks assíncronos
+  (`.then`/`.catch`/`.finally`).
+- **Achado real de teste**: `getByText("TJMG")` ficou ambíguo depois do filtro de tribunal existir —
+  o mesmo texto aparece no badge da publicação E numa `<option>` do `<select>` (populado a partir do
+  que já foi carregado). Mesmo fix já usado em `FindingsTable.test.tsx`/`ScanList.test.tsx`:
+  matcher de função excluindo elementos `<option>`.

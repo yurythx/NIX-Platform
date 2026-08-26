@@ -7,13 +7,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	diarioApp "github.com/yurythx/nix-platform/internal/modules/diario_oficial/application"
 	diarioWorker "github.com/yurythx/nix-platform/internal/modules/diario_oficial/worker"
+	scanningApp "github.com/yurythx/nix-platform/internal/modules/scanning/application"
 	scanningWorker "github.com/yurythx/nix-platform/internal/modules/scanning/worker"
 
+	"github.com/yurythx/nix-platform/internal/platform/database"
 	"github.com/yurythx/nix-platform/internal/platform/httpserver"
 	"github.com/yurythx/nix-platform/internal/platform/idempotency"
+	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/messaging"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
 	"github.com/yurythx/nix-platform/internal/platform/ratelimit"
@@ -53,12 +59,52 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 	scanningConsumer := newConsumer(messaging.QueueScanningWorker.Name)
 	scanningDLQConsumer := newConsumer(messaging.QueueScanningWorker.DLQName)
 
+	// jobs_stale_sweeper (achado real — usuário viu um scan SonarQube
+	// preso em "0% Rodando" por horas, o worker que o processava tinha
+	// morrido no meio do trabalho sem nunca registrar sucesso/falha, e
+	// nenhuma redelivery do RabbitMQ chegaria: a mensagem original já
+	// tinha sido confirmada/ack quando o processamento começou. Ver
+	// jobs.SweepStale — um handler por tipo de job, cada um dando o
+	// mesmo desfecho terminal (dead_letter, com evento de outbox/
+	// auditoria) que uma falha "normal" (esgotada pelo RabbitMQ) já
+	// teria.
+	jobsRepo := jobs.NewRepository(deps.DB)
+	staleHandlers := map[string]jobs.StaleJobHandler{
+		scanningApp.JobType: func(ctx context.Context, jobID, correlationID uuid.UUID, reason string) error {
+			// HandleScanDeadLetter reaproveita jobs.Error da ÚLTIMA
+			// tentativa gravada em vez de aceitar um motivo por
+			// parâmetro (ver seu comentário) — MarkFailed aqui é o que
+			// faz reason (nunca "max retries exceeded": isto não passou
+			// por retry nenhum do RabbitMQ) aparecer certo no resultado
+			// final, o mesmo mecanismo que uma falha real de scanner já
+			// usa antes de eventualmente ser dead-letterada.
+			if err := database.WithTx(ctx, deps.DB, func(ctx context.Context, tx pgx.Tx) error {
+				return jobsRepo.MarkFailed(ctx, tx, jobID, reason)
+			}); err != nil {
+				return err
+			}
+			return deps.Modules.Scanning.Service.HandleScanDeadLetter(ctx, jobID, correlationID)
+		},
+		diarioApp.JobType: func(ctx context.Context, jobID, correlationID uuid.UUID, reason string) error {
+			return deps.Modules.DiarioOficial.Service.HandleDeadLetter(ctx, jobID, correlationID, reason)
+		},
+	}
+
 	return &Worker{
 		deps: deps,
 		processors: []processor{
 			supervised("outbox_publisher", deps.Logger, outboxPublisher.Run),
 			supervised("rate_limit_cleanup", deps.Logger, ratelimit.Cleanup(deps.DB)),
 			supervised("idempotency_cleanup", deps.Logger, idempotency.Cleanup(deps.DB)),
+			supervised("jobs_stale_sweeper", deps.Logger, jobs.SweepStale(deps.DB, staleHandlers, deps.Config.Jobs.StaleAfter, deps.Logger)),
+			// scanning_posture_snapshot (Fase 14, continuação — tendência
+			// histórica): grava o resumo agregado do dia uma vez por dia,
+			// pra alimentar o gráfico de tendência do dashboard.
+			supervised("scanning_posture_snapshot", deps.Logger, scanningWorker.PostureSnapshotLoop(deps.Modules.Scanning.Service, deps.Logger)),
+			// diario_oficial_sync (monitoramento real via DJEN):
+			// sincroniza todo termo monitorado ativo periodicamente — ver
+			// diarioWorker.DiarioOficialSyncLoop.
+			supervised("diario_oficial_sync", deps.Logger, diarioWorker.DiarioOficialSyncLoop(deps.Modules.DiarioOficial.Service)),
 			supervised("diario_oficial.worker", deps.Logger, func(ctx context.Context) error {
 				return diarioConsumer.Consume(ctx, diarioWorker.JobCreatedHandler(deps.Modules.DiarioOficial.Service))
 			}),

@@ -119,15 +119,18 @@ func (h *Hub) Unregister(c *Client) {
 // Broadcast entrega msg (um envelope de evento em JSON bruto) para todo
 // cliente conectado. O schema de evento (posse do job/integração) hoje não
 // restringe notificações a um único usuário, então todo cliente
-// autenticado vê toda notificação da plataforma — ver ClientCount como
-// ponto de extensão caso um módulo futuro precise de segmentação por
-// usuário.
+// autenticado vê toda notificação da plataforma — segmentar por usuário
+// exigiria primeiro um schema de evento que carregasse o dono, não existe
+// ainda.
 func (h *Hub) Broadcast(msg []byte) {
 	h.broadcast <- msg
 }
 
-// ClientCount reporta quantos clientes estão conectados no momento,
-// exposto para a visão de status do sistema no dashboard.
+// ClientCount reporta quantos clientes estão conectados no momento —
+// sem consumidor de produção hoje (nenhum endpoint de status expõe
+// isto), mas usado de verdade por testes deste pacote pra esperar uma
+// conexão assíncrona terminar de se registrar no Hub antes de seguir com
+// as asserções, em vez de um sleep arbitrário.
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

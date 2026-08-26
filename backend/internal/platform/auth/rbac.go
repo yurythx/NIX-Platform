@@ -36,6 +36,14 @@ const (
 	// novo só para isto.
 	PermScanningRead   Permission = "scanning:read"
 	PermScanningManage Permission = "scanning:manage"
+	// PermDiarioOficialRead/PermDiarioOficialManage controlam o
+	// monitoramento real do Diário Oficial (MVP via DJEN): ler termos
+	// monitorados/publicações casadas vs. cadastrar/remover um termo.
+	// Mesmo role que já lida com o teste de conectividade deste módulo
+	// (PermIntegrationsTest) e com scanning — todos ferramentas externas
+	// a gerenciar, sem role novo só pra isto.
+	PermDiarioOficialRead   Permission = "diario_oficial:read"
+	PermDiarioOficialManage Permission = "diario_oficial:manage"
 	// PermFeatureFlagsManage não é concedida a nenhum role em
 	// rolePermissions abaixo — só o nix-admin a possui, através do atalho
 	// em HasPermission. Alternar feature flags em produção afeta todo
@@ -58,12 +66,15 @@ var rolePermissions = map[RoleName][]Permission{
 		PermIntegrationsManage,
 		PermScanningRead,
 		PermScanningManage,
+		PermDiarioOficialRead,
+		PermDiarioOficialManage,
 	},
 	RoleAuditor: {
 		PermAuditRead,
 		PermUsersRead,
 		PermIntegrationsRead,
 		PermScanningRead,
+		PermDiarioOficialRead,
 	},
 }
 

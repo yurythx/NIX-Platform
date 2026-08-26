@@ -69,13 +69,21 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
   }
 
   const body = await backendResponse.text();
-  return new NextResponse(body, {
-    status: backendResponse.status,
-    headers: {
-      "Content-Type": backendResponse.headers.get("content-type") ?? "application/json",
-      "X-Request-ID": requestId,
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": backendResponse.headers.get("content-type") ?? "application/json",
+    "X-Request-ID": requestId,
+  };
+  // Content-Disposition (Fase 14 — Maturidade de AppSec: exportação CSV,
+  // GET .../findings.csv e .../findings-history.csv): sem propagar isto,
+  // o navegador abre o CSV cru na aba em vez de baixar com o nome de
+  // arquivo que o backend já escolheu (ver transport/csv_export.go) — o
+  // único header, além de Content-Type, que algum endpoint hoje depende
+  // de atravessar o proxy intacto.
+  const contentDisposition = backendResponse.headers.get("content-disposition");
+  if (contentDisposition) {
+    headers["Content-Disposition"] = contentDisposition;
+  }
+  return new NextResponse(body, { status: backendResponse.status, headers });
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
@@ -92,6 +100,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pat
 // (PATCH /api/v1/admin/feature-flags/{key}) — mesmo encaminhamento dos
 // outros métodos, sem lógica própria.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  return proxy(req, path);
+}
+
+// PUT/DELETE (Fase 14 — Maturidade de AppSec): triar/reabrir um achado
+// (PUT|DELETE /api/v1/scanning/projects/{projectID}/findings/{fingerprint}/triage)
+// — mesmo encaminhamento, sem lógica própria.
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params;
+  return proxy(req, path);
+}
+
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params;
   return proxy(req, path);
 }

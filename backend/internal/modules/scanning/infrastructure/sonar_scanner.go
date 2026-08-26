@@ -9,9 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +19,14 @@ import (
 // SonarScannerName é o valor que identifica este CodeScanner no registro
 // do scanning.Service.
 const SonarScannerName = "sonarqube"
+
+// sonarScanSubmitTimeout: quanto tempo scanRemote espera pelo sidecar
+// terminar de rodar o `sonar-scanner` CLI (análise local + upload do
+// relatório) — bem acima de qualquer timeout de requisição HTTP comum,
+// porque essa chamada não é uma requisição HTTP comum: o CLI faz análise
+// de verdade antes de devolver, e isso escala com o tamanho do
+// repositório.
+const sonarScanSubmitTimeout = 10 * time.Minute
 
 // SonarScanner é o terceiro CodeScanner real da plataforma (Fase 5 do
 // roadmap de segurança): qualidade de código/bugs/vulnerabilidades via um
@@ -43,62 +48,162 @@ const SonarScannerName = "sonarqube"
 // Mesmo alvo/mecânica de clonagem que TrivyScanner/SemgrepScanner (ver
 // git_clone.go) — a validação de alvo e a defesa de SSRF são
 // compartilhadas, nunca duplicadas.
+//
+// Containerização (§ decisão do usuário — "gitguard usa cada solução
+// containerizada, vamos fazer do mesmo jeito", ver
+// docs/roadmap-secops-orchestrator.md): Execute não roda mais
+// `sonar-scanner` dentro do próprio processo — clona pra dentro de um
+// volume compartilhado (workspaceDir) e chama o sidecar `sonar-scanner-cli`
+// (cmd/sonar-sidecar) via HTTP, que roda o CLI no PRÓPRIO container
+// isolado e devolve só o ceTaskId (não o JSON nativo de uma ferramenta —
+// o sonar-scanner CLI não produz um relatório de achados, só faz upload;
+// ver comentário no topo de cmd/sonar-sidecar/main.go pra por que este
+// sidecar precisa de acesso de ESCRITA ao volume, ao contrário dos
+// outros três). waitForAnalysis/fetchIssues abaixo continuam falando
+// HTTP direto com o servidor SonarQube de verdade (serverURL) — não são
+// afetados pela containerização do CLI, que é um passo local anterior a
+// essas duas chamadas.
+//
+// Nunca teve um ExecuteLocal/LocalScanner (ao contrário de Trivy/
+// Gitleaks/Semgrep): a Fase 8 (cmd/secscan) já escopava isso fora de
+// propósito — SonarQube exige um servidor rodando e credenciais, não dá
+// pra rodar "local" sem rede de qualquer forma. Por isso Execute aqui
+// sempre exige o sidecar configurado, sem o fallback os/exec que
+// TrivyScanner.ExecuteLocal/SemgrepScanner.ExecuteLocal têm — nunca
+// existiu um caminho que precisasse dele.
 type SonarScanner struct {
-	scannerPath     string
-	serverURL       string
-	token           string
-	cloneTimeout    time.Duration
+	// sidecarURL é o endereço do sidecar (ex.: http://sonar-scanner-cli:8080)
+	// que Execute chama via HTTP pra rodar o CLI — vazio reporta o
+	// scanner como indisponível, mesmo princípio de serverURL vazio.
+	// Nome deliberadamente diferente de "serviceURL" (a convenção nos
+	// outros três scanners) pra nunca ser confundido com serverURL
+	// abaixo (o SERVIDOR SonarQube em si — uma URL completamente
+	// diferente). Mesma posição de TrivyScanner.serviceURL/workspaceDir
+	// na assinatura do construtor abaixo — só os dois campos
+	// serverURL/token logo depois são exclusivos deste scanner (os
+	// outros três não falam com um servidor de análise separado).
+	sidecarURL string
+	// workspaceDir é o diretório BASE (dentro do volume compartilhado
+	// com o sidecar) onde Execute clona o alvo — ver cloneShallow.
+	workspaceDir string
+	serverURL    string
+	token        string
+	httpClient   *http.Client
+	// scanHTTPClient é usado só por scanRemote (POST .../scan, que roda o
+	// `sonar-scanner` CLI DENTRO do sidecar e só responde quando ele
+	// termina) — precisa de um timeout bem mais generoso que httpClient
+	// (usado pelas chamadas rápidas: HealthCheck, poll de
+	// waitForAnalysis, fetchIssues). Achado real (revisão pedida pelo
+	// usuário — "verifique os logs, alguns scans falharam"): o `sonar-
+	// scanner` CLI faz ANÁLISE LOCAL antes de subir o relatório (não é
+	// só uma requisição HTTP simples) — pra um repositório de tamanho
+	// real, isso sozinho já passa dos 30s que httpClient usava aqui
+	// antes, derrubando o scan inteiro com "context deadline exceeded"
+	// mesmo com o sidecar saudável e respondendo. Continua bounded por
+	// ctx (todo request usa NewRequestWithContext) — um alvo genuinely
+	// travado ainda é interrompido pelo contexto do chamador, não só por
+	// este teto.
+	scanHTTPClient *http.Client
+	cloneTimeout   time.Duration
+	// analysisTimeout, ao contrário de cloneTimeout, é exclusivo deste
+	// scanner — os outros três não têm uma segunda fase assíncrona
+	// (a Compute Engine do servidor) pra esperar depois do clone.
 	analysisTimeout time.Duration
-	httpClient      *http.Client
 	logger          *slog.Logger
 }
 
-// NewSonarScanner constrói o adapter. serverURL vazio é uma configuração
-// válida (mesmo princípio de DiarioOficialConfig.BaseURL) — Execute
-// reporta o scanner como indisponível em vez de o worker inteiro falhar
-// ao inicializar quando o SonarQube ainda não foi configurado.
-func NewSonarScanner(scannerPath, serverURL, token string, cloneTimeout, analysisTimeout time.Duration, logger *slog.Logger) *SonarScanner {
+// NewSonarScanner constrói o adapter — mesma ordem de parâmetros que
+// NewTrivyScanner/NewGitleaksScanner/NewSemgrepScanner (sidecarURL,
+// workspaceDir, ..., cloneTimeout, logger), com serverURL/token
+// inseridos no meio por serem exclusivos deste scanner. serverURL vazio
+// é uma configuração válida (mesmo princípio de
+// DiarioOficialConfig.BaseURL) — Execute reporta o scanner como
+// indisponível em vez de o worker inteiro falhar ao inicializar quando o
+// SonarQube ainda não foi configurado. sidecarURL vazio tem o mesmo
+// efeito (mesmo princípio de TrivyScanner.serviceURL vazio) — os dois
+// precisam estar preenchidos pra este scanner funcionar.
+func NewSonarScanner(sidecarURL, workspaceDir, serverURL, token string, cloneTimeout, analysisTimeout time.Duration, logger *slog.Logger) *SonarScanner {
 	return &SonarScanner{
-		scannerPath:     scannerPath,
+		sidecarURL:      strings.TrimRight(sidecarURL, "/"),
+		workspaceDir:    workspaceDir,
 		serverURL:       strings.TrimRight(serverURL, "/"),
 		token:           token,
+		httpClient:      &http.Client{Timeout: 30 * time.Second},
+		scanHTTPClient:  &http.Client{Timeout: sonarScanSubmitTimeout},
 		cloneTimeout:    cloneTimeout,
 		analysisTimeout: analysisTimeout,
-		httpClient:      &http.Client{Timeout: 30 * time.Second},
 		logger:          logger,
 	}
 }
 
 var _ domain.CodeScanner = (*SonarScanner)(nil)
+var _ domain.HealthChecker = (*SonarScanner)(nil)
 
 func (s *SonarScanner) Name() string { return SonarScannerName }
 
+// HealthCheck reporta se as DUAS dependências deste scanner estão vivas
+// — o sidecar sonar-scanner-cli (mesma checagem que os outros quatro
+// scanners fazem, ver health_check.go's sidecarHealthCheck) E o próprio
+// servidor SonarQube configurado (GET /api/system/status, a checagem de
+// saúde real que a API do SonarQube expõe — status "UP" é o único valor
+// que significa "pronto pra receber análise"; qualquer outro
+// (STARTING/DOWN/RESTARTING/DB_MIGRATION_NEEDED/...) não é). As outras
+// quatro dependências de scanner desta plataforma só têm UM sidecar pra
+// checar; esta é a única com um servidor de análise separado por trás.
+func (s *SonarScanner) HealthCheck(ctx context.Context) error {
+	if err := sidecarHealthCheck(ctx, s.httpClient, s.sidecarURL, "sonarqube sidecar"); err != nil {
+		return err
+	}
+	if s.serverURL == "" {
+		return fmt.Errorf("scanning: sonarqube server: URL not configured")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.serverURL+"/api/system/status", nil)
+	if err != nil {
+		return fmt.Errorf("scanning: sonarqube server: build health check request: %w", err)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("scanning: sonarqube server: unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("scanning: sonarqube server: returned status %d", resp.StatusCode)
+	}
+
+	var status struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return fmt.Errorf("scanning: sonarqube server: decode status response: %w", err)
+	}
+	if status.Status != "UP" {
+		return fmt.Errorf("scanning: sonarqube server: status is %q, not UP", status.Status)
+	}
+	return nil
+}
+
 // Execute clona o alvo, submete a análise ao servidor SonarQube
-// configurado, espera a Compute Engine processá-la, e busca os achados
-// (issues) resultantes.
+// configurado (via o sidecar `sonar-scanner-cli`), espera a Compute
+// Engine processá-la, e busca os achados (issues) resultantes.
 func (s *SonarScanner) Execute(ctx context.Context, target string) ([]domain.Finding, error) {
 	if s.serverURL == "" {
 		return nil, apperrors.DependencyUnavailable("scanning: sonarqube: SCANNING_SONARQUBE_URL is not configured")
 	}
+	if s.sidecarURL == "" {
+		return nil, apperrors.DependencyUnavailable("scanning: sonarqube: SCANNING_SONAR_SCANNER_SERVICE_URL is not configured")
+	}
 
-	dir, cleanup, err := cloneShallow(ctx, target, s.cloneTimeout, "", s.logger)
+	dir, cleanup, err := cloneShallow(ctx, target, s.cloneTimeout, s.workspaceDir, s.logger)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
 	projectKey := sonarProjectKey(target)
-	if err := s.runScanner(ctx, dir, projectKey); err != nil {
-		return nil, err
-	}
-
-	reportTask, err := readReportTask(dir)
+	taskID, err := s.scanRemote(ctx, dir, projectKey)
 	if err != nil {
-		return nil, fmt.Errorf("scanning: sonarqube: %w", err)
-	}
-	taskID := reportTask["ceTaskId"]
-	if taskID == "" {
-		return nil, fmt.Errorf("scanning: sonarqube: report-task.txt has no ceTaskId")
+		return nil, err
 	}
 
 	analysisCtx, cancel := context.WithTimeout(ctx, s.analysisTimeout)
@@ -118,52 +223,58 @@ func sonarProjectKey(target string) string {
 	return domain.SonarProjectKey(target)
 }
 
-func (s *SonarScanner) runScanner(ctx context.Context, dir, projectKey string) error {
-	cmd := exec.CommandContext(ctx, s.scannerPath,
-		"-Dsonar.host.url="+s.serverURL,
-		"-Dsonar.token="+s.token,
-		"-Dsonar.projectKey="+projectKey,
-		"-Dsonar.projectBaseDir="+dir,
-		"-Dsonar.sources=.",
-		// Já clonamos raso (--depth 1, ver git_clone.go) — sem histórico
-		// git completo, o SCM Publisher do scanner só geraria aviso e
-		// trabalho à toa tentando fazer blame de linha por autor.
-		"-Dsonar.scm.disabled=true",
-	)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// Verificado contra o servidor real: sonar-scanner grava ERROR
-		// em stderr (INFO fica em stdout), diferente da convenção que
-		// TrivyScanner/SemgrepScanner já seguiam — mesmo assim.
-		return apperrors.DependencyUnavailable(fmt.Sprintf("scanning: sonarqube: scan failed: %s", extractErrorLine(stderr.String())))
-	}
-	return nil
-}
-
-// readReportTask lê ".scannerwork/report-task.txt" (formato key=value,
-// uma entrada por linha) que o sonar-scanner grava dentro do
-// projectBaseDir depois de um upload bem-sucedido — confirmado contra
-// uma execução real, não documentado explicitamente pelo SonarQube.
-func readReportTask(dir string) (map[string]string, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, ".scannerwork", "report-task.txt"))
+// scanRemote pede pro sidecar (cmd/sonar-sidecar) rodar
+// `sonar-scanner` contra dir, que precisa estar dentro do volume
+// compartilhado que os dois containers montam (o sidecar em
+// leitura-escrita, diferente dos outros três — ver o comentário no topo
+// de cmd/sonar-sidecar/main.go). Devolve o ceTaskId que o CLI gravou,
+// pronto pra waitForAnalysis consultar.
+func (s *SonarScanner) scanRemote(ctx context.Context, dir, projectKey string) (string, error) {
+	body, err := json.Marshal(struct {
+		Path       string `json:"path"`
+		HostURL    string `json:"host_url"`
+		Token      string `json:"token"`
+		ProjectKey string `json:"project_key"`
+	}{Path: dir, HostURL: s.serverURL, Token: s.token, ProjectKey: projectKey})
 	if err != nil {
-		return nil, fmt.Errorf("read report-task.txt: %w", err)
+		return "", fmt.Errorf("scanning: sonarqube: encode scan request: %w", err)
 	}
-	props := make(map[string]string)
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		props[key] = value
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.sidecarURL+"/scan", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("scanning: sonarqube: build request: %w", err)
 	}
-	return props, nil
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.scanHTTPClient.Do(req)
+	if err != nil {
+		return "", apperrors.DependencyUnavailable(fmt.Sprintf("scanning: sonarqube: sidecar unreachable: %s", err.Error()))
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", apperrors.DependencyUnavailable(fmt.Sprintf("scanning: sonarqube: read sidecar response: %s", err.Error()))
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(respBody, &errResp)
+		return "", apperrors.DependencyUnavailable(fmt.Sprintf("scanning: sonarqube: scan failed: %s", extractErrorLine(errResp.Error)))
+	}
+
+	var scanResp struct {
+		CETaskID string `json:"ce_task_id"`
+	}
+	if err := json.Unmarshal(respBody, &scanResp); err != nil {
+		return "", fmt.Errorf("scanning: sonarqube: decode sidecar response: %w", err)
+	}
+	if scanResp.CETaskID == "" {
+		return "", fmt.Errorf("scanning: sonarqube: sidecar returned no ce_task_id")
+	}
+	return scanResp.CETaskID, nil
 }
 
 // sonarTaskResponse é o subconjunto de GET /api/ce/task que este adapter

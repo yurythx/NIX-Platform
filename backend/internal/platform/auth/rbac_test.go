@@ -29,13 +29,3 @@ func TestHasPermission_NoRolesDeniesEverything(t *testing.T) {
 		t.Error("expected an identity with no roles to have no permissions")
 	}
 }
-
-func TestIdentity_HasAnyRole(t *testing.T) {
-	id := Identity{Roles: []string{RoleUser}}
-	if !id.HasAnyRole(RoleAdmin, RoleUser) {
-		t.Error("expected HasAnyRole to match nix-user")
-	}
-	if id.HasAnyRole(RoleAdmin, RoleAuditor) {
-		t.Error("expected HasAnyRole to reject unrelated roles")
-	}
-}

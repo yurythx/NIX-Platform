@@ -24,6 +24,14 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 		httpserver.RateLimit(logger, scanLimiter, RateLimitKey),
 	).Post("/scanning/scans", h.CreateScan)
 
+	// Revisão de exibição de resultados: a tela "saúde das ferramentas"
+	// antes de disparar um scan — scanning:read, mesma permissão de
+	// qualquer outra leitura deste módulo (não dispara nada, só
+	// consulta).
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scanners/health", h.ScannersHealth)
+
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans", h.ListScans)
@@ -35,6 +43,19 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans/{scanID}/findings", h.ListFindings)
+
+	// Fase 14 (Maturidade de AppSec): o mesmo achado, em CSV — pra levar
+	// pra fora da plataforma (planilha, ticket, anexo de auditoria).
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scans/{scanID}/findings.csv", h.ExportFindings)
+
+	// SARIF (shift-left) — o mesmo achado, no formato que GitHub Code
+	// Scanning/Azure DevOps consomem nativamente, virando anotação no
+	// diff do PR sem esta plataforma construir UI de comentário própria.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scans/{scanID}/findings.sarif", h.ExportFindingsSarif)
 
 	// Fase 11 (Syft): inventário de pacotes de uma execução — nunca acha
 	// nada, então nunca aparece em .../findings; rota própria, mesmo
@@ -68,4 +89,34 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/projects/{projectID}/findings-history", h.ListProjectFindingsHistory)
+
+	// Fase 14 (Maturidade de AppSec): o mesmo histórico deduplicado, em CSV.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/projects/{projectID}/findings-history.csv", h.ExportProjectFindingsHistory)
+
+	// Fase 14 (Maturidade de AppSec): triar (PUT) ou reabrir (DELETE) um
+	// achado deduplicado — scanning:manage, a mesma permissão que já
+	// exige disparar um scan/criar um projeto: suprimir um achado é uma
+	// decisão de mesmo peso, não uma simples leitura.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningManage),
+	).Put("/scanning/projects/{projectID}/findings/{fingerprint}/triage", h.TriageFinding)
+
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningManage),
+	).Delete("/scanning/projects/{projectID}/findings/{fingerprint}/triage", h.UntriageFinding)
+
+	// Fase 14 (Maturidade de AppSec): resumo agregado pro card de postura
+	// de segurança do dashboard — scanning:read, mesma permissão de
+	// qualquer outra listagem deste módulo.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/posture", h.SecurityPosture)
+
+	// Fase 14, continuação (tendência histórica): a série temporal por
+	// trás do gráfico de tendência do dashboard.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/posture/history", h.PostureHistory)
 }

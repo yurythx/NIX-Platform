@@ -19,4 +19,27 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 		auth.RequirePermission(logger, auth.PermIntegrationsTest),
 		httpserver.RateLimit(logger, limiter, RateLimitKey),
 	).Post("/integrations/diario-oficial/test", h.TestDiarioOficial)
+
+	// MVP de monitoramento real do Diário Oficial via DJEN —
+	// cadastrar/listar/remover termo (manage) e ler publicações casadas
+	// (read), mesma separação leitura/gestão que scanning:read/manage
+	// já usa.
+	r.With(
+		auth.RequirePermission(logger, auth.PermDiarioOficialManage),
+	).Post("/diario-oficial/monitored-terms", h.CreateMonitoredTerm)
+	r.With(
+		auth.RequirePermission(logger, auth.PermDiarioOficialRead),
+	).Get("/diario-oficial/monitored-terms", h.ListMonitoredTerms)
+	r.With(
+		auth.RequirePermission(logger, auth.PermDiarioOficialManage),
+	).Delete("/diario-oficial/monitored-terms/{termID}", h.DeleteMonitoredTerm)
+	r.With(
+		auth.RequirePermission(logger, auth.PermDiarioOficialRead),
+	).Get("/diario-oficial/monitored-terms/{termID}/publications", h.ListPublicationsForTerm)
+	r.With(
+		auth.RequirePermission(logger, auth.PermDiarioOficialRead),
+	).Get("/diario-oficial/publications", h.ListRecentPublications)
+	r.With(
+		auth.RequirePermission(logger, auth.PermDiarioOficialRead),
+	).Get("/diario-oficial/health", h.Health)
 }

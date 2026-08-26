@@ -214,12 +214,31 @@ type Repository interface {
 	// devolve uma lista vazia, não erro.
 	ListByScanIDs(ctx context.Context, scanIDs []uuid.UUID) ([]PersistedFinding, error)
 
-	// ListRecent retorna os achados mais graves/recentes entre TODAS as
-	// execuções de scan (não só uma), até limit linhas — o feed que a
-	// Fase 9 (UI no frontend) usa pra listar "achados recentes por
-	// severidade" sem que quem chama precise já saber um scan_id de
-	// antemão (ListByScanID sozinho não serve pra isso).
-	ListRecent(ctx context.Context, limit int) ([]PersistedFinding, error)
+	// CountBySeverity retorna, pra cada um dos scanIDs que tem PELO MENOS
+	// um achado, quantos achados existem por severidade — revisão de
+	// exibição de resultados ("quais erros e warnings foram achados" na
+	// tela de histórico de scans). Uma única consulta agregada (GROUP BY
+	// scan_id, severity), não uma por scan — pensado pra enriquecer uma
+	// PÁGINA inteira de scans (ListRecentScans) de uma vez. Um scanID
+	// sem achado nenhum simplesmente não aparece como chave do mapa
+	// resultado (nunca uma entrada com todo valor zerado) — quem chama
+	// trata a ausência como "sem achado nenhum ainda", mesmo princípio
+	// de toda outra consulta deste módulo que devolve lista/mapa vazio
+	// em vez de um valor "zerado" explícito.
+	CountBySeverity(ctx context.Context, scanIDs []uuid.UUID) (map[uuid.UUID]map[Severity]int, error)
+
+	// ListRecentPage retorna UMA página dos achados mais graves/recentes
+	// entre TODAS as execuções de scan (não só uma) — o feed que a Fase 9
+	// (UI no frontend) usa pra listar "achados recentes por severidade"
+	// sem que quem chama precise já saber um scan_id de antemão
+	// (ListByScanID sozinho não serve pra isso). totalCount é o total de
+	// linhas que EXISTEM (sem paginação), não o total desta página — a
+	// Fase 14 (Maturidade de AppSec) trocou o antigo "só os N mais
+	// recentes, o resto nunca aparece" (limit fixo sem OFFSET) por
+	// paginação de verdade, reaproveitando o mesmo contrato
+	// internal/domain/pagination que o resto da plataforma já usa (ver
+	// application.ListRecentFindings).
+	ListRecentPage(ctx context.Context, offset, limit int) (findings []PersistedFinding, totalCount int64, err error)
 
 	// StartScannerRun registra que scanner começou a rodar dentro de
 	// jobID — chamado no INÍCIO de cada goroutine de
@@ -352,6 +371,29 @@ type LocalScanner interface {
 // inventário (Fase 11), não só achados.
 type LocalInventoryProvider interface {
 	InventoryLocal(ctx context.Context, dir string) ([]Package, error)
+}
+
+// HealthChecker (revisão de exibição de resultados — "quero ter uma
+// tela onde mostra a saúde das ferramentas... antes de iniciá-las") é
+// implementado por um CodeScanner que sabe checar se a dependência
+// externa por trás dele (sidecar containerizado, ou — pro ZAP — o
+// daemon em si) está viva, SEM rodar um scan de verdade. Mesmo padrão
+// de type assertion de InventoryProvider/LocalScanner acima — os 6
+// scanners registrados implementam isto hoje (ver cada infrastructure.
+// *Scanner.HealthCheck), mas a interface é opcional de propósito: um
+// scanner futuro que não tenha como checar saúde sem rodar um scan de
+// verdade simplesmente não implementa isto, e
+// application.Service.CheckScannersHealth pula ele.
+type HealthChecker interface {
+	CodeScanner
+	// HealthCheck retorna nil quando a dependência está configurada E
+	// respondeu como esperado; um erro (nunca um apperrors.Error
+	// tipado — quem chama só usa a mensagem, não o Code) caso
+	// contrário — "não configurado" e "configurado mas fora do ar" são
+	// os dois motivos reais, distinguidos só pelo texto da mensagem,
+	// nunca por um código à parte: os dois têm a mesma consequência
+	// pra quem decide se pode disparar um scan agora.
+	HealthCheck(ctx context.Context) error
 }
 
 // ZipExtractor extrai os bytes de um .zip (Fase 10 — Project.UploadZip)

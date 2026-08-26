@@ -276,6 +276,49 @@ func TestGetScanStatus_InvalidScanID_Returns400(t *testing.T) {
 	}
 }
 
+// TestGetScanStatus_ProjectScan_IncludesProjectID / _AdHocScan_OmitsProjectID
+// (revisão de exibição de resultados — docs/roadmap-secops-orchestrator.md,
+// Fase 14): project_id existia internamente desde a Fase 10
+// (application.ScanStatus.ProjectID) mas nunca tinha chegado à resposta
+// HTTP — o frontend usa isto pra saber se os achados deste scan podem
+// ser triados (a triagem é escopada a projeto).
+func TestGetScanStatus_ProjectScan_IncludesProjectID(t *testing.T) {
+	pool := testPool(t)
+	svc := newTestService(pool, &fakeScanner{name: "trivy"})
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
+	ctx := context.Background()
+
+	project, err := svc.CreateProjectGit(ctx, "test-project-scan-status", "https://example.com/repo-status.git", nil)
+	if err != nil {
+		t.Fatalf("CreateProjectGit: %v", err)
+	}
+	job, err := svc.CreateProjectScanJob(ctx, uuid.New(), []string{"trivy"}, project.ID, nil)
+	if err != nil {
+		t.Fatalf("CreateProjectScanJob: %v", err)
+	}
+
+	got := getScanStatus(t, h, job.ID.String())
+	if got.ProjectID == nil || *got.ProjectID != project.ID.String() {
+		t.Errorf("ProjectID = %v, want %q", got.ProjectID, project.ID.String())
+	}
+}
+
+func TestGetScanStatus_AdHocScan_OmitsProjectID(t *testing.T) {
+	pool := testPool(t)
+	svc := newTestService(pool, &fakeScanner{name: "trivy"})
+	h := NewHandlers(svc, testLogger(), testSonarQubePublicURL)
+
+	job, err := svc.CreateScanJob(context.Background(), uuid.New(), []string{"trivy"}, "https://example.com/adhoc-repo.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+
+	got := getScanStatus(t, h, job.ID.String())
+	if got.ProjectID != nil {
+		t.Errorf("ProjectID = %v, want nil (ad-hoc scan, no project)", *got.ProjectID)
+	}
+}
+
 func TestGetScanStatus_UnknownScanID_Returns404(t *testing.T) {
 	pool := testPool(t)
 	h := NewHandlers(newTestService(pool), testLogger(), testSonarQubePublicURL)

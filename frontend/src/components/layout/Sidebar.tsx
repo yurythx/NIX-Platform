@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, Plug, Settings, ShieldAlert } from "lucide-react";
+import { LayoutDashboard, Newspaper, Plug, Settings, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
@@ -9,6 +9,11 @@ const links = [
   { href: "/dashboard", label: "Visão geral", icon: LayoutDashboard },
   { href: "/integracoes", label: "Integrações", icon: Plug },
   { href: "/seguranca", label: "Segurança", icon: ShieldAlert },
+  // Diário Oficial (MVP real de monitoramento via DJEN): item PRÓPRIO na
+  // navegação principal, não mais só uma entrada dentro de Integrações
+  // — deixou de ser só um teste de conectividade, virou um produto que o
+  // usuário abre no dia a dia (cadastrar termo, ver publicação nova).
+  { href: "/diario-oficial", label: "Diário Oficial", icon: Newspaper },
   { href: "/configuracao", label: "Configurações", icon: Settings },
 ];
 

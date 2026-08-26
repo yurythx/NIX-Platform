@@ -99,7 +99,21 @@ type LocalAuthConfig struct {
 
 // JobsConfig guarda as configurações de processamento assíncrono de jobs.
 type JobsConfig struct {
-	Timeout time.Duration
+	// StaleAfter: há quanto tempo sem atividade um job "processing" (ver
+	// jobs.Status) precisa estar pro sweeper (jobs.SweepStale) considerar
+	// ele órfão — um worker que morreu no meio do trabalho (crash, OOM,
+	// `docker compose restart`/`--force-recreate` no meio de um job, o
+	// host reiniciando) nunca chama MarkCompleted/MarkFailed, e como a
+	// mensagem do RabbitMQ que disparou o processamento já foi
+	// confirmada (ack) muito antes de o worker morrer, nenhuma
+	// redelivery chega nunca — sem um sweeper, esse job fica preso em
+	// "processing" pra sempre (achado real: um scan SonarQube preso em
+	// "0% Rodando" por horas, sem nenhum worker vivo ainda o processando).
+	// Precisa ficar ACIMA do maior timeout interno de qualquer scanner
+	// individual (hoje: SCANNING_ZAP_SCAN_TIMEOUT, 30min por padrão) —
+	// um job legitimamente ainda em andamento nunca deveria ser varrido
+	// por engano; o default (45min) já inclui essa margem.
+	StaleAfter time.Duration
 }
 
 // WorkerConfig guarda as configurações do listener HTTP mínimo próprio do
@@ -115,17 +129,39 @@ func (c WorkerConfig) MetricsAddr() string {
 }
 
 // DiarioOficialConfig guarda as configurações da integração com o Diário
-// Oficial. BaseURL é deliberadamente permitido vazio — um ambiente sem
-// essa integração configurada deve reportá-la como indisponível, não
-// derrubar o processo.
+// Oficial. BaseURL vem com um default de verdade (ver
+// DefaultDiarioOficialBaseURL abaixo) — client.HTTPClient continua
+// tolerando BaseURL vazio (reportando a integração como indisponível em
+// vez de derrubar o processo) só porque isso é possível em teste
+// (construir um HTTPClient com "" na mão), não porque é alcançável via
+// configuração real desta plataforma.
 type DiarioOficialConfig struct {
 	BaseURL string
 	Timeout time.Duration
 }
 
-// ScanningConfig guarda as configurações do módulo scanning. TrivyPath,
-// SemgrepPath e SonarScannerPath são só "trivy"/"semgrep"/"sonar-scanner"
-// por padrão (resolvidos via PATH da imagem do worker); CloneTimeout
+// DefaultDiarioOficialBaseURL é o DJEN (Diário de Justiça Eletrônico
+// Nacional, mantido pelo CNJ) — a API pública gratuita de comunicações
+// processuais que cobre a maior parte dos tribunais brasileiros
+// eletronicamente, a mesma fonte que boa parte do mercado de legaltech
+// usa (ver infrastructure.HTTPClient.Search). Vem configurada por padrão
+// (ao contrário de SonarQubeURL/ScanningConfig, que ficam vazias até um
+// operador apontar pro PRÓPRIO servidor) porque o DJEN é um serviço
+// público único, sem instância própria pra apontar — o mesmo endpoint
+// serve todo mundo. `diario_oficial_scraping_enabled` (feature flag,
+// habilitada por padrão) é o interruptor de emergência caso isto precise
+// ser desligado em produção sem reimplantar — desligar essa flag faz
+// SyncAll pular todo ciclo sem chamar o DJEN nenhuma vez. Apontar
+// DIARIO_OFICIAL_BASE_URL pra outra URL (ex.: um endpoint interno de
+// teste) é a forma de trocar o provedor; setar a variável vazia NÃO
+// desativa (l.str trata "" igual a "não definida" e volta pro default
+// abaixo — mesmo comportamento de toda outra configuração desta
+// plataforma), a feature flag é o único desligamento de verdade.
+const DefaultDiarioOficialBaseURL = "https://comunicaapi.pje.jus.br/api/v1/comunicacao"
+
+// ScanningConfig guarda as configurações do módulo scanning. TrivyPath e
+// SemgrepPath são só "trivy"/"semgrep" por padrão (resolvidos via PATH,
+// só usados por ExecuteLocal sem sidecar configurado); CloneTimeout
 // limita quanto tempo cada scanner espera o `git clone` de um alvo
 // terminar antes de desistir, para que um repositório gigante ou um host
 // lento nunca prenda um worker indefinidamente. SemgrepConfig é o
@@ -170,10 +206,29 @@ type ScanningConfig struct {
 	// desta fase) — Semgrep/SonarQube continuam clonando pro temp dir
 	// padrão do worker até serem containerizados também.
 	ScanningWorkspaceDir string
-	SemgrepPath          string
-	SemgrepConfig        string
+	// SemgrepPath só é usado por SemgrepScanner.ExecuteLocal (cmd/secscan
+	// e, sem sidecar configurado, Fase 10/upload .zip) — Execute (o
+	// caminho de produção via worker) usa SemgrepServiceURL abaixo, desde
+	// a containerização do Semgrep (mesmo papel de TrivyServiceURL/
+	// GitleaksServiceURL acima, ver docs/roadmap-secops-orchestrator.md,
+	// seção "Containerização").
+	SemgrepPath       string
+	SemgrepServiceURL string
+	SemgrepConfig     string
 
-	SonarScannerPath         string
+	// SonarScannerServiceURL aponta pro sidecar `sonar-scanner-cli`
+	// (docker-compose.yml) que SonarScanner.Execute chama via HTTP pra
+	// rodar o CLI — mesmo papel de TrivyServiceURL/SemgrepServiceURL
+	// acima, nome deliberadamente diferente (não "SonarScannerServiceURL"
+	// abreviado) pra nunca ser confundido com SonarQubeURL logo abaixo
+	// (o SERVIDOR SonarQube em si — uma URL completamente diferente).
+	// Nunca teve um SonarScannerPath (o caminho de um binário local): ao
+	// contrário de Trivy/Gitleaks/Semgrep, este scanner nunca teve um
+	// ExecuteLocal — SonarQube sempre exigiu um servidor+credenciais,
+	// nunca funcionou "local" de qualquer forma, então não existe mais
+	// nenhum código que precise saber o caminho do binário depois desta
+	// containerização.
+	SonarScannerServiceURL   string
 	SonarQubeURL             string
 	SonarQubeToken           string
 	SonarQubeAnalysisTimeout time.Duration
@@ -397,14 +452,14 @@ func Load() (*Config, error) {
 			TokenTTL:      l.durationVal("LOCAL_AUTH_TOKEN_TTL", false, time.Hour),
 		},
 		Jobs: JobsConfig{
-			Timeout: l.durationVal("JOB_TIMEOUT", false, 5*time.Minute),
+			StaleAfter: l.durationVal("JOB_STALE_AFTER", false, 45*time.Minute),
 		},
 		Worker: WorkerConfig{
 			MetricsHost: l.str("WORKER_METRICS_HOST", false, "0.0.0.0"),
 			MetricsPort: l.intVal("WORKER_METRICS_PORT", false, 9100),
 		},
 		DiarioOficial: DiarioOficialConfig{
-			BaseURL: l.str("DIARIO_OFICIAL_BASE_URL", false, ""),
+			BaseURL: l.str("DIARIO_OFICIAL_BASE_URL", false, DefaultDiarioOficialBaseURL),
 			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
 		},
 		Scanning: ScanningConfig{
@@ -416,9 +471,10 @@ func Load() (*Config, error) {
 			SyftServiceURL:       l.str("SCANNING_SYFT_SERVICE_URL", false, ""),
 			ScanningWorkspaceDir: l.str("SCANNING_WORKSPACE_DIR", false, ""),
 			SemgrepPath:          l.str("SCANNING_SEMGREP_PATH", false, "semgrep"),
+			SemgrepServiceURL:    l.str("SCANNING_SEMGREP_SERVICE_URL", false, ""),
 			SemgrepConfig:        l.str("SCANNING_SEMGREP_CONFIG", false, ""),
 
-			SonarScannerPath:         l.str("SCANNING_SONAR_SCANNER_PATH", false, "sonar-scanner"),
+			SonarScannerServiceURL:   l.str("SCANNING_SONAR_SCANNER_SERVICE_URL", false, ""),
 			SonarQubeURL:             l.str("SCANNING_SONARQUBE_URL", false, ""),
 			SonarQubeToken:           l.secret("SCANNING_SONARQUBE_TOKEN", false, ""),
 			SonarQubeAnalysisTimeout: l.durationVal("SCANNING_SONARQUBE_ANALYSIS_TIMEOUT", false, 5*time.Minute),
@@ -463,7 +519,30 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// IsProduction reporta se a aplicação está rodando em produção.
-func (c *Config) IsProduction() bool {
-	return c.App.Env == "production"
+// LoadDatabase lê só as variáveis DB_* — usado por ferramentas standalone
+// (ex.: cmd/seedadmin) que precisam de uma conexão Postgres mas não do
+// resto da configuração da plataforma (Keycloak, RabbitMQ, ...), que
+// Load() exigiria sem necessidade. Mesmo loader/mesmas variáveis/mesmos
+// defaults que Load() usa pra popular Config.Database — as duas nunca
+// podem divergir em como DB_* é lido, então isto não duplica a lógica de
+// parsing, só o subconjunto de chamadas.
+func LoadDatabase() (DatabaseConfig, error) {
+	l := &loader{}
+	db := DatabaseConfig{
+		Host:            l.str("DB_HOST", true, ""),
+		Port:            l.intVal("DB_PORT", true, 0),
+		Name:            l.str("DB_NAME", true, ""),
+		User:            l.str("DB_USER", true, ""),
+		Password:        l.secret("DB_PASSWORD", true, ""),
+		SSLMode:         l.str("DB_SSLMODE", false, "disable"),
+		MaxConns:        int32(l.intVal("DB_MAX_CONNS", false, 20)),
+		MinConns:        int32(l.intVal("DB_MIN_CONNS", false, 2)),
+		MaxConnLifetime: l.durationVal("DB_MAX_CONN_LIFETIME", false, time.Hour),
+		MaxConnIdleTime: l.durationVal("DB_MAX_CONN_IDLE_TIME", false, 15*time.Minute),
+		ConnectTimeout:  l.durationVal("DB_CONNECT_TIMEOUT", false, 5*time.Second),
+	}
+	if len(l.errs) > 0 {
+		return DatabaseConfig{}, fmt.Errorf("config: missing or invalid required environment variables: %s", strings.Join(l.errs, ", "))
+	}
+	return db, nil
 }

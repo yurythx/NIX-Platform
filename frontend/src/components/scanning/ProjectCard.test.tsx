@@ -82,7 +82,7 @@ describe("ProjectCard", () => {
 
     await user.click(screen.getByRole("button", { name: "Rodar de novo" }));
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     const body = JSON.parse(init.body as string);
     expect(body.scanners).toEqual(["trivy", "gitleaks"]);
     expect(body.project_id).toBe("proj-1");
@@ -114,7 +114,7 @@ describe("ProjectCard", () => {
 
     await user.click(screen.getByRole("button", { name: "Rodar de novo" }));
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     const body = JSON.parse(init.body as string);
     expect(body.scanners).toEqual(["trivy", "gitleaks", "semgrep"]);
   });

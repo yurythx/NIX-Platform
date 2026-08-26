@@ -67,8 +67,36 @@ func NewZapScanner(zapURL, apiKey string, allowedHosts []string, scanTimeout tim
 
 var _ domain.CodeScanner = (*ZapScanner)(nil)
 var _ domain.ProgressReportingScanner = (*ZapScanner)(nil)
+var _ domain.HealthChecker = (*ZapScanner)(nil)
 
 func (z *ZapScanner) Name() string { return ZapScannerName }
+
+// HealthCheck reporta se o daemon ZAP está no ar — ZAP não tem um
+// sidecar próprio desta plataforma (é ele mesmo quem fala a API HTTP
+// que os outros métodos deste arquivo já chamam, ver zapURL), então a
+// checagem é a chamada mais leve e real que a API dele oferece:
+// GET /JSON/core/view/version/, que só devolve a versão instalada, sem
+// nenhum efeito colateral (ao contrário de qualquer endpoint de scan).
+func (z *ZapScanner) HealthCheck(ctx context.Context) error {
+	if z.zapURL == "" {
+		return fmt.Errorf("scanning: zap: URL not configured")
+	}
+
+	versionURL := fmt.Sprintf("%s/JSON/core/view/version/?apikey=%s", z.zapURL, url.QueryEscape(z.apiKey))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
+	if err != nil {
+		return fmt.Errorf("scanning: zap: build health check request: %w", err)
+	}
+	resp, err := z.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("scanning: zap: unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("scanning: zap: returned status %d", resp.StatusCode)
+	}
+	return nil
+}
 
 // Execute é o mesmo scan de ExecuteWithProgress, só que sem reportar
 // sub-progresso — existe pra satisfazer domain.CodeScanner sozinho (ex.:

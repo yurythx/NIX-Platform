@@ -369,6 +369,209 @@ paths:
         "503":
           $ref: "#/components/responses/IntegrationUnavailable"
 
+  /api/v1/diario-oficial/monitored-terms:
+    post:
+      tags: [diario-oficial]
+      summary: Cadastra um termo pra monitorar no Diário Oficial (MVP real via DJEN)
+      operationId: createMonitoredTerm
+      description: >
+        Pelo menos um critério de busca é obrigatório: `oab_number`+`oab_uf` (sempre juntos),
+        `process_number`, ou `free_text`. O worker sincroniza todo termo ATIVO contra o DJEN
+        (Diário de Justiça Eletrônico Nacional, CNJ) a cada 6h — este endpoint só cadastra, nunca
+        busca no DJEN diretamente.
+      security:
+        - bearerAuth: [diario_oficial:manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, example: "Dr. Fulano — OAB/MG 419" }
+                oab_number: { type: string, example: "419" }
+                oab_uf: { type: string, example: "MG" }
+                process_number: { type: string, example: "50015349420258130351" }
+                free_text: { type: string }
+              required: [label]
+      responses:
+        "201":
+          description: Termo cadastrado.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/MonitoredTerm" }
+        "400":
+          description: Corpo inválido (JSON malformado).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          description: >
+            Nenhum critério de busca preenchido, ou `oab_number` sem `oab_uf` (ou vice-versa).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+    get:
+      tags: [diario-oficial]
+      summary: Lista todo termo monitorado, mais recente primeiro
+      operationId: listMonitoredTerms
+      security:
+        - bearerAuth: [diario_oficial:read]
+      responses:
+        "200":
+          description: Lista de termos monitorados.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MonitoredTerm" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/diario-oficial/monitored-terms/{termID}:
+    delete:
+      tags: [diario-oficial]
+      summary: Remove um termo monitorado
+      operationId: deleteMonitoredTerm
+      description: >
+        Publicações/matches já encontrados pra este termo são removidos em cascata — o histórico de
+        um termo apagado não continua aparecendo no feed de publicações recentes. Responde 200 com
+        um envelope vazio (nunca 204 sem corpo — o proxy BFF/cliente desta plataforma sempre espera
+        um Envelope JSON na resposta).
+      security:
+        - bearerAuth: [diario_oficial:manage]
+      parameters:
+        - name: termID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Termo removido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: termID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Termo não encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+
+  /api/v1/diario-oficial/monitored-terms/{termID}/publications:
+    get:
+      tags: [diario-oficial]
+      summary: Lista as publicações que casaram com um termo, mais recentes primeiro
+      operationId: listPublicationsForTerm
+      security:
+        - bearerAuth: [diario_oficial:read]
+      parameters:
+        - name: termID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: >
+            Página de publicações casadas — um termID inexistente devolve uma página vazia, não 404
+            (a mesma escolha que o resto desta API já faz pra listagens escopadas por id).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MatchedPublication" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/diario-oficial/publications:
+    get:
+      tags: [diario-oficial]
+      summary: Feed agregado de publicações casadas entre TODO termo monitorado
+      operationId: listRecentPublications
+      security:
+        - bearerAuth: [diario_oficial:read]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Página de publicações casadas, mais recentes primeiro.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MatchedPublication" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/diario-oficial/health:
+    get:
+      tags: [diario-oficial]
+      summary: Checagem síncrona da saúde da fonte de dados configurada (DJEN)
+      operationId: getDiarioOficialHealth
+      description: >
+        Nunca cria job, nunca grava nada — uma leitura direta (timeout de 5s) pra uma tela mostrar
+        "a fonte está respondendo?" antes do usuário estranhar por que nenhuma publicação nova
+        apareceu. Equivalente diario_oficial de GET /api/v1/scanning/scanners/health.
+      security:
+        - bearerAuth: [diario_oficial:read]
+      responses:
+        "200":
+          description: Resultado da checagem — sempre 200, mesmo com a fonte fora do ar (isso é dado do payload, não erro HTTP).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SourceHealth" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/scanning/scans:
     post:
       tags: [scanning]
@@ -462,6 +665,39 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /api/v1/scanning/scanners/health:
+    get:
+      tags: [scanning]
+      summary: Checa a saúde de cada scanner registrado (reestruturação de /seguranca)
+      operationId: getScannersHealth
+      description: >
+        Checa, em paralelo, se a dependência externa de cada scanner (sidecar containerizado, ou —
+        pro ZAP — o daemon em si) está viva, sem rodar um scan de verdade — pensado pra uma tela que
+        o usuário olha ANTES de disparar um scan novo. Timeout curto (5s) por scanner: um sidecar
+        travado nunca faz esta consulta demorar mais que isso. Um scanner registrado que não
+        implementa a checagem (não deveria acontecer — os 6 de hoje implementam todos) simplesmente
+        não aparece na resposta.
+      security:
+        - bearerAuth: [scanning:read]
+      responses:
+        "200":
+          description: Um item por scanner que sabe se auto-checar.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ScannerHealth"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/scanning/scans/{scanID}/findings:
     get:
       tags: [scanning]
@@ -514,16 +750,24 @@ paths:
       security:
         - bearerAuth: [scanning:read]
       parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
         - name: limit
           in: query
           required: false
-          description: Máximo de achados a retornar. Valores <= 0 ou ausentes usam o default (50); valores acima de 200 são reduzidos a 200; um valor não numérico é tratado como ausente (nunca 400).
+          description: >
+            Alias de page_size, aceito por compatibilidade com chamador anterior à Fase 14
+            (Maturidade de AppSec) — só usado quando page_size não vem explícito. Prefira page_size
+            em código novo.
           schema:
             type: integer
-            default: 50
       responses:
         "200":
-          description: Achados mais graves/recentes primeiro (lista vazia se nenhum scan rodou ainda).
+          description: >
+            Uma PÁGINA de achados, mais graves/recentes primeiro (lista vazia se nenhum scan rodou
+            ainda). Antes da Fase 14, este endpoint tinha um `limit` sem `OFFSET` (teto fixo de 200)
+            — qualquer achado além disso nunca aparecia; agora é paginação de verdade, mesmo
+            contrato que GET /api/v1/users já usa.
           content:
             application/json:
               schema:
@@ -535,6 +779,342 @@ paths:
                         type: array
                         items:
                           $ref: "#/components/schemas/Finding"
+                      meta:
+                        $ref: "#/components/schemas/PaginationMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/scans/{scanID}/findings.csv:
+    get:
+      tags: [scanning]
+      summary: Exporta os achados de uma execução de scan em CSV (Fase 14 — Maturidade de AppSec)
+      operationId: exportScanFindingsCSV
+      description: >
+        Equivalente em CSV de GET /api/v1/scanning/scans/{scanID}/findings — uma linha por achado,
+        sem deduplicação (é UM scan). A primeira exportação desta plataforma; até a Fase 14, tirar
+        um achado da NIX significava copiar da tela na mão ou consumir a API JSON.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: scanID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Arquivo CSV, com Content-Disposition attachment (download, não exibição inline).
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: scanID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/scans/{scanID}/findings.sarif:
+    get:
+      tags: [scanning]
+      summary: Exporta os achados de uma execução de scan em SARIF 2.1.0 (shift-left)
+      operationId: exportScanFindingsSarif
+      description: >
+        O formato que GitHub Code Scanning/Azure DevOps consomem nativamente — um upload vira
+        anotação direto no diff do PR e na aba Security, sem esta plataforma construir UI de
+        comentário em PR própria. Um run por scanner que participou do scan (RequestedScanners que
+        tiveram sucesso), inclusive um scanner que rodou e não achou nada (results: []) — um
+        consumidor de SARIF usa a AUSÊNCIA de um run pra inferir "essa ferramenta nunca rodou", o que
+        seria enganoso pra um scanner limpo. Uma rule por Finding.ID distinto dentro de cada run
+        (achado repetido em arquivos diferentes vira 1 rule + N results). Severidade CRITICAL/HIGH
+        vira level "error" (o único nível que barra um gate de CI por padrão no GitHub Code Scanning),
+        MEDIUM vira "warning", LOW vira "note"; cada rule carrega também
+        properties["security-severity"] (convenção do GitHub, score 0.0–10.0 em texto) pra colorir a
+        severidade na aba Security. O documento raiz é o SARIF cru (nunca o envelope {data, error,
+        meta} padrão desta API) — validado com ajv-cli contra o schema oficial 2.1.0 antes deste
+        endpoint ser publicado.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: scanID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            Documento SARIF 2.1.0, com Content-Disposition attachment (download, não exibição
+            inline).
+          content:
+            application/sarif+json:
+              schema:
+                type: object
+        "400":
+          description: scanID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/posture:
+    get:
+      tags: [scanning]
+      summary: Resumo agregado de achados abertos entre todo projeto (Fase 14 — Maturidade de AppSec)
+      operationId: getSecurityPosture
+      description: >
+        Achados ABERTOS = ainda presentes no scan mais recente de cada projeto E não triados — nunca
+        um COUNT(*) direto em scan_findings, que contaria o mesmo achado uma vez por re-scan. Escopado
+        a projetos persistentes (Fase 10); um scan avulso sem projeto não entra nesta contagem, pelo
+        mesmo motivo que não entra em GET /api/v1/scanning/projects/{projectID}/findings-history.
+        Alimenta o card "Postura de segurança" do dashboard.
+      security:
+        - bearerAuth: [scanning:read]
+      responses:
+        "200":
+          description: O resumo agregado.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SecurityPosture"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/posture/history:
+    get:
+      tags: [scanning]
+      summary: Série temporal de SecurityPosture (Fase 14, continuação — tendência histórica)
+      operationId: getSecurityPostureHistory
+      description: >
+        Um ponto por dia, gravado periodicamente pelo worker (nunca por esta requisição — GET aqui só
+        lê o que já foi gravado). Alimenta o gráfico de tendência do dashboard — "estamos melhorando
+        ou piorando?", a pergunta que GET /api/v1/scanning/posture sozinho (só o AGORA) não respondia.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: Quantos dias de histórico. <= 0 ou ausente usa o default (30); acima de 366 é reduzido a 366.
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Snapshots, data mais antiga primeiro (lista vazia se o worker ainda não gravou nenhum).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PostureSnapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/projects/{projectID}/findings-history:
+    get:
+      tags: [scanning]
+      summary: Histórico de achados deduplicado de um projeto (Fase 12)
+      operationId: listProjectFindingsHistory
+      description: >
+        Um achado por fingerprint, não por linha de scan_findings — "apareceu pela primeira vez no
+        scan de 12/08, ainda presente no scan de 20/08" em vez de listar a mesma vulnerabilidade uma
+        vez por re-scan. Nunca documentado antes desta revisão (Fase 14), apesar de existir desde a
+        Fase 12 — lacuna da documentação, não do endpoint em si.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Histórico deduplicado, achado aberto e não triado primeiro (lista vazia se o projeto nunca rodou um scan).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ProjectFindingHistory"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/projects/{projectID}/findings-history.csv:
+    get:
+      tags: [scanning]
+      summary: Exporta o histórico deduplicado de um projeto em CSV (Fase 14 — Maturidade de AppSec)
+      operationId: exportProjectFindingsHistoryCSV
+      description: >
+        Equivalente em CSV de GET /api/v1/scanning/projects/{projectID}/findings-history, com a
+        triagem incluída — a exportação que faz sentido levar pra uma reunião de status ou um ticket
+        de compliance, ao contrário do CSV por scan (uma execução isolada, sem dedup).
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Arquivo CSV, com Content-Disposition attachment.
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: projectID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/projects/{projectID}/findings/{fingerprint}/triage:
+    put:
+      tags: [scanning]
+      summary: Tria um achado deduplicado (Fase 14 — Maturidade de AppSec)
+      operationId: triageFinding
+      description: >
+        Marca o fingerprint como false_positive/wont_fix/risk_accepted dentro do projeto — chamar de
+        novo no MESMO fingerprint substitui a decisão anterior, não acumula histórico. reason é
+        obrigatório: uma supressão sem justificativa registrada é o tipo de decisão que uma auditoria
+        de segurança depois cobra explicação. Gravado em audit_logs (finding.triaged).
+      security:
+        - bearerAuth: [scanning:manage]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fingerprint
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, reason]
+              properties:
+                status:
+                  type: string
+                  enum: [false_positive, wont_fix, risk_accepted]
+                reason:
+                  type: string
+                  description: Obrigatório — motivo da triagem, no máximo 2000 caracteres.
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: >
+                    Opcional (Fase 14, continuação — expiração de triagem). Precisa estar no futuro.
+                    Quando o prazo passa, o achado volta a contar como aberto em
+                    SecurityPosture/ListProjectFindingsHistory (mas a decisão em si nunca é apagada
+                    automaticamente — ver GET .../findings-history's triage_expired).
+      responses:
+        "200":
+          description: Triagem gravada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: projectID/fingerprint inválido, status desconhecido, reason vazio/longo demais, ou expires_at no passado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Projeto não encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+    delete:
+      tags: [scanning]
+      summary: Reabre um achado já triado (Fase 14 — Maturidade de AppSec)
+      operationId: untriageFinding
+      description: >
+        Apaga a decisão de triagem — idempotente, chamar num fingerprint nunca triado (ou já
+        reaberto) não é erro. Gravado em audit_logs (finding.untriaged).
+      security:
+        - bearerAuth: [scanning:manage]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fingerprint
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Achado reaberto (ou já estava aberto).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: projectID/fingerprint inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -968,6 +1548,197 @@ components:
         created_at:
           type: string
           format: date-time
+
+    ProjectFindingHistory:
+      type: object
+      description: >
+        Um achado deduplicado por fingerprint ENTRE os re-scans de um projeto (Fase 12), decorado
+        com sua triagem se alguma (Fase 14 — Maturidade de AppSec). Ver
+        `/api/v1/scanning/projects/{projectID}/findings-history`.
+      properties:
+        fingerprint:
+          type: string
+        scanner:
+          type: string
+          example: "trivy"
+        owasp_category:
+          type: string
+        severity:
+          type: string
+          enum: [CRITICAL, HIGH, MEDIUM, LOW]
+        description:
+          type: string
+        file:
+          type: string
+        line:
+          type: integer
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        scan_count:
+          type: integer
+          description: Quantos scans DISTINTOS deste projeto incluíram este fingerprint.
+        still_present:
+          type: boolean
+          description: Se este fingerprint aparece no scan MAIS RECENTE do projeto.
+        triage_status:
+          type: string
+          enum: ["", false_positive, wont_fix, risk_accepted]
+          description: "\"\" (vazio) é o estado implícito \"aberto, nunca triado\" — nunca omitido do JSON."
+        triage_reason:
+          type: string
+          description: Ausente quando triage_status é vazio.
+        triage_expires_at:
+          type: string
+          format: date-time
+          description: Fase 14, continuação — expiração de triagem. Ausente sem prazo, ou sem triagem.
+        triage_expired:
+          type: boolean
+          description: >
+            true quando triage_expires_at já passou — o achado continua carregando
+            triage_status/triage_reason (a decisão fica registrada), mas conta como ABERTO em
+            SecurityPosture, não como triado.
+
+    PostureSnapshot:
+      type: object
+      description: >
+        Um ponto da série temporal de SecurityPosture (Fase 14, continuação — tendência histórica),
+        gravado uma vez por dia pelo worker. Ver GET /api/v1/scanning/posture/history.
+      properties:
+        date:
+          type: string
+          format: date
+          description: "YYYY-MM-DD — só a data, não um timestamp."
+        open_critical:
+          type: integer
+        open_high:
+          type: integer
+        open_medium:
+          type: integer
+        open_low:
+          type: integer
+        triaged_count:
+          type: integer
+        projects_scanned:
+          type: integer
+
+    ProjectPosture:
+      type: object
+      description: Contribuição de UM projeto pro SecurityPosture agregado — ver `top_vulnerable`.
+      properties:
+        project_id:
+          type: string
+          format: uuid
+        project_name:
+          type: string
+        open_critical:
+          type: integer
+        open_high:
+          type: integer
+
+    SecurityPosture:
+      type: object
+      description: >
+        Resumo agregado de achados ABERTOS (ainda presentes + não triados) entre todo projeto
+        persistente (Fase 14 — Maturidade de AppSec). Ver `/api/v1/scanning/posture`.
+      properties:
+        open_critical:
+          type: integer
+        open_high:
+          type: integer
+        open_medium:
+          type: integer
+        open_low:
+          type: integer
+        triaged_count:
+          type: integer
+          description: Achados ainda presentes mas já triados — não contam em open_*.
+        projects_scanned:
+          type: integer
+        top_vulnerable:
+          type: array
+          description: Até 5 projetos, os com mais crítico/alto aberto primeiro.
+          items:
+            $ref: "#/components/schemas/ProjectPosture"
+
+    ScannerHealth:
+      type: object
+      description: >
+        Resultado da checagem de saúde de UM scanner (reestruturação de /seguranca — "saúde das
+        ferramentas antes de iniciá-las"). Ver GET /api/v1/scanning/scanners/health.
+      properties:
+        scanner:
+          type: string
+          example: "trivy"
+        healthy:
+          type: boolean
+        message:
+          type: string
+          description: Ausente quando healthy=true; o motivo (não configurado, inalcançável, status inesperado) caso contrário.
+        checked_at:
+          type: string
+          format: date-time
+
+    SourceHealth:
+      type: object
+      description: >
+        Resultado da checagem de saúde da fonte de dados do Diário Oficial (DJEN hoje). Mesmo shape
+        de ScannerHealth (source no lugar de scanner). Ver GET /api/v1/diario-oficial/health.
+      properties:
+        source:
+          type: string
+          example: "djen"
+        healthy:
+          type: boolean
+        message:
+          type: string
+          description: Ausente quando healthy=true; o motivo (não configurado, inalcançável, erro de rede) caso contrário.
+        checked_at:
+          type: string
+          format: date-time
+
+    MonitoredTerm:
+      type: object
+      description: >
+        MVP de monitoramento real do Diário Oficial via DJEN — o que o usuário quer acompanhar.
+        Pelo menos um critério é preenchido: oab_number+oab_uf, process_number, ou free_text.
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, example: "Dr. Fulano — OAB/MG 419" }
+        oab_number: { type: string }
+        oab_uf: { type: string }
+        process_number: { type: string }
+        free_text: { type: string }
+        active: { type: boolean }
+        last_synced_at:
+          type: string
+          format: date-time
+          description: Ausente se este termo ainda nunca foi sincronizado pelo worker.
+        created_at: { type: string, format: date-time }
+      required: [id, label, active, created_at]
+
+    MatchedPublication:
+      type: object
+      description: >
+        Uma publicação do DJEN que casou com um MonitoredTerm — persistida pelo worker
+        (nunca buscada sob demanda), com o resultado do casamento junto.
+      properties:
+        id: { type: string, format: uuid }
+        tribunal: { type: string, example: "TJMG" }
+        orgao: { type: string }
+        tipo_comunicacao: { type: string, example: "Intimação" }
+        texto: { type: string }
+        process_number: { type: string }
+        process_number_masked: { type: string, example: "5001534-94.2025.8.13.0351" }
+        availability_date: { type: string, format: date }
+        link: { type: string, description: "URL da publicação original no sistema do tribunal." }
+        monitored_term_id: { type: string, format: uuid }
+        monitored_term_label: { type: string }
+        matched_at: { type: string, format: date-time }
+      required: [id, tribunal, orgao, tipo_comunicacao, texto, process_number, process_number_masked, availability_date, monitored_term_id, monitored_term_label, matched_at]
 
     FeatureFlag:
       type: object

@@ -19,10 +19,13 @@ npm run dev
 |---|---|
 | `npm run dev` | Inicia o servidor de desenvolvimento |
 | `npm run build` | Build de produção (`.next/standalone`) |
+| `npm run analyze` | `next experimental-analyze` — UI interativa do bundle (Turbopack; passe `-- --output` pra só gravar em disco, sem servidor) |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Roda a suíte Vitest uma vez |
 | `npm run test:watch` | Vitest em modo watch |
+| `npm run test:e2e` | Playwright, contra uma stack real já rodando (ver README raiz, "Testes") |
+| `npm run test:e2e:ui` | Idem, com a UI interativa do Playwright |
 | `npm run format` | Prettier, modo write |
 
 ## Organização
@@ -31,9 +34,11 @@ npm run dev
   o route handler do NextAuth e o proxy BFF `/api/backend/*`.
 - `src/lib/auth` — configuração do NextAuth (Keycloak, Authorization Code +
   PKCE, sessão em JWT).
-- `src/lib/api` — cliente tipado para Client Components; sempre chama o
-  proxy BFF na mesma origem, para que o access token nunca chegue ao JS do
-  navegador.
+- `src/lib/api` — `client.ts`: cliente tipado para Client Components; sempre chama o proxy BFF na
+  mesma origem, para que o access token nunca chegue ao JS do navegador. `swr.ts`/`SWRProvider.tsx`:
+  integração com SWR (dedupe/cache/revalidação) para o pouco que ainda é `"use client"` +
+  busca de dados depois do carregamento inicial — a maioria das páginas busca em Server Components,
+  ver `src/app/**/page.tsx`.
 - `src/lib/websocket` — cliente WebSocket com reconexão, backoff e
   heartbeat.
 - `src/lib/validation` — schemas Zod que validam todo payload de WebSocket

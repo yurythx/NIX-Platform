@@ -75,7 +75,7 @@ describe("apiClient", () => {
     form.set("name", "test-project");
     await apiClient.postForm("v1/scanning/projects", form);
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBeUndefined();
     expect(init.body).toBe(form);
@@ -91,7 +91,7 @@ describe("apiClient", () => {
 
     await apiClient.post("v1/scanning/scans", { target: "https://example.com/repo.git" });
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
   });

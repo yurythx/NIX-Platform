@@ -60,11 +60,6 @@ func WriteAccepted(w http.ResponseWriter, data any) {
 	WriteJSON(w, http.StatusAccepted, data, nil)
 }
 
-// WriteNoContent escreve uma resposta 204 No Content sem corpo.
-func WriteNoContent(w http.ResponseWriter) {
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // WriteError escreve o envelope de erro padrão para err. Se err for (ou
 // envolver) um *apperrors.Error, seu Status/Code/Message são usados tal
 // qual; caso contrário, é tratado como um erro interno inesperado, logado

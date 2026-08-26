@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { DashboardShell } from "@/components/layout/DashboardShell";
+import { SWRProvider } from "@/lib/api/SWRProvider";
 import { authOptions } from "@/lib/auth/options";
 
 // Grupo de rotas (protected) — sem segmento próprio na URL — compartilhado
@@ -35,8 +36,10 @@ export default async function ProtectedLayout({ children }: { children: ReactNod
   const initialTheme = themeCookie === "dark" || themeCookie === "light" ? themeCookie : undefined;
 
   return (
-    <DashboardShell userLabel={userLabel} initialTheme={initialTheme}>
-      {children}
-    </DashboardShell>
+    <SWRProvider>
+      <DashboardShell userLabel={userLabel} initialTheme={initialTheme}>
+        {children}
+      </DashboardShell>
+    </SWRProvider>
   );
 }

@@ -40,17 +40,6 @@ func (i Identity) HasRole(role string) bool {
 	return false
 }
 
-// HasAnyRole reporta se a identidade tem pelo menos um dos roles
-// informados.
-func (i Identity) HasAnyRole(roles ...string) bool {
-	for _, want := range roles {
-		if i.HasRole(want) {
-			return true
-		}
-	}
-	return false
-}
-
 type ctxKey string
 
 const identityCtxKey ctxKey = "auth.identity"

@@ -13,6 +13,7 @@ import (
 
 	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/application"
 	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/domain"
+	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/infrastructure"
 	integrations "github.com/yurythx/nix-platform/internal/modules/integrations/application"
 	integrationsInfra "github.com/yurythx/nix-platform/internal/modules/integrations/infrastructure"
 	"github.com/yurythx/nix-platform/internal/platform/configflags"
@@ -38,6 +39,10 @@ type fakeClient struct {
 
 func (f *fakeClient) Check(_ context.Context) (*domain.CheckResult, error) {
 	return f.result, f.err
+}
+
+func (f *fakeClient) Search(_ context.Context, _ domain.SearchQuery) (*domain.SearchResult, error) {
+	return &domain.SearchResult{}, nil
 }
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -74,7 +79,21 @@ func newTestService(pool *pgxpool.Pool, flags configflags.Store) *application.Se
 	jobsRepo := jobs.NewRepository(pool)
 	outboxWriter := outbox.NewWriter("nix.test")
 	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
-	return application.NewService(pool, jobsRepo, outboxWriter, &fakeClient{}, integrationsSvc, nil, flags, testLogger())
+	repo := infrastructure.NewPostgresRepository(pool)
+	return application.NewService(pool, jobsRepo, outboxWriter, &fakeClient{}, repo, integrationsSvc, nil, flags, testLogger())
+}
+
+// newTestServiceWithClient é newTestService com um domain.Client
+// escolhido no lugar do fakeClient{} vazio — usado pelos testes de
+// Health (ver health_test.go), que precisam controlar sucesso/falha de
+// Check() de forma determinística. flags sempre nil (sempre permitido) —
+// nenhum teste de Health se importa com feature flag.
+func newTestServiceWithClient(pool *pgxpool.Pool, client domain.Client) *application.Service {
+	jobsRepo := jobs.NewRepository(pool)
+	outboxWriter := outbox.NewWriter("nix.test")
+	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
+	repo := infrastructure.NewPostgresRepository(pool)
+	return application.NewService(pool, jobsRepo, outboxWriter, client, repo, integrationsSvc, nil, nil, testLogger())
 }
 
 func decodeEnvelope[T any](t *testing.T, body []byte) T {

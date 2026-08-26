@@ -151,7 +151,7 @@ func runScanners(ctx context.Context, scannerNames []string, repo, trivyPath, se
 		// containerizado de produção (ver trivy_scanner.go), irrelevantes
 		// aqui.
 		infrastructure.TrivyScannerName:   infrastructure.NewTrivyScanner(trivyPath, "", "", 0, logger),
-		infrastructure.SemgrepScannerName: infrastructure.NewSemgrepScanner(semgrepPath, semgrepConfig, 0, logger),
+		infrastructure.SemgrepScannerName: infrastructure.NewSemgrepScanner(semgrepPath, "", "", semgrepConfig, 0, logger),
 	}
 
 	var all []domain.Finding

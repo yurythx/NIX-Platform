@@ -42,17 +42,6 @@ func TestWriteAccepted_Returns202(t *testing.T) {
 	}
 }
 
-func TestWriteNoContent_Returns204WithEmptyBody(t *testing.T) {
-	rec := httptest.NewRecorder()
-	WriteNoContent(rec)
-	if rec.Code != 204 {
-		t.Fatalf("status = %d, want 204", rec.Code)
-	}
-	if rec.Body.Len() != 0 {
-		t.Errorf("expected empty body, got %q", rec.Body.String())
-	}
-}
-
 func TestWriteError_AppError_UsesItsStatusAndCode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/", nil)

@@ -300,9 +300,17 @@ func scanProgressPercent(s *application.ScanStatus) int {
 // visibilidade EM ANDAMENTO (mesmo job "processing"), não só o resumo
 // final — o painel de progresso pedido pelo usuário depende disso.
 type ScanStatusResponse struct {
-	JobID             string                   `json:"job_id"`
-	Status            string                   `json:"status"`
-	Target            string                   `json:"target"`
+	JobID  string `json:"job_id"`
+	Status string `json:"status"`
+	Target string `json:"target"`
+	// ProjectID (exposto a partir da revisão de exibição de resultados —
+	// docs/roadmap-secops-orchestrator.md, Fase 14) — nil pra um scan
+	// avulso, o mesmo application.ScanStatus.ProjectID que já existia
+	// internamente desde a Fase 10, só nunca tinha chegado à API. O
+	// frontend usa isto pra saber se um achado deste scan pode ser
+	// TRIADO (a triagem é escopada a projeto, ver domain.Triage) sem
+	// precisar adivinhar ou fazer uma segunda consulta.
+	ProjectID         *string                  `json:"project_id,omitempty"`
 	RequestedScanners []string                 `json:"requested_scanners"`
 	SucceededScanners []string                 `json:"succeeded_scanners"`
 	FailedScanners    []ScannerFailureResponse `json:"failed_scanners"`
@@ -312,6 +320,12 @@ type ScanStatusResponse struct {
 	CreatedAt         time.Time                `json:"created_at"`
 	StartedAt         *time.Time               `json:"started_at,omitempty"`
 	FinishedAt        *time.Time               `json:"finished_at,omitempty"`
+	// FindingsBySeverity (revisão de exibição de resultados — "quais
+	// erros e warnings foram achados" na tela de histórico de scans):
+	// ausente (nil, omitido do JSON) pra um scan que ainda não persistiu
+	// achado nenhum, nunca um mapa com toda severidade zerada — mesma
+	// convenção de campo opcional que ProjectID já usa acima.
+	FindingsBySeverity map[string]int `json:"findings_by_severity,omitempty"`
 }
 
 // nonNilStrings garante que o campo nunca serializa como JSON `null` —
@@ -331,19 +345,33 @@ func nonNilStrings(list []string) []string {
 }
 
 func toScanStatusResponse(s *application.ScanStatus) ScanStatusResponse {
+	var projectID *string
+	if s.ProjectID != nil {
+		id := s.ProjectID.String()
+		projectID = &id
+	}
+	var findingsBySeverity map[string]int
+	if len(s.FindingsBySeverity) > 0 {
+		findingsBySeverity = make(map[string]int, len(s.FindingsBySeverity))
+		for severity, count := range s.FindingsBySeverity {
+			findingsBySeverity[string(severity)] = count
+		}
+	}
 	return ScanStatusResponse{
-		JobID:             s.JobID.String(),
-		Status:            s.Status,
-		Target:            s.Target,
-		RequestedScanners: nonNilStrings(s.RequestedScanners),
-		SucceededScanners: nonNilStrings(s.SucceededScanners),
-		FailedScanners:    toScannerFailureResponses(s.FailedScanners),
-		ScannerRuns:       toScannerRunResponses(s.ScannerRuns),
-		ProgressPercent:   scanProgressPercent(s),
-		Attempts:          s.Attempts,
-		CreatedAt:         s.CreatedAt,
-		StartedAt:         s.StartedAt,
-		FinishedAt:        s.FinishedAt,
+		JobID:              s.JobID.String(),
+		Status:             s.Status,
+		Target:             s.Target,
+		ProjectID:          projectID,
+		RequestedScanners:  nonNilStrings(s.RequestedScanners),
+		SucceededScanners:  nonNilStrings(s.SucceededScanners),
+		FailedScanners:     toScannerFailureResponses(s.FailedScanners),
+		ScannerRuns:        toScannerRunResponses(s.ScannerRuns),
+		ProgressPercent:    scanProgressPercent(s),
+		Attempts:           s.Attempts,
+		CreatedAt:          s.CreatedAt,
+		StartedAt:          s.StartedAt,
+		FinishedAt:         s.FinishedAt,
+		FindingsBySeverity: findingsBySeverity,
 	}
 }
 
@@ -412,24 +440,129 @@ type ProjectFindingHistoryResponse struct {
 	ScanCount     int          `json:"scan_count"`
 	StillPresent  bool         `json:"still_present"`
 	Tool          ToolResponse `json:"tool"`
+	// TriageStatus (Fase 14 — Maturidade de AppSec): "" quando o achado
+	// nunca foi triado (o estado "aberto" implícito, ver
+	// domain.TriageStatus) — nunca omitido do JSON (sem omitempty),
+	// diferente de campos opcionais como Snippet, porque "" AQUI é um
+	// valor com significado próprio ("aberto"), não "ainda não
+	// implementado nesta versão do achado" — o frontend distingue os
+	// dois de propósito.
+	TriageStatus string `json:"triage_status"`
+	TriageReason string `json:"triage_reason,omitempty"`
+	// TriageExpiresAt/TriageExpired (Fase 14, continuação — expiração de
+	// triagem): os dois omitidos quando a triagem não tem prazo (ou não
+	// existe triagem nenhuma) — omitempty em TriageExpired é seguro
+	// aqui porque "sem triagem" e "triagem sem prazo, não vencida"
+	// colapsam no mesmo false ausente; o frontend só olha pra este campo
+	// quando TriageStatus já não é vazio.
+	TriageExpiresAt *time.Time `json:"triage_expires_at,omitempty"`
+	TriageExpired   bool       `json:"triage_expired,omitempty"`
+}
+
+// ScannerHealthResponse é o formato público de
+// application.ScannerHealth (revisão de exibição de resultados) — a
+// tela "saúde das ferramentas" que o usuário pediu, pra checar antes de
+// disparar um scan novo.
+type ScannerHealthResponse struct {
+	Scanner   string    `json:"scanner"`
+	Healthy   bool      `json:"healthy"`
+	Message   string    `json:"message,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
+}
+
+func toScannerHealthResponses(list []application.ScannerHealth) []ScannerHealthResponse {
+	out := make([]ScannerHealthResponse, 0, len(list))
+	for _, h := range list {
+		out = append(out, ScannerHealthResponse{
+			Scanner: h.Scanner, Healthy: h.Healthy, Message: h.Message, CheckedAt: h.CheckedAt,
+		})
+	}
+	return out
+}
+
+// SecurityPostureResponse é o formato público de
+// application.SecurityPosture (Fase 14 — Maturidade de AppSec) — o card
+// "postura de segurança" do dashboard.
+type SecurityPostureResponse struct {
+	OpenCritical    int                      `json:"open_critical"`
+	OpenHigh        int                      `json:"open_high"`
+	OpenMedium      int                      `json:"open_medium"`
+	OpenLow         int                      `json:"open_low"`
+	TriagedCount    int                      `json:"triaged_count"`
+	ProjectsScanned int                      `json:"projects_scanned"`
+	TopVulnerable   []ProjectPostureResponse `json:"top_vulnerable"`
+}
+
+type ProjectPostureResponse struct {
+	ProjectID    string `json:"project_id"`
+	ProjectName  string `json:"project_name"`
+	OpenCritical int    `json:"open_critical"`
+	OpenHigh     int    `json:"open_high"`
+}
+
+func toSecurityPostureResponse(p application.SecurityPosture) SecurityPostureResponse {
+	top := make([]ProjectPostureResponse, 0, len(p.TopVulnerable))
+	for _, pp := range p.TopVulnerable {
+		top = append(top, ProjectPostureResponse{
+			ProjectID: pp.ProjectID, ProjectName: pp.ProjectName,
+			OpenCritical: pp.OpenCritical, OpenHigh: pp.OpenHigh,
+		})
+	}
+	return SecurityPostureResponse{
+		OpenCritical: p.OpenCritical, OpenHigh: p.OpenHigh, OpenMedium: p.OpenMedium, OpenLow: p.OpenLow,
+		TriagedCount: p.TriagedCount, ProjectsScanned: p.ProjectsScanned, TopVulnerable: top,
+	}
+}
+
+// PostureSnapshotResponse é o formato público de domain.PostureSnapshot
+// (Fase 14, continuação — tendência histórica) — um ponto da série
+// temporal que alimenta o gráfico de tendência do dashboard.
+type PostureSnapshotResponse struct {
+	Date            string `json:"date"` // YYYY-MM-DD, não um timestamp — só a data importa (ver domain.PostureSnapshot.Date)
+	OpenCritical    int    `json:"open_critical"`
+	OpenHigh        int    `json:"open_high"`
+	OpenMedium      int    `json:"open_medium"`
+	OpenLow         int    `json:"open_low"`
+	TriagedCount    int    `json:"triaged_count"`
+	ProjectsScanned int    `json:"projects_scanned"`
+}
+
+func toPostureSnapshotResponses(list []domain.PostureSnapshot) []PostureSnapshotResponse {
+	out := make([]PostureSnapshotResponse, 0, len(list))
+	for _, s := range list {
+		out = append(out, PostureSnapshotResponse{
+			Date:            s.Date.Format("2006-01-02"),
+			OpenCritical:    s.OpenCritical,
+			OpenHigh:        s.OpenHigh,
+			OpenMedium:      s.OpenMedium,
+			OpenLow:         s.OpenLow,
+			TriagedCount:    s.TriagedCount,
+			ProjectsScanned: s.ProjectsScanned,
+		})
+	}
+	return out
 }
 
 func toProjectFindingHistoryResponses(list []application.ProjectFindingHistory) []ProjectFindingHistoryResponse {
 	out := make([]ProjectFindingHistoryResponse, 0, len(list))
 	for _, h := range list {
 		out = append(out, ProjectFindingHistoryResponse{
-			Fingerprint:   h.Fingerprint,
-			Scanner:       h.Scanner,
-			OWASPCategory: h.OWASPCategory,
-			Severity:      string(h.Severity),
-			Description:   h.Description,
-			File:          h.File,
-			Line:          h.Line,
-			FirstSeenAt:   h.FirstSeenAt,
-			LastSeenAt:    h.LastSeenAt,
-			ScanCount:     h.ScanCount,
-			StillPresent:  h.StillPresent,
-			Tool:          ToolResponse{Name: toolDisplayName(h.Scanner)},
+			Fingerprint:     h.Fingerprint,
+			Scanner:         h.Scanner,
+			OWASPCategory:   h.OWASPCategory,
+			Severity:        string(h.Severity),
+			Description:     h.Description,
+			File:            h.File,
+			Line:            h.Line,
+			FirstSeenAt:     h.FirstSeenAt,
+			LastSeenAt:      h.LastSeenAt,
+			ScanCount:       h.ScanCount,
+			StillPresent:    h.StillPresent,
+			Tool:            ToolResponse{Name: toolDisplayName(h.Scanner)},
+			TriageStatus:    h.TriageStatus,
+			TriageReason:    h.TriageReason,
+			TriageExpiresAt: h.TriageExpiresAt,
+			TriageExpired:   h.TriageExpired,
 		})
 	}
 	return out

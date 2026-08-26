@@ -48,9 +48,9 @@ jobs:
         working-directory: backend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.27"
           cache-dependency-path: backend/go.sum
@@ -112,9 +112,9 @@ jobs:
       NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -143,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: docker compose config (validação estrutural)
         run: |
@@ -151,7 +151,7 @@ jobs:
           docker compose config --quiet
 
       - name: Build da imagem backend-api
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./backend
           file: ./backend/Dockerfile.api
@@ -160,7 +160,7 @@ jobs:
           tags: nix-platform/backend-api:ci
 
       - name: Build da imagem backend-worker
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./backend
           file: ./backend/Dockerfile.worker
@@ -169,7 +169,7 @@ jobs:
           tags: nix-platform/backend-worker:ci
 
       - name: Build da imagem frontend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
@@ -180,31 +180,275 @@ jobs:
             NEXT_PUBLIC_API_URL=http://localhost:8000
             NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
 
+      # Sidecars de scanning (§ Containerização — cada scanner isolado no
+      # próprio container, ver docs/roadmap-secops-orchestrator.md): 5
+      # imagens a mais que nunca tinham build/scan nenhum aqui antes desta
+      # mudança — cada uma carrega um runtime de terceiro (binário do
+      # trivy/gitleaks/syft, venv Python do semgrep, JRE+Node.js do
+      # sonar-scanner) que pode ter CVE tão real quanto backend-api/
+      # backend-worker/frontend, e ficava fora da única superfície deste
+      # CI que escaneia a imagem OCI final (não só código-fonte/deps
+      # declaradas).
+      - name: Build da imagem trivy-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.trivy-sidecar
+          push: false
+          load: true
+          tags: nix-platform/trivy-scanner:ci
+
+      - name: Build da imagem gitleaks-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.gitleaks-sidecar
+          push: false
+          load: true
+          tags: nix-platform/gitleaks-scanner:ci
+
+      - name: Build da imagem syft-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.syft-sidecar
+          push: false
+          load: true
+          tags: nix-platform/syft-scanner:ci
+
+      - name: Build da imagem semgrep-scanner
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.semgrep-sidecar
+          push: false
+          load: true
+          tags: nix-platform/semgrep-scanner:ci
+
+      - name: Build da imagem sonar-scanner-cli
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.sonar-sidecar
+          push: false
+          load: true
+          tags: nix-platform/sonar-scanner-cli:ci
+
       # Escaneia cada imagem já construída em busca de CVEs conhecidas nos
       # pacotes do sistema operacional e nas dependências de linguagem
       # embutidas na imagem final — cobre uma superfície diferente do
       # govulncheck/npm audit acima (que só olham o código-fonte/deps
       # declaradas, não a imagem OCI resultante com todas as camadas).
       - name: Escaneia a imagem backend-api (Trivy)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: nix-platform/backend-api:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem backend-worker (Trivy)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: nix-platform/backend-worker:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem frontend (Trivy)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: nix-platform/frontend:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
+
+      - name: Escaneia a imagem trivy-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/trivy-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem gitleaks-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/gitleaks-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem syft-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/syft-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem semgrep-scanner (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/semgrep-scanner:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+      - name: Escaneia a imagem sonar-scanner-cli (Trivy)
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          image-ref: nix-platform/sonar-scanner-cli:ci
+          severity: "HIGH,CRITICAL"
+          exit-code: "1"
+
+  # e2e: nenhum framework de ponta a ponta existia até esta fase — só
+  # verificação manual registrada como texto no roadmap ("verificado ao
+  # vivo"). Sobe a stack REAL via docker compose (o mesmo
+  # docker-compose.yml que produção usa, não uma versão paralela
+  # simplificada só pro CI) e roda Playwright contra ela — login local,
+  # dashboard, logout (RP-Initiated), e as páginas públicas.
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.27"
+          cache-dependency-path: backend/go.sum
+
+      # .env a partir do exemplo, só preenchendo o que docker compose
+      # exige ter ALGUM valor pra interpolar o arquivo inteiro (mesmo os
+      # serviços que este job nem sobe, ex.: zap/sonarqube) — nunca
+      # segredos reais, só o suficiente pra "docker compose up" não
+      # falhar validando o arquivo inteiro.
+      - name: Prepara .env e a chave RSA do login local
+        run: |
+          cp .env.example .env
+          sed -i 's/^SCANNING_ZAP_API_KEY=$/SCANNING_ZAP_API_KEY=ci-placeholder/' .env
+          sed -i 's/^KEYCLOAK_CLIENT_SECRET=$/KEYCLOAK_CLIENT_SECRET=ci-placeholder/' .env
+          mkdir -p secrets
+          openssl genrsa -out secrets/local_auth_private_key.pem 2048
+          chmod 644 secrets/local_auth_private_key.pem
+
+      # postgres/rabbitmq via docker-compose.dev.yml (publica as portas
+      # no host, necessário pro goose rodar migrations daqui de fora) —
+      # cria a rede nix_internal, usada pelo Keycloak descartável abaixo.
+      - name: Sobe postgres/rabbitmq
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres rabbitmq
+
+      - name: Roda as migrations
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@latest
+          goose -dir backend/migrations postgres "postgres://nix:change-me@localhost:5432/nix?sslmode=disable" up
+
+      # Cria o usuário local que auth.spec.ts usa pra logar (achado de
+      # auditoria de segurança: a migration 000027 removeu o
+      # admin/Admin123! que a 000011 semeava — senha pública e conhecida
+      # — então este job precisa criar sua PRÓPRIA conta de teste, com
+      # senha gerada aqui mesmo, nunca commitada em lugar nenhum). A senha
+      # some com o job — nunca aparece em log (GITHUB_ENV não ecoa o
+      # valor), nunca é a mesma entre execuções.
+      - name: Cria o usuário admin local pro E2E (make seed-admin)
+        run: |
+          E2E_ADMIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "::add-mask::$E2E_ADMIN_PASSWORD"
+          echo "E2E_ADMIN_PASSWORD=$E2E_ADMIN_PASSWORD" >> "$GITHUB_ENV"
+          cd backend && DB_HOST=localhost DB_PORT=5432 DB_NAME=nix DB_USER=nix DB_PASSWORD=change-me \
+            go run ./cmd/seedadmin --password "$E2E_ADMIN_PASSWORD"
+
+      # Keycloak descartável (§ login local coexiste com Keycloak, mas o
+      # backend faz discovery OIDC eager no boot mesmo se ninguém for
+      # usar SSO neste job — ver internal/platform/auth/oidc.go) — modo
+      # dev, sem provisionar realm/client nenhum: só o discovery do realm
+      # "master" (que já existe por padrão) precisa responder.
+      - name: Sobe um Keycloak descartável (só pro backend inicializar)
+        run: |
+          docker run -d --name e2e-keycloak --network nix-platform_nix_internal -p 8081:8080 \
+            -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD=admin \
+            quay.io/keycloak/keycloak:26.0 start-dev
+          sed -i 's#^KEYCLOAK_ISSUER_URL=.*#KEYCLOAK_ISSUER_URL=http://e2e-keycloak:8080/realms/master#' .env
+          # Checa via a porta publicada no host, não com "docker exec ...
+          # curl" — a imagem do Keycloak não tem curl (nem nenhum outro
+          # cliente HTTP) instalado, achado real rodando isto ao vivo.
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8081/realms/master/.well-known/openid-configuration && break
+            sleep 3
+          done
+
+      - name: Builda e sobe o backend-api
+        run: docker compose up -d --build backend-api
+
+      - name: Espera o backend-api responder
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && exit 0
+            sleep 2
+          done
+          echo "backend-api nunca respondeu" >&2
+          docker logs nix-platform-backend-api-1 || true
+          exit 1
+
+      - name: Instala as dependências do frontend + navegador do Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Builda o frontend
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
+          KEYCLOAK_ISSUER_URL: https://ci-placeholder.invalid/realms/ci
+          KEYCLOAK_FRONTEND_CLIENT_ID: ci-placeholder
+          KEYCLOAK_FRONTEND_CLIENT_SECRET: ci-placeholder
+          NEXTAUTH_URL: http://localhost:3000
+          NEXTAUTH_SECRET: ci-placeholder-secret-not-for-production-use
+        run: npm run build
+
+      - name: Sobe o frontend em segundo plano
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
+          KEYCLOAK_ISSUER_URL: https://ci-placeholder.invalid/realms/ci
+          KEYCLOAK_FRONTEND_CLIENT_ID: ci-placeholder
+          KEYCLOAK_FRONTEND_CLIENT_SECRET: ci-placeholder
+          NEXTAUTH_URL: http://localhost:3000
+          NEXTAUTH_SECRET: ci-placeholder-secret-not-for-production-use
+        run: |
+          nohup npm run start > /tmp/frontend.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/ && exit 0
+            sleep 2
+          done
+          echo "frontend nunca respondeu" >&2
+          cat /tmp/frontend.log
+          exit 1
+
+      - name: Roda os testes E2E (Playwright)
+        working-directory: frontend
+        # E2E_ADMIN_PASSWORD já está no ambiente deste job desde o passo
+        # "Cria o usuário admin local pro E2E" (via $GITHUB_ENV) — não
+        # precisa ser repetida aqui, mas auth.spec.ts depende dela.
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+        run: npx playwright test
+
+      - name: Publica o relatório do Playwright (em caso de falha)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Desmonta a stack
+        if: always()
+        run: docker compose down -v
 
   # secscan: Fase 8 do roadmap de segurança
   # (docs/roadmap-secops-orchestrator.md) — um job ADICIONAL, não um
@@ -219,9 +463,9 @@ jobs:
     name: nix-secscan (CLI unificado)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.27"
           cache-dependency-path: backend/go.sum

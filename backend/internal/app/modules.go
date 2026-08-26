@@ -77,7 +77,8 @@ func buildModules(deps *Dependencies) *Modules {
 	m.Integrations.Handlers = integrationsTransport.NewHandlers(integrationsSvc, deps.Logger)
 
 	diarioClient := diarioInfra.NewHTTPClient(deps.Config.DiarioOficial.BaseURL, deps.Config.DiarioOficial.Timeout, deps.Logger)
-	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
+	diarioRepo := diarioInfra.NewPostgresRepository(deps.DB)
+	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, diarioRepo, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
 	m.DiarioOficial.Service = diarioSvc
 	m.DiarioOficial.Handlers = diarioTransport.NewHandlers(diarioSvc, deps.Logger)
 
@@ -85,9 +86,10 @@ func buildModules(deps *Dependencies) *Modules {
 	trivyScanner := scanningInfra.NewTrivyScanner(deps.Config.Scanning.TrivyPath, deps.Config.Scanning.TrivyServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	gitleaksScanner := scanningInfra.NewGitleaksScanner(deps.Config.Scanning.GitleaksPath, deps.Config.Scanning.GitleaksServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	syftScanner := scanningInfra.NewSyftScanner(deps.Config.Scanning.SyftPath, deps.Config.Scanning.SyftServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
-	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
+	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	sonarScanner := scanningInfra.NewSonarScanner(
-		deps.Config.Scanning.SonarScannerPath, deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,
+		deps.Config.Scanning.SonarScannerServiceURL, deps.Config.Scanning.ScanningWorkspaceDir,
+		deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,
 		deps.Config.Scanning.CloneTimeout, deps.Config.Scanning.SonarQubeAnalysisTimeout, deps.Logger,
 	)
 	zapScanner := scanningInfra.NewZapScanner(
@@ -103,7 +105,8 @@ func buildModules(deps *Dependencies) *Modules {
 		deps.DB, scanningRepo, jobsRepo, deps.Outbox, auditWriter, zipExtractor,
 		deps.Flags, deps.Config.Scanning.NoiseFilterPatterns, deps.Logger,
 		trivyScanner, gitleaksScanner, syftScanner, semgrepScanner, sonarScanner, zapScanner,
-	)
+	).WithTriageRepository(scanningRepo). // Fase 14 — scanningRepo (PostgresRepository) já implementa domain.TriageRepository, a mesma tabela do módulo
+						WithPostureRepository(scanningRepo) // idem, domain.PostureRepository — a série temporal de SecurityPosture
 	m.Scanning.Service = scanningSvc
 	m.Scanning.Handlers = scanningTransport.NewHandlers(scanningSvc, deps.Logger, deps.Config.Scanning.SonarQubePublicURL)
 

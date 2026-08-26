@@ -53,6 +53,32 @@ func TestRequestID_HonorsInboundHeader(t *testing.T) {
 	}
 }
 
+// Achado real desta revisão: logging.WithCorrelationID nunca era chamado
+// em lugar nenhum do código — o campo correlation_id nunca aparecia em
+// nenhum log passando por logging.FromContext (a própria linha de acesso
+// HTTP incluída), apesar do comentário de FromContext e do README
+// prometerem os três campos "sempre que disponíveis". Este teste tranca
+// a correção: o mesmo valor do request_id também precisa aparecer como
+// correlation_id no contexto.
+func TestRequestID_AlsoSetsCorrelationID(t *testing.T) {
+	var gotRequestID, gotCorrelationID string
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRequestID = logging.RequestID(r.Context())
+		gotCorrelationID = logging.CorrelationID(r.Context())
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if gotCorrelationID == "" {
+		t.Fatal("expected a correlation id in context, got empty string")
+	}
+	if gotCorrelationID != gotRequestID {
+		t.Errorf("correlation_id = %q, want the same value as request_id (%q)", gotCorrelationID, gotRequestID)
+	}
+}
+
 func TestRecoverer_ConvertsPanicToJSON500(t *testing.T) {
 	handler := Recoverer(testLogger())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")

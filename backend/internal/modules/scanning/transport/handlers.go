@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -185,16 +186,26 @@ func (h *Handlers) ListScans(w http.ResponseWriter, r *http.Request) {
 // ListRecentFindings trata GET /api/v1/scanning/findings — o feed "achados
 // recentes por severidade" (Fase 9) usado pela UI, que não exige um
 // scan_id de antemão como ListFindings exige.
+//
+// page/page_size (Fase 14 — Maturidade de AppSec): antes só "limit"
+// existia, sem OFFSET — passado disso, o resto simplesmente nunca
+// aparecia em lugar nenhum da UI. "limit" continua aceito como um alias
+// de page_size (compatibilidade com qualquer chamador antigo que ainda
+// use o nome velho) quando page_size não vem explícito.
 func (h *Handlers) ListRecentFindings(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize == 0 {
+		pageSize, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	}
 
-	findings, err := h.service.ListRecentFindings(r.Context(), limit)
+	findings, meta, err := h.service.ListRecentFindings(r.Context(), page, pageSize)
 	if err != nil {
 		httputil.WriteError(w, r, h.logger, err)
 		return
 	}
 
-	httputil.WriteOK(w, toFindingResponses(findings, h.sonarQubePublicURL))
+	httputil.WriteOKWithMeta(w, toFindingResponses(findings, h.sonarQubePublicURL), meta)
 }
 
 // maxUploadRequestBytes limita o corpo INTEIRO de uma requisição
@@ -323,6 +334,128 @@ func (h *Handlers) ListProjectFindingsHistory(w http.ResponseWriter, r *http.Req
 	}
 
 	httputil.WriteOK(w, toProjectFindingHistoryResponses(history))
+}
+
+// SecurityPosture trata GET /api/v1/scanning/posture (Fase 14 —
+// Maturidade de AppSec) — o resumo agregado de achados abertos entre
+// todo projeto, pro card de postura de segurança do dashboard.
+func (h *Handlers) SecurityPosture(w http.ResponseWriter, r *http.Request) {
+	posture, err := h.service.SecurityPosture(r.Context())
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+	httputil.WriteOK(w, toSecurityPostureResponse(posture))
+}
+
+// PostureHistory trata GET /api/v1/scanning/posture/history (Fase 14,
+// continuação — tendência histórica) — a série temporal que
+// SecurityPosture sozinho não respondia ("estamos melhorando ou
+// piorando?"), gravada periodicamente pelo worker (ver
+// application.Service.SnapshotSecurityPosture).
+func (h *Handlers) PostureHistory(w http.ResponseWriter, r *http.Request) {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+
+	snapshots, err := h.service.PostureHistory(r.Context(), days)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, toPostureSnapshotResponses(snapshots))
+}
+
+// ScannersHealth trata GET /api/v1/scanning/scanners/health (revisão de
+// exibição de resultados) — checa todo scanner registrado que sabe se
+// auto-checar (ver domain.HealthChecker), em paralelo. Pensado pra uma
+// tela que o usuário olha ANTES de disparar um scan novo, não durante
+// um scan em andamento.
+func (h *Handlers) ScannersHealth(w http.ResponseWriter, r *http.Request) {
+	health := h.service.CheckScannersHealth(r.Context())
+	httputil.WriteOK(w, toScannerHealthResponses(health))
+}
+
+// triageFindingRequest é o corpo de PUT
+// .../projects/{projectID}/findings/{fingerprint}/triage (Fase 14 —
+// Maturidade de AppSec). Reason é obrigatório — validado de novo em
+// application.Service.TriageFinding (a mesma regra não pode depender só
+// da camada HTTP, ver §33), mas rejeitado aqui também com uma mensagem
+// específica de "campo faltando" em vez de deixar a validação de
+// domínio genérica ser a primeira a reclamar. ExpiresAt é opcional —
+// ponteiro pra RFC 3339, nil quando o campo vem ausente/vazio, "sem
+// prazo" continua sendo o comportamento padrão.
+type triageFindingRequest struct {
+	Status    string     `json:"status"`
+	Reason    string     `json:"reason"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+type triageResponse struct {
+	Status string `json:"status"`
+}
+
+// TriageFinding trata PUT
+// /api/v1/scanning/projects/{projectID}/findings/{fingerprint}/triage —
+// marca um achado deduplicado (ver ListProjectFindingsHistory, Fase 12)
+// como falso positivo/não vou corrigir/risco aceito. Chamar de novo no
+// mesmo fingerprint SUBSTITUI a decisão anterior (ver
+// domain.TriageRepository.UpsertTriage) — não é preciso "reabrir" antes
+// de trocar de status.
+func (h *Handlers) TriageFinding(w http.ResponseWriter, r *http.Request) {
+	projectID, err := uuid.Parse(chi.URLParam(r, "projectID"))
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, apperrors.BadRequest("projectID must be a valid UUID"))
+		return
+	}
+	fingerprint := chi.URLParam(r, "fingerprint")
+
+	var req triageFindingRequest
+	if err := httputil.DecodeJSON(w, r, &req); err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	var actorUserID *uuid.UUID
+	if identity, ok := auth.IdentityFromContext(r.Context()); ok {
+		if id, err := uuid.Parse(identity.Subject); err == nil {
+			actorUserID = &id
+		}
+	}
+
+	if err := h.service.TriageFinding(r.Context(), projectID, fingerprint, domain.TriageStatus(req.Status), req.Reason, actorUserID, req.ExpiresAt); err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, triageResponse{Status: req.Status})
+}
+
+// UntriageFinding trata DELETE
+// /api/v1/scanning/projects/{projectID}/findings/{fingerprint}/triage —
+// "reabre" um achado já triado. Idempotente: chamar num fingerprint que
+// nunca foi triado (ou já foi reaberto) não é erro, mesmo princípio de
+// domain.TriageRepository.DeleteTriage.
+func (h *Handlers) UntriageFinding(w http.ResponseWriter, r *http.Request) {
+	projectID, err := uuid.Parse(chi.URLParam(r, "projectID"))
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, apperrors.BadRequest("projectID must be a valid UUID"))
+		return
+	}
+	fingerprint := chi.URLParam(r, "fingerprint")
+
+	var actorUserID *uuid.UUID
+	if identity, ok := auth.IdentityFromContext(r.Context()); ok {
+		if id, err := uuid.Parse(identity.Subject); err == nil {
+			actorUserID = &id
+		}
+	}
+
+	if err := h.service.UntriageFinding(r.Context(), projectID, fingerprint, actorUserID); err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, triageResponse{Status: ""})
 }
 
 // correlationIDFromRequest reaproveita o request id (§50) como o

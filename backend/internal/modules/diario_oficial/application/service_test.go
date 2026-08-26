@@ -11,8 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/domain"
+	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/infrastructure"
 	integrations "github.com/yurythx/nix-platform/internal/modules/integrations/application"
 	integrationsInfra "github.com/yurythx/nix-platform/internal/modules/integrations/infrastructure"
+	"github.com/yurythx/nix-platform/internal/platform/configflags"
 	"github.com/yurythx/nix-platform/internal/platform/jobs"
 	"github.com/yurythx/nix-platform/internal/platform/outbox"
 )
@@ -25,12 +27,21 @@ import (
 // controle sucesso/falha de forma determinística.
 
 type fakeClient struct {
-	result *domain.CheckResult
-	err    error
+	result       *domain.CheckResult
+	err          error
+	searchResult *domain.SearchResult
+	searchErr    error
 }
 
 func (f *fakeClient) Check(ctx context.Context) (*domain.CheckResult, error) {
 	return f.result, f.err
+}
+
+func (f *fakeClient) Search(ctx context.Context, query domain.SearchQuery) (*domain.SearchResult, error) {
+	if f.searchResult == nil && f.searchErr == nil {
+		return &domain.SearchResult{}, nil
+	}
+	return f.searchResult, f.searchErr
 }
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -60,10 +71,19 @@ func resetIntegration(t *testing.T, pool *pgxpool.Pool) {
 }
 
 func newService(pool *pgxpool.Pool, client domain.Client) *Service {
+	return newServiceWithFlags(pool, client, nil)
+}
+
+// newServiceWithFlags é newService com uma configflags.Store escolhida —
+// nil (o padrão de newService) sempre permite, mesmo princípio de
+// NewService's doc — usado pelos testes de SyncAll que precisam provar o
+// comportamento com a flag DESABILITADA (ver monitoring_test.go).
+func newServiceWithFlags(pool *pgxpool.Pool, client domain.Client, flags configflags.Store) *Service {
 	jobsRepo := jobs.NewRepository(pool)
 	outboxWriter := outbox.NewWriter("nix.test")
 	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
-	return NewService(pool, jobsRepo, outboxWriter, client, integrationsSvc, nil, nil, testLogger())
+	repo := infrastructure.NewPostgresRepository(pool)
+	return NewService(pool, jobsRepo, outboxWriter, client, repo, integrationsSvc, nil, flags, testLogger())
 }
 
 func outboxEventExists(t *testing.T, pool *pgxpool.Pool, aggregateID, eventType string) bool {
@@ -145,6 +165,10 @@ func (c *countingClient) Check(ctx context.Context) (*domain.CheckResult, error)
 		return nil, fmt.Errorf("Check called again — the job should have been skipped as a duplicate delivery")
 	}
 	return &domain.CheckResult{StatusCode: 200, Summary: "ok"}, nil
+}
+
+func (c *countingClient) Search(ctx context.Context, query domain.SearchQuery) (*domain.SearchResult, error) {
+	return &domain.SearchResult{}, nil
 }
 
 func TestProcessJob_RedeliveryOfCompletedJob_IsANoOp(t *testing.T) {

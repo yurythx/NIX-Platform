@@ -72,8 +72,15 @@ func NewGitleaksScanner(gitleaksPath, serviceURL, workspaceDir string, cloneTime
 
 var _ domain.CodeScanner = (*GitleaksScanner)(nil)
 var _ domain.LocalScanner = (*GitleaksScanner)(nil)
+var _ domain.HealthChecker = (*GitleaksScanner)(nil)
 
 func (g *GitleaksScanner) Name() string { return GitleaksScannerName }
+
+// HealthCheck reporta se o sidecar gitleaks-scanner está no ar — ver
+// domain.HealthChecker/health_check.go's sidecarHealthCheck.
+func (g *GitleaksScanner) HealthCheck(ctx context.Context) error {
+	return sidecarHealthCheck(ctx, g.httpClient, g.serviceURL, "gitleaks")
+}
 
 // Execute clona o alvo (raso, um branch só) via cloneShallow pro volume
 // compartilhado com o sidecar, e pede pro sidecar rodar `gitleaks detect`

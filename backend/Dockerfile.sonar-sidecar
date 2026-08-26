@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+
+# Sidecar do sonar-scanner CLI (ver cmd/sonar-sidecar/main.go e
+# docs/roadmap-secops-orchestrator.md, seção "Containerização"): último
+# runtime de scanner a sair da imagem do backend-worker — depois desta
+# migração, backend-worker só carrega git + o próprio binário Go, nenhum
+# runtime de scanner a mais.
+
+# ---- builder (o binário Go do sidecar em si) ----
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+
+RUN apk add --no-cache ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sonar-sidecar ./cmd/sonar-sidecar
+
+# ---- sonar-scanner-cli (extração — mesmo estágio que já vivia em
+# Dockerfile.worker antes desta fase, só movido pra cá) ----
+# O sonar-scanner CLI é distribuído como um JAR Java portável, mas a
+# imagem oficial da SonarSource é baseada em Amazon Linux (glibc) —
+# copiar os binários nativos dela pra cima de um runtime Alpine (musl)
+# quebraria. Este estágio só serve pra extrair lib/bin/conf (JAR + script
+# de shell, nenhum binário nativo) da imagem oficial pinada por tag; o
+# runtime final instala sua PRÓPRIA JRE nativa do Alpine (musl) pra rodar
+# esse JAR — verificado que a combinação funciona (Fase 5 do roadmap,
+# antes da containerização, e de novo aqui).
+FROM sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1 AS sonar-scanner-cli
+
+# ---- runtime ----
+FROM alpine:3.20 AS runtime
+
+# nodejs — achado real verificando esta imagem ao vivo contra um alvo
+# JavaScript/TypeScript de verdade (OWASP/NodeGoat): os analisadores
+# SonarJS/TS do sonar-scanner rodam sobre um runtime Node.js próprio que
+# o CLI invoca como subprocesso ("Cannot run program \"node\"" sem
+# isto) — não é opcional para nenhum projeto com arquivos .js/.ts/.jsx/
+# .tsx, mesmo esta plataforma sendo escrita em Go, porque o alvo
+# escaneado é quem determina os analisadores necessários, não quem
+# escaneia. Não documentado explicitamente pela SonarSource como
+# dependência do runtime do CLI — só apareceu rodando de verdade.
+RUN apk add --no-cache ca-certificates openjdk21-jre-headless nodejs
+COPY --from=sonar-scanner-cli /opt/sonar-scanner /opt/sonar-scanner
+RUN ln -s /opt/sonar-scanner/bin/sonar-scanner /usr/local/bin/sonar-scanner
+
+# UID/GID FIXOS (10001) — o MESMO valor que Dockerfile.worker e os
+# demais Dockerfiles de sidecar usam. Diferença real em relação aos
+# outros sidecars de scanning: este container precisa de escrita de
+# verdade no volume compartilhado (o sonar-scanner CLI grava
+# `.scannerwork/report-task.txt` dentro do diretório clonado, ver
+# cmd/sonar-sidecar/main.go) — docker-compose.yml monta
+# scanning_workspace `:rw` aqui, não `:ro` como Trivy/Gitleaks/Semgrep.
+# mkdir+chown continua necessário pela mesma razão de sempre: Docker
+# copia a ownership que já existe em /workspace dentro da imagem pro
+# volume nomeado vazio na primeira vez que ele é montado, e qualquer
+# container pode ser o primeiro a subir.
+RUN addgroup -g 10001 -S nix && adduser -u 10001 -S nix -G nix && \
+    mkdir -p /workspace && chown nix:nix /workspace
+USER nix
+WORKDIR /app
+COPY --from=builder --chown=nix:nix /out/sonar-sidecar ./sonar-sidecar
+
+ENTRYPOINT ["./sonar-sidecar"]
