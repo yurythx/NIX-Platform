@@ -344,6 +344,21 @@ jobs:
           go install github.com/pressly/goose/v3/cmd/goose@latest
           goose -dir backend/migrations postgres "postgres://nix:change-me@localhost:5432/nix?sslmode=disable" up
 
+      # Cria o usuário local que auth.spec.ts usa pra logar (achado de
+      # auditoria de segurança: a migration 000027 removeu o
+      # admin/Admin123! que a 000011 semeava — senha pública e conhecida
+      # — então este job precisa criar sua PRÓPRIA conta de teste, com
+      # senha gerada aqui mesmo, nunca commitada em lugar nenhum). A senha
+      # some com o job — nunca aparece em log (GITHUB_ENV não ecoa o
+      # valor), nunca é a mesma entre execuções.
+      - name: Cria o usuário admin local pro E2E (make seed-admin)
+        run: |
+          E2E_ADMIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "::add-mask::$E2E_ADMIN_PASSWORD"
+          echo "E2E_ADMIN_PASSWORD=$E2E_ADMIN_PASSWORD" >> "$GITHUB_ENV"
+          cd backend && DB_HOST=localhost DB_PORT=5432 DB_NAME=nix DB_USER=nix DB_PASSWORD=change-me \
+            go run ./cmd/seedadmin --password "$E2E_ADMIN_PASSWORD"
+
       # Keycloak descartável (§ login local coexiste com Keycloak, mas o
       # backend faz discovery OIDC eager no boot mesmo se ninguém for
       # usar SSO neste job — ver internal/platform/auth/oidc.go) — modo
@@ -416,6 +431,9 @@ jobs:
 
       - name: Roda os testes E2E (Playwright)
         working-directory: frontend
+        # E2E_ADMIN_PASSWORD já está no ambiente deste job desde o passo
+        # "Cria o usuário admin local pro E2E" (via $GITHUB_ENV) — não
+        # precisa ser repetida aqui, mas auth.spec.ts depende dela.
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
         run: npx playwright test
