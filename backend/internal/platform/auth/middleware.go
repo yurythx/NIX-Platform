@@ -12,8 +12,8 @@ import (
 
 // RequireAuthentication extrai e verifica o bearer token do header
 // Authorization, guardando a Identity resultante no contexto da
-// requisição. Precisa rodar antes de RequireRole/RequirePermission, já que
-// os dois leem a identidade do contexto que este middleware preenche.
+// requisição. Precisa rodar antes de RequirePermission, que lê a
+// identidade do contexto que este middleware preenche.
 func RequireAuthentication(verifier *Verifier, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,26 +50,6 @@ func bearerToken(r *http.Request) (string, error) {
 		return "", apperrors.Unauthorized("empty bearer token")
 	}
 	return token, nil
-}
-
-// RequireRole autoriza a requisição somente se a identidade autenticada
-// tiver pelo menos um dos roles informados. Precisa rodar depois de
-// RequireAuthentication.
-func RequireRole(logger *slog.Logger, roles ...RoleName) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			identity, ok := IdentityFromContext(r.Context())
-			if !ok {
-				httputil.WriteError(w, r, logger, apperrors.Unauthorized("authentication required"))
-				return
-			}
-			if !identity.HasAnyRole(roles...) {
-				httputil.WriteError(w, r, logger, apperrors.Forbidden("insufficient role"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
 }
 
 // RequirePermission autoriza a requisição somente se os roles da

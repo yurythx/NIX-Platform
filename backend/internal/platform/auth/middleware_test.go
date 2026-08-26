@@ -79,7 +79,6 @@ type tokenOpts struct {
 	realmRoles        []string
 	clientRoles       map[string][]string
 	expiresAt         time.Time
-	notBefore         time.Time
 }
 
 func (p *testOIDCProvider) signToken(t *testing.T, opts tokenOpts) string {
@@ -235,32 +234,6 @@ func TestRequireAuthentication_MalformedScheme(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for non-Bearer scheme", rec.Code)
-	}
-}
-
-func TestRequireRole_ForbidsMissingRole(t *testing.T) {
-	handler := RequireRole(slog.Default(), RoleAdmin)(testHandlerEchoIdentity())
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
-	req = req.WithContext(WithIdentity(req.Context(), Identity{Subject: "sub-1", Roles: []string{RoleUser}}))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-}
-
-func TestRequireRole_AllowsMatchingRole(t *testing.T) {
-	handler := RequireRole(slog.Default(), RoleAdmin, RoleUser)(testHandlerEchoIdentity())
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
-	req = req.WithContext(WithIdentity(req.Context(), Identity{Subject: "sub-1", Roles: []string{RoleUser}}))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 }
 

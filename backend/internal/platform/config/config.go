@@ -482,8 +482,3 @@ func Load() (*Config, error) {
 
 	return cfg, nil
 }
-
-// IsProduction reporta se a aplicação está rodando em produção.
-func (c *Config) IsProduction() bool {
-	return c.App.Env == "production"
-}

@@ -283,9 +283,9 @@ func assertQueueEmpty(t *testing.T, conn *Connection, queue string) {
 	// inspecionarmos a profundidade da fila.
 	time.Sleep(300 * time.Millisecond)
 
-	q, err := ch.QueueInspect(queue)
+	q, err := ch.QueueDeclarePassive(queue, true, false, false, false, nil)
 	if err != nil {
-		t.Fatalf("QueueInspect(%s): %v", queue, err)
+		t.Fatalf("QueueDeclarePassive(%s): %v", queue, err)
 	}
 	if q.Messages != 0 {
 		t.Errorf("queue %s has %d messages, want 0", queue, q.Messages)
@@ -302,9 +302,9 @@ func assertQueueHasMessage(t *testing.T, conn *Connection, queue string) {
 
 	time.Sleep(300 * time.Millisecond)
 
-	q, err := ch.QueueInspect(queue)
+	q, err := ch.QueueDeclarePassive(queue, true, false, false, false, nil)
 	if err != nil {
-		t.Fatalf("QueueInspect(%s): %v", queue, err)
+		t.Fatalf("QueueDeclarePassive(%s): %v", queue, err)
 	}
 	if q.Messages == 0 {
 		t.Errorf("queue %s has 0 messages, want at least 1", queue)
