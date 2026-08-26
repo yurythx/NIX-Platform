@@ -124,23 +124,6 @@ func TestReadCETaskID_MissingFile_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestExtractErrorLine(t *testing.T) {
-	cases := []struct {
-		name, in, want string
-	}{
-		{"fatal line wins over trailing noise", "some info\nFATAL: could not connect\nmore noise", "FATAL: could not connect"},
-		{"no fatal/error line falls back to last non-empty", "line one\nline two\n\n", "line two"},
-		{"empty input", "", "unknown error"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := extractErrorLine(tc.in); got != tc.want {
-				t.Errorf("extractErrorLine(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestHealthEndpoint_Returns200(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

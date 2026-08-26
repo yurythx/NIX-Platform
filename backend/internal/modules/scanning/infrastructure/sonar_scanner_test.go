@@ -14,7 +14,7 @@ import (
 
 // Estes testes cobrem só a lógica pura do adapter (project key,
 // parsing/paginação de issues, severidade) e a chamada HTTP ao sidecar
-// (runScannerRemote) — nenhum chama um sonar-scanner/servidor SonarQube
+// (scanRemote) — nenhum chama um sonar-scanner/servidor SonarQube
 // de verdade (isso vive em cmd/sonar-sidecar's main_test.go e foi
 // verificado manualmente contra um servidor real, registrado no
 // roadmap). report-task.txt não é mais lido por este pacote — o sidecar
@@ -37,7 +37,7 @@ func TestSonarProjectKey_DeterministicAndSanitized(t *testing.T) {
 }
 
 func TestSonarScanner_Execute_ServerURLNotConfigured_ReturnsDependencyUnavailable(t *testing.T) {
-	scanner := NewSonarScanner("", "token", "http://sonar-scanner-cli:8080", "", 0, 0, testLogger(t))
+	scanner := NewSonarScanner("http://sonar-scanner-cli:8080", "", "", "token", 0, 0, testLogger(t))
 
 	_, err := scanner.Execute(context.Background(), "https://example.com/repo.git")
 	if err == nil {
@@ -50,7 +50,7 @@ func TestSonarScanner_Execute_ServerURLNotConfigured_ReturnsDependencyUnavailabl
 }
 
 func TestSonarScanner_Execute_SidecarURLNotConfigured_ReturnsDependencyUnavailable(t *testing.T) {
-	scanner := NewSonarScanner("http://sonarqube:9000", "token", "", "", 0, 0, testLogger(t))
+	scanner := NewSonarScanner("", "", "http://sonarqube:9000", "token", 0, 0, testLogger(t))
 
 	_, err := scanner.Execute(context.Background(), "https://example.com/repo.git")
 	if err == nil {
@@ -62,7 +62,7 @@ func TestSonarScanner_Execute_SidecarURLNotConfigured_ReturnsDependencyUnavailab
 	}
 }
 
-func TestSonarScanner_RunScannerRemote_SendsFieldsAndParsesCETaskID(t *testing.T) {
+func TestSonarScanner_ScanRemote_SendsFieldsAndParsesCETaskID(t *testing.T) {
 	var gotBody struct {
 		Path       string `json:"path"`
 		HostURL    string `json:"host_url"`
@@ -80,20 +80,20 @@ func TestSonarScanner_RunScannerRemote_SendsFieldsAndParsesCETaskID(t *testing.T
 	defer srv.Close()
 
 	scanner := &SonarScanner{serverURL: "http://sonarqube:9000", token: "tok", sidecarURL: srv.URL, httpClient: srv.Client()}
-	taskID, err := scanner.runScannerRemote(context.Background(), "/workspace/nix-scan-abc123", "test-project")
+	taskID, err := scanner.scanRemote(context.Background(), "/workspace/nix-scan-abc123", "test-project")
 	if err != nil {
-		t.Fatalf("runScannerRemote: %v", err)
+		t.Fatalf("scanRemote: %v", err)
 	}
 	if taskID != "abc-123" {
 		t.Errorf("ceTaskId = %q, want %q", taskID, "abc-123")
 	}
 	if gotBody.Path != "/workspace/nix-scan-abc123" || gotBody.HostURL != "http://sonarqube:9000" ||
 		gotBody.Token != "tok" || gotBody.ProjectKey != "test-project" {
-		t.Errorf("sidecar received %+v, want the exact fields runScannerRemote was called with", gotBody)
+		t.Errorf("sidecar received %+v, want the exact fields scanRemote was called with", gotBody)
 	}
 }
 
-func TestSonarScanner_RunScannerRemote_SidecarErrorStatus_ReturnsDependencyUnavailable(t *testing.T) {
+func TestSonarScanner_ScanRemote_SidecarErrorStatus_ReturnsDependencyUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -102,7 +102,7 @@ func TestSonarScanner_RunScannerRemote_SidecarErrorStatus_ReturnsDependencyUnava
 	defer srv.Close()
 
 	scanner := &SonarScanner{sidecarURL: srv.URL, httpClient: srv.Client()}
-	_, err := scanner.runScannerRemote(context.Background(), "/workspace/nix-scan-abc123", "test-project")
+	_, err := scanner.scanRemote(context.Background(), "/workspace/nix-scan-abc123", "test-project")
 	if err == nil {
 		t.Fatal("expected an error when the sidecar responds with a non-200 status")
 	}

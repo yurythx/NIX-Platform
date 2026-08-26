@@ -64,39 +64,50 @@ const SonarScannerName = "sonarqube"
 // TrivyScanner.ExecuteLocal/SemgrepScanner.ExecuteLocal têm — nunca
 // existiu um caminho que precisasse dele.
 type SonarScanner struct {
-	serverURL    string
-	token        string
-	cloneTimeout time.Duration
 	// sidecarURL é o endereço do sidecar (ex.: http://sonar-scanner-cli:8080)
 	// que Execute chama via HTTP pra rodar o CLI — vazio reporta o
 	// scanner como indisponível, mesmo princípio de serverURL vazio.
 	// Nome deliberadamente diferente de "serviceURL" (a convenção nos
-	// outros três scanners) pra nunca ser confundido com serverURL (o
-	// SERVIDOR SonarQube em si — uma URL completamente diferente).
+	// outros três scanners) pra nunca ser confundido com serverURL
+	// abaixo (o SERVIDOR SonarQube em si — uma URL completamente
+	// diferente). Mesma posição de TrivyScanner.serviceURL/workspaceDir
+	// na assinatura do construtor abaixo — só os dois campos
+	// serverURL/token logo depois são exclusivos deste scanner (os
+	// outros três não falam com um servidor de análise separado).
 	sidecarURL string
 	// workspaceDir é o diretório BASE (dentro do volume compartilhado
 	// com o sidecar) onde Execute clona o alvo — ver cloneShallow.
-	workspaceDir    string
+	workspaceDir string
+	serverURL    string
+	token        string
+	httpClient   *http.Client
+	cloneTimeout time.Duration
+	// analysisTimeout, ao contrário de cloneTimeout, é exclusivo deste
+	// scanner — os outros três não têm uma segunda fase assíncrona
+	// (a Compute Engine do servidor) pra esperar depois do clone.
 	analysisTimeout time.Duration
-	httpClient      *http.Client
 	logger          *slog.Logger
 }
 
-// NewSonarScanner constrói o adapter. serverURL vazio é uma configuração
-// válida (mesmo princípio de DiarioOficialConfig.BaseURL) — Execute
-// reporta o scanner como indisponível em vez de o worker inteiro falhar
-// ao inicializar quando o SonarQube ainda não foi configurado. sidecarURL
-// vazio tem o mesmo efeito (mesmo princípio de TrivyScanner.serviceURL
-// vazio) — os dois precisam estar preenchidos pra este scanner funcionar.
-func NewSonarScanner(serverURL, token, sidecarURL, workspaceDir string, cloneTimeout, analysisTimeout time.Duration, logger *slog.Logger) *SonarScanner {
+// NewSonarScanner constrói o adapter — mesma ordem de parâmetros que
+// NewTrivyScanner/NewGitleaksScanner/NewSemgrepScanner (sidecarURL,
+// workspaceDir, ..., cloneTimeout, logger), com serverURL/token
+// inseridos no meio por serem exclusivos deste scanner. serverURL vazio
+// é uma configuração válida (mesmo princípio de
+// DiarioOficialConfig.BaseURL) — Execute reporta o scanner como
+// indisponível em vez de o worker inteiro falhar ao inicializar quando o
+// SonarQube ainda não foi configurado. sidecarURL vazio tem o mesmo
+// efeito (mesmo princípio de TrivyScanner.serviceURL vazio) — os dois
+// precisam estar preenchidos pra este scanner funcionar.
+func NewSonarScanner(sidecarURL, workspaceDir, serverURL, token string, cloneTimeout, analysisTimeout time.Duration, logger *slog.Logger) *SonarScanner {
 	return &SonarScanner{
-		serverURL:       strings.TrimRight(serverURL, "/"),
-		token:           token,
 		sidecarURL:      strings.TrimRight(sidecarURL, "/"),
 		workspaceDir:    workspaceDir,
+		serverURL:       strings.TrimRight(serverURL, "/"),
+		token:           token,
+		httpClient:      &http.Client{Timeout: 30 * time.Second},
 		cloneTimeout:    cloneTimeout,
 		analysisTimeout: analysisTimeout,
-		httpClient:      &http.Client{Timeout: 30 * time.Second},
 		logger:          logger,
 	}
 }
@@ -123,7 +134,7 @@ func (s *SonarScanner) Execute(ctx context.Context, target string) ([]domain.Fin
 	defer cleanup()
 
 	projectKey := sonarProjectKey(target)
-	taskID, err := s.runScannerRemote(ctx, dir, projectKey)
+	taskID, err := s.scanRemote(ctx, dir, projectKey)
 	if err != nil {
 		return nil, err
 	}
@@ -145,13 +156,13 @@ func sonarProjectKey(target string) string {
 	return domain.SonarProjectKey(target)
 }
 
-// runScannerRemote pede pro sidecar (cmd/sonar-sidecar) rodar
+// scanRemote pede pro sidecar (cmd/sonar-sidecar) rodar
 // `sonar-scanner` contra dir, que precisa estar dentro do volume
 // compartilhado que os dois containers montam (o sidecar em
 // leitura-escrita, diferente dos outros três — ver o comentário no topo
 // de cmd/sonar-sidecar/main.go). Devolve o ceTaskId que o CLI gravou,
 // pronto pra waitForAnalysis consultar.
-func (s *SonarScanner) runScannerRemote(ctx context.Context, dir, projectKey string) (string, error) {
+func (s *SonarScanner) scanRemote(ctx context.Context, dir, projectKey string) (string, error) {
 	body, err := json.Marshal(struct {
 		Path       string `json:"path"`
 		HostURL    string `json:"host_url"`

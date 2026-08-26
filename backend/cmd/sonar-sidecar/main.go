@@ -111,9 +111,15 @@ func handleScan(logger *slog.Logger) http.HandlerFunc {
 		if err := cmd.Run(); err != nil {
 			// Verificado contra o servidor real (ver sonar_scanner.go,
 			// comentário equivalente de antes desta containerização):
-			// sonar-scanner grava ERROR em stderr, não em stdout.
+			// sonar-scanner grava ERROR em stderr, não em stdout. stderr
+			// bruto, sem filtrar pra uma linha só — mesmo padrão de
+			// trivy-sidecar/gitleaks-sidecar/semgrep-sidecar: quem faz
+			// esse recorte é SonarScanner.scanRemote (o lado que CHAMA
+			// o sidecar, no worker), não o sidecar em si. Filtrar aqui
+			// TAMBÉM seria redundante, não incorreto — SonarScanner.scanRemote
+			// já roda extractErrorLine sobre o que este sidecar devolver.
 			logger.Warn("sonar-sidecar: scan failed", slog.String("path", req.Path), slog.String("stderr", stderr.String()))
-			writeError(w, http.StatusUnprocessableEntity, extractErrorLine(stderr.String()))
+			writeError(w, http.StatusUnprocessableEntity, stderr.String())
 			return
 		}
 
@@ -153,29 +159,6 @@ func readCETaskID(dir string) (string, error) {
 }
 
 var errNoCETaskID = errors.New("report-task.txt has no ceTaskId")
-
-// extractErrorLine devolve a primeira linha que pareça um erro de fato
-// ("fatal:"/"error:", case-insensitive) ou, na falta de uma, a última
-// linha não-vazia — mesma função, mesmo comportamento, que já existe em
-// internal/modules/scanning/infrastructure/git_clone.go, reimplementada
-// aqui porque cmd/sonar-sidecar é um binário standalone que nunca
-// importa o pacote infrastructure.
-func extractErrorLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "fatal:") || strings.Contains(lower, "error:") {
-			return line
-		}
-	}
-	for i := len(lines) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(lines[i]); line != "" {
-			return line
-		}
-	}
-	return "unknown error"
-}
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")

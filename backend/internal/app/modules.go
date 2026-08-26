@@ -87,8 +87,8 @@ func buildModules(deps *Dependencies) *Modules {
 	syftScanner := scanningInfra.NewSyftScanner(deps.Config.Scanning.SyftPath, deps.Config.Scanning.SyftServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	semgrepScanner := scanningInfra.NewSemgrepScanner(deps.Config.Scanning.SemgrepPath, deps.Config.Scanning.SemgrepServiceURL, deps.Config.Scanning.ScanningWorkspaceDir, deps.Config.Scanning.SemgrepConfig, deps.Config.Scanning.CloneTimeout, deps.Logger)
 	sonarScanner := scanningInfra.NewSonarScanner(
-		deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,
 		deps.Config.Scanning.SonarScannerServiceURL, deps.Config.Scanning.ScanningWorkspaceDir,
+		deps.Config.Scanning.SonarQubeURL, deps.Config.Scanning.SonarQubeToken,
 		deps.Config.Scanning.CloneTimeout, deps.Config.Scanning.SonarQubeAnalysisTimeout, deps.Logger,
 	)
 	zapScanner := scanningInfra.NewZapScanner(
