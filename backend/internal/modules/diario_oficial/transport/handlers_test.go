@@ -83,6 +83,19 @@ func newTestService(pool *pgxpool.Pool, flags configflags.Store) *application.Se
 	return application.NewService(pool, jobsRepo, outboxWriter, &fakeClient{}, repo, integrationsSvc, nil, flags, testLogger())
 }
 
+// newTestServiceWithClient é newTestService com um domain.Client
+// escolhido no lugar do fakeClient{} vazio — usado pelos testes de
+// Health (ver health_test.go), que precisam controlar sucesso/falha de
+// Check() de forma determinística. flags sempre nil (sempre permitido) —
+// nenhum teste de Health se importa com feature flag.
+func newTestServiceWithClient(pool *pgxpool.Pool, client domain.Client) *application.Service {
+	jobsRepo := jobs.NewRepository(pool)
+	outboxWriter := outbox.NewWriter("nix.test")
+	integrationsSvc := integrations.NewService(integrationsInfra.NewPostgresRepository(pool))
+	repo := infrastructure.NewPostgresRepository(pool)
+	return application.NewService(pool, jobsRepo, outboxWriter, client, repo, integrationsSvc, nil, nil, testLogger())
+}
+
 func decodeEnvelope[T any](t *testing.T, body []byte) T {
 	t.Helper()
 	var env struct {

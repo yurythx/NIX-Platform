@@ -188,6 +188,15 @@ func (h *Handlers) ListRecentPublications(w http.ResponseWriter, r *http.Request
 	httputil.WriteOKWithMeta(w, toMatchedPublicationResponses(items), meta)
 }
 
+// Health trata GET /api/v1/diario-oficial/health — checagem síncrona e
+// direta (nunca cria job, nunca grava nada) da fonte de dados
+// configurada, pra uma tela mostrar "está respondendo?" antes do usuário
+// estranhar por que nenhuma publicação nova apareceu.
+func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
+	health := h.service.CheckHealth(r.Context())
+	httputil.WriteOK(w, toSourceHealthResponse(health))
+}
+
 // RateLimitKey limita a criação de jobs por usuário autenticado (§56),
 // caindo de volta para o IP remoto se a requisição não estiver autenticada
 // (o que não deveria acontecer em condições normais, já que esta rota

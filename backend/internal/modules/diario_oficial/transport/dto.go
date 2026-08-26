@@ -9,6 +9,7 @@ package transport
 import (
 	"time"
 
+	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/application"
 	"github.com/yurythx/nix-platform/internal/modules/diario_oficial/domain"
 )
 
@@ -89,4 +90,20 @@ func toMatchedPublicationResponses(items []domain.MatchedPublication) []matchedP
 		out = append(out, toMatchedPublicationResponse(mp))
 	}
 	return out
+}
+
+// sourceHealthResponse é o formato público de application.SourceHealth —
+// mesmo shape que scanning's ScannerHealthResponse (scanner/healthy/
+// message/checked_at), só com "source" no lugar de "scanner": as duas
+// telas ("saúde antes de escanear" e "saúde da fonte de dados do Diário
+// Oficial") resolvem o mesmo problema, então usam o mesmo vocabulário.
+type sourceHealthResponse struct {
+	Source    string    `json:"source"`
+	Healthy   bool      `json:"healthy"`
+	Message   string    `json:"message,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
+}
+
+func toSourceHealthResponse(h application.SourceHealth) sourceHealthResponse {
+	return sourceHealthResponse{Source: h.Source, Healthy: h.Healthy, Message: h.Message, CheckedAt: h.CheckedAt}
 }

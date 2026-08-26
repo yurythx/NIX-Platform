@@ -39,4 +39,7 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, limiter http
 	r.With(
 		auth.RequirePermission(logger, auth.PermDiarioOficialRead),
 	).Get("/diario-oficial/publications", h.ListRecentPublications)
+	r.With(
+		auth.RequirePermission(logger, auth.PermDiarioOficialRead),
+	).Get("/diario-oficial/health", h.Health)
 }
