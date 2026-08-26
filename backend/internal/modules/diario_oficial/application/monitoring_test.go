@@ -77,6 +77,17 @@ func TestCreateMonitoredTerm_Valid_PersistsAndIsListed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMonitoredTerm: %v", err)
 	}
+	// Achado real (rodando contra Postgres de verdade pela primeira vez):
+	// sem este cleanup, o termo ATIVO criado aqui sobrevive ao teste e
+	// SyncAll (que lista TODO termo ativo, não escopado a um Service
+	// específico) o pega em qualquer teste seguinte que chame SyncAll na
+	// mesma execução da suíte — foi assim que
+	// TestSyncAll_InactiveTerm_IsNotSynced quebrou (Search chamado 4x, não
+	// 0x: pegava termos ativos deixados por este teste e por
+	// TestSyncAll_NewMatch_..., que tinha o mesmo problema).
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM diario_oficial_monitored_terms WHERE id = $1`, created.ID)
+	})
 	if !created.Active {
 		t.Error("a newly created term should be Active by default")
 	}
@@ -143,6 +154,18 @@ func TestSyncAll_NewMatch_PersistsPublicationMatchAndOutboxEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMonitoredTerm: %v", err)
 	}
+	// ON DELETE CASCADE cobre diario_oficial_publication_matches a partir
+	// de monitored_term_id (migration 000026), mas NÃO
+	// diario_oficial_publications em si (sem FK nenhuma pra
+	// monitored_terms) — sem limpar pelo external_id também, a
+	// publicação ficaria órfã pra sempre, poluindo qualquer teste futuro
+	// que conte publicações (ex.: um GET /diario-oficial/publications
+	// global).
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = pool.Exec(bg, `DELETE FROM diario_oficial_monitored_terms WHERE id = $1`, term.ID)
+		_, _ = pool.Exec(bg, `DELETE FROM diario_oficial_publications WHERE external_id = 999001`)
+	})
 
 	svc.SyncAll(ctx)
 
@@ -200,6 +223,9 @@ func TestSyncAll_InactiveTerm_IsNotSynced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMonitoredTerm: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM diario_oficial_monitored_terms WHERE id = $1`, term.ID)
+	})
 	// Desativa direto no repositório de infraestrutura (não há endpoint
 	// de "pausar" nesta primeira versão — ver roadmap).
 	if _, err := pool.Exec(ctx, `UPDATE diario_oficial_monitored_terms SET active = false WHERE id = $1`, term.ID); err != nil {
@@ -219,9 +245,13 @@ func TestSyncAll_FeatureDisabled_SkipsEntirely(t *testing.T) {
 	svc := newServiceWithFlags(pool, client, fakeFlagsDisabled{})
 	ctx := context.Background()
 
-	if _, err := svc.CreateMonitoredTerm(ctx, domain.MonitoredTerm{Label: "x", ProcessNumber: "1"}, nil); err != nil {
+	created, err := svc.CreateMonitoredTerm(ctx, domain.MonitoredTerm{Label: "x", ProcessNumber: "1"}, nil)
+	if err != nil {
 		t.Fatalf("CreateMonitoredTerm: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM diario_oficial_monitored_terms WHERE id = $1`, created.ID)
+	})
 
 	svc.SyncAll(ctx)
 
