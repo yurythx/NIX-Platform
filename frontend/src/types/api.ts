@@ -265,3 +265,36 @@ export interface ScannerHealth {
   message?: string;
   checked_at: string;
 }
+
+// MVP de monitoramento real do Diário Oficial via DJEN — o que o
+// usuário quer acompanhar (OAB+UF, número de processo, ou texto livre;
+// pelo menos um preenchido, validado no backend). Espelha
+// transport.monitoredTermResponse.
+export interface MonitoredTerm {
+  id: string;
+  label: string;
+  oab_number?: string;
+  oab_uf?: string;
+  process_number?: string;
+  free_text?: string;
+  active: boolean;
+  last_synced_at?: string;
+  created_at: string;
+}
+
+// Uma publicação do DJEN que casou com um MonitoredTerm — espelha
+// transport.matchedPublicationResponse.
+export interface MatchedPublication {
+  id: string;
+  tribunal: string;
+  orgao: string;
+  tipo_comunicacao: string;
+  texto: string;
+  process_number: string;
+  process_number_masked: string;
+  availability_date: string;
+  link?: string;
+  monitored_term_id: string;
+  monitored_term_label: string;
+  matched_at: string;
+}
