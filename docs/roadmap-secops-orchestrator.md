@@ -24,7 +24,12 @@
   `Service`/`NewService`), `scans.go`, `findings.go` e `projects.go` depois de passar de 1400
   linhas — as referências a `application/service.go` no restante deste documento descrevem o
   estado de quando cada fase foi escrita e continuam válidas como histórico, mesmo que o código
-  citado tenha se mudado de arquivo desde então.
+  citado tenha se mudado de arquivo desde então. `scans.go` passou pelo mesmo processo de novo
+  (voltou a crescer, 950 linhas): a mecânica de orquestração concorrente (`runConcurrently`,
+  `inventoryFor`, `ProcessScanJob`, `HandleScanDeadLetter` e o resto do que suporta o caminho
+  assíncrono) está agora em `scan_orchestration.go`; `scans.go` ficou só com o CRUD/status de scan
+  jobs. Referências abaixo a essas funções em `application/scans.go` valem como histórico pelo
+  mesmo motivo.
 - **Origem:** adaptação de uma proposta externa (Core em Go orquestrando ferramentas SecOps via
   Microkernel/Strategy/Adapter/Observer) para a arquitetura real deste repositório.
 - **Revisão:** a primeira versão deste documento usava o módulo `secops`/VirusTotal como exemplo
