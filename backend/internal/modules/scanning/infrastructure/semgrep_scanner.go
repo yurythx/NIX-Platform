@@ -92,8 +92,15 @@ func NewSemgrepScanner(semgrepPath, serviceURL, workspaceDir, config string, clo
 
 var _ domain.CodeScanner = (*SemgrepScanner)(nil)
 var _ domain.LocalScanner = (*SemgrepScanner)(nil)
+var _ domain.HealthChecker = (*SemgrepScanner)(nil)
 
 func (s *SemgrepScanner) Name() string { return SemgrepScannerName }
+
+// HealthCheck reporta se o sidecar semgrep-scanner está no ar — ver
+// domain.HealthChecker/health_check.go's sidecarHealthCheck.
+func (s *SemgrepScanner) HealthCheck(ctx context.Context) error {
+	return sidecarHealthCheck(ctx, s.httpClient, s.serviceURL, "semgrep")
+}
 
 // Execute clona o alvo (raso, um branch só) via cloneShallow pro volume
 // compartilhado com o sidecar, e pede pro sidecar rodar `semgrep scan`

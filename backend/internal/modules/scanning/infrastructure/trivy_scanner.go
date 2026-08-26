@@ -93,8 +93,15 @@ func NewTrivyScanner(trivyPath, serviceURL, workspaceDir string, cloneTimeout ti
 
 var _ domain.CodeScanner = (*TrivyScanner)(nil)
 var _ domain.LocalScanner = (*TrivyScanner)(nil)
+var _ domain.HealthChecker = (*TrivyScanner)(nil)
 
 func (t *TrivyScanner) Name() string { return TrivyScannerName }
+
+// HealthCheck reporta se o sidecar trivy-scanner está no ar — ver
+// domain.HealthChecker/health_check.go's sidecarHealthCheck.
+func (t *TrivyScanner) HealthCheck(ctx context.Context) error {
+	return sidecarHealthCheck(ctx, t.httpClient, t.serviceURL, "trivy")
+}
 
 // Execute clona o alvo (raso, um branch só) via cloneShallow pro volume
 // compartilhado com o sidecar, e pede pro sidecar rodar `trivy fs` nesse

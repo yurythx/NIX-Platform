@@ -106,6 +106,40 @@ func (r *PostgresRepository) ListByScanIDs(ctx context.Context, scanIDs []uuid.U
 	return scanFindingRows(rows)
 }
 
+// CountBySeverity retorna, por scanID, quantos achados existem por
+// severidade — ver domain.Repository.
+func (r *PostgresRepository) CountBySeverity(ctx context.Context, scanIDs []uuid.UUID) (map[uuid.UUID]map[domain.Severity]int, error) {
+	if len(scanIDs) == 0 {
+		return nil, nil
+	}
+	const q = `
+		SELECT scan_id, severity, count(*)
+		FROM scan_findings
+		WHERE scan_id = ANY($1)
+		GROUP BY scan_id, severity
+	`
+	rows, err := r.pool.Query(ctx, q, scanIDs)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: count findings by severity: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]map[domain.Severity]int)
+	for rows.Next() {
+		var scanID uuid.UUID
+		var severity string
+		var count int
+		if err := rows.Scan(&scanID, &severity, &count); err != nil {
+			return nil, fmt.Errorf("scanning: scan severity count row: %w", err)
+		}
+		if out[scanID] == nil {
+			out[scanID] = make(map[domain.Severity]int)
+		}
+		out[scanID][domain.Severity(severity)] = count
+	}
+	return out, rows.Err()
+}
+
 // ListRecentPage retorna uma página de achados, mais grave/recente
 // primeiro, mais o total de linhas na tabela inteira (sem paginação) —
 // ver domain.Repository. count(*) OVER() calcula o total na MESMA

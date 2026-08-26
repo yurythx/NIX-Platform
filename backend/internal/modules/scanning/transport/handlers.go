@@ -365,6 +365,16 @@ func (h *Handlers) PostureHistory(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOK(w, toPostureSnapshotResponses(snapshots))
 }
 
+// ScannersHealth trata GET /api/v1/scanning/scanners/health (revisão de
+// exibição de resultados) — checa todo scanner registrado que sabe se
+// auto-checar (ver domain.HealthChecker), em paralelo. Pensado pra uma
+// tela que o usuário olha ANTES de disparar um scan novo, não durante
+// um scan em andamento.
+func (h *Handlers) ScannersHealth(w http.ResponseWriter, r *http.Request) {
+	health := h.service.CheckScannersHealth(r.Context())
+	httputil.WriteOK(w, toScannerHealthResponses(health))
+}
+
 // triageFindingRequest é o corpo de PUT
 // .../projects/{projectID}/findings/{fingerprint}/triage (Fase 14 —
 // Maturidade de AppSec). Reason é obrigatório — validado de novo em

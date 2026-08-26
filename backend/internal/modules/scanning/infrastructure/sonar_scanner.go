@@ -113,8 +113,51 @@ func NewSonarScanner(sidecarURL, workspaceDir, serverURL, token string, cloneTim
 }
 
 var _ domain.CodeScanner = (*SonarScanner)(nil)
+var _ domain.HealthChecker = (*SonarScanner)(nil)
 
 func (s *SonarScanner) Name() string { return SonarScannerName }
+
+// HealthCheck reporta se as DUAS dependências deste scanner estão vivas
+// — o sidecar sonar-scanner-cli (mesma checagem que os outros quatro
+// scanners fazem, ver health_check.go's sidecarHealthCheck) E o próprio
+// servidor SonarQube configurado (GET /api/system/status, a checagem de
+// saúde real que a API do SonarQube expõe — status "UP" é o único valor
+// que significa "pronto pra receber análise"; qualquer outro
+// (STARTING/DOWN/RESTARTING/DB_MIGRATION_NEEDED/...) não é). As outras
+// quatro dependências de scanner desta plataforma só têm UM sidecar pra
+// checar; esta é a única com um servidor de análise separado por trás.
+func (s *SonarScanner) HealthCheck(ctx context.Context) error {
+	if err := sidecarHealthCheck(ctx, s.httpClient, s.sidecarURL, "sonarqube sidecar"); err != nil {
+		return err
+	}
+	if s.serverURL == "" {
+		return fmt.Errorf("scanning: sonarqube server: URL not configured")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.serverURL+"/api/system/status", nil)
+	if err != nil {
+		return fmt.Errorf("scanning: sonarqube server: build health check request: %w", err)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("scanning: sonarqube server: unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("scanning: sonarqube server: returned status %d", resp.StatusCode)
+	}
+
+	var status struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return fmt.Errorf("scanning: sonarqube server: decode status response: %w", err)
+	}
+	if status.Status != "UP" {
+		return fmt.Errorf("scanning: sonarqube server: status is %q, not UP", status.Status)
+	}
+	return nil
+}
 
 // Execute clona o alvo, submete a análise ao servidor SonarQube
 // configurado (via o sidecar `sonar-scanner-cli`), espera a Compute

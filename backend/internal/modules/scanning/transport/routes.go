@@ -24,6 +24,14 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 		httpserver.RateLimit(logger, scanLimiter, RateLimitKey),
 	).Post("/scanning/scans", h.CreateScan)
 
+	// Revisão de exibição de resultados: a tela "saúde das ferramentas"
+	// antes de disparar um scan — scanning:read, mesma permissão de
+	// qualquer outra leitura deste módulo (não dispara nada, só
+	// consulta).
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scanners/health", h.ScannersHealth)
+
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans", h.ListScans)

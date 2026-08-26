@@ -72,6 +72,13 @@ var _ domain.CodeScanner = (*SyftScanner)(nil)
 var _ domain.InventoryProvider = (*SyftScanner)(nil)
 var _ domain.LocalScanner = (*SyftScanner)(nil)
 var _ domain.LocalInventoryProvider = (*SyftScanner)(nil)
+var _ domain.HealthChecker = (*SyftScanner)(nil)
+
+// HealthCheck reporta se o sidecar syft-scanner está no ar — ver
+// domain.HealthChecker/health_check.go's sidecarHealthCheck.
+func (s *SyftScanner) HealthCheck(ctx context.Context) error {
+	return sidecarHealthCheck(ctx, s.httpClient, s.serviceURL, "syft")
+}
 
 func (s *SyftScanner) Name() string { return SyftScannerName }
 

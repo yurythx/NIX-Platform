@@ -174,6 +174,15 @@ type ScanStatus struct {
 	CreatedAt   time.Time
 	StartedAt   *time.Time
 	FinishedAt  *time.Time
+	// FindingsBySeverity (revisão de exibição de resultados — "quais
+	// erros e warnings foram achados" na tela de histórico de scans) —
+	// contagem de achados JÁ PERSISTIDOS deste scan por severidade. nil
+	// pra um scan que ainda não terminou (ou terminou sem persistir
+	// nada) — GetScanStatus/ListRecentScans preenchem isto numa consulta
+	// à parte (ver enrichWithFindingsCounts), nunca calculado a partir
+	// de ScannerRuns.FindingsCount (que é só um total por scanner, sem
+	// quebra por severidade).
+	FindingsBySeverity map[domain.Severity]int
 }
 
 // GetScanStatus consulta o estado atual de um job de scan — quem chama
@@ -186,7 +195,37 @@ func (s *Service) GetScanStatus(ctx context.Context, jobID uuid.UUID) (*ScanStat
 	if err != nil {
 		return nil, fmt.Errorf("scanning: get scan status %s: %w", jobID, err)
 	}
-	return s.projectScanStatus(ctx, job)
+	status, err := s.projectScanStatus(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.enrichWithFindingsCounts(ctx, []*ScanStatus{status}); err != nil {
+		return nil, err
+	}
+	return status, nil
+}
+
+// enrichWithFindingsCounts preenche ScanStatus.FindingsBySeverity de
+// TODA a lista recebida numa única consulta (CountBySeverity já agrega
+// por scanID) — compartilhado por GetScanStatus (uma lista de 1) e
+// ListRecentScans (uma página inteira), pra nunca divergirem em como
+// isso é calculado.
+func (s *Service) enrichWithFindingsCounts(ctx context.Context, statuses []*ScanStatus) error {
+	if len(statuses) == 0 {
+		return nil
+	}
+	scanIDs := make([]uuid.UUID, len(statuses))
+	for i, st := range statuses {
+		scanIDs[i] = st.JobID
+	}
+	counts, err := s.repo.CountBySeverity(ctx, scanIDs)
+	if err != nil {
+		return fmt.Errorf("scanning: count findings by severity: %w", err)
+	}
+	for _, st := range statuses {
+		st.FindingsBySeverity = counts[st.JobID]
+	}
+	return nil
 }
 
 // projectScanStatus é o miolo compartilhado entre GetScanStatus (um job
@@ -313,6 +352,9 @@ func (s *Service) ListRecentScans(ctx context.Context, limit int) ([]*ScanStatus
 			return nil, err
 		}
 		out = append(out, status)
+	}
+	if err := s.enrichWithFindingsCounts(ctx, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

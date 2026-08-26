@@ -339,3 +339,106 @@ func TestCreateProjectScanJob_UploadProject_RejectsScannerWithoutLocalSupport(t 
 		t.Errorf("CreateProjectScanJob with a LocalScanner-capable scanner: %v, want success", err)
 	}
 }
+
+// A partir daqui: FindingsBySeverity (revisão de exibição de
+// resultados — "quais erros e warnings foram achados" na tela de
+// histórico de scans).
+
+func TestGetScanStatus_IncludesFindingsBySeverity(t *testing.T) {
+	pool := testPool(t)
+	findings := []domain.Finding{
+		{ID: "CVE-STATUS-1", Severity: domain.SeverityCritical, Description: "crítico"},
+		{ID: "CVE-STATUS-2", Severity: domain.SeverityCritical, Description: "outro crítico"},
+		{ID: "CVE-STATUS-3", Severity: domain.SeverityLow, Description: "baixo"},
+	}
+	scanner := &fakeScanner{name: "trivy", findings: findings}
+	svc := newService(pool, scanner)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	// CreateScanJob+ProcessScanJob (o caminho assíncrono), não RunScan —
+	// RunScan (síncrono) nunca grava uma linha em jobs, então
+	// GetScanStatus/ListRecentScans (que consultam jobsRepo) nunca
+	// encontrariam esse scanID.
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/status-severity.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	status, err := svc.GetScanStatus(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanStatus: %v", err)
+	}
+	if status.FindingsBySeverity[domain.SeverityCritical] != 2 {
+		t.Errorf("FindingsBySeverity[CRITICAL] = %d, want 2", status.FindingsBySeverity[domain.SeverityCritical])
+	}
+	if status.FindingsBySeverity[domain.SeverityLow] != 1 {
+		t.Errorf("FindingsBySeverity[LOW] = %d, want 1", status.FindingsBySeverity[domain.SeverityLow])
+	}
+	if status.FindingsBySeverity[domain.SeverityHigh] != 0 {
+		t.Errorf("FindingsBySeverity[HIGH] = %d, want 0 (zero value, never a key with 0)", status.FindingsBySeverity[domain.SeverityHigh])
+	}
+}
+
+func TestGetScanStatus_NoFindings_FindingsBySeverityIsNil(t *testing.T) {
+	pool := testPool(t)
+	scanner := &fakeScanner{name: "trivy"}
+	svc := newService(pool, scanner)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/clean-status.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	status, err := svc.GetScanStatus(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanStatus: %v", err)
+	}
+	if status.FindingsBySeverity != nil {
+		t.Errorf("FindingsBySeverity = %v, want nil for a scan with no findings", status.FindingsBySeverity)
+	}
+}
+
+func TestListRecentScans_IncludesFindingsBySeverityForEachScan(t *testing.T) {
+	pool := testPool(t)
+	scanner := &fakeScanner{name: "trivy", findings: []domain.Finding{
+		{ID: "CVE-LIST-STATUS-1", Severity: domain.SeverityHigh, Description: "alto"},
+	}}
+	svc := newService(pool, scanner)
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateScanJob(ctx, corrID, []string{"trivy"}, "https://example.com/list-status-severity.git", nil)
+	if err != nil {
+		t.Fatalf("CreateScanJob: %v", err)
+	}
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	scans, err := svc.ListRecentScans(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListRecentScans: %v", err)
+	}
+	var found bool
+	for _, s := range scans {
+		if s.JobID != job.ID {
+			continue
+		}
+		found = true
+		if s.FindingsBySeverity[domain.SeverityHigh] != 1 {
+			t.Errorf("FindingsBySeverity[HIGH] = %d, want 1", s.FindingsBySeverity[domain.SeverityHigh])
+		}
+	}
+	if !found {
+		t.Fatal("ListRecentScans did not include the scan just created")
+	}
+}

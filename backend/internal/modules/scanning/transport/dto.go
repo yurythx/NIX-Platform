@@ -320,6 +320,12 @@ type ScanStatusResponse struct {
 	CreatedAt         time.Time                `json:"created_at"`
 	StartedAt         *time.Time               `json:"started_at,omitempty"`
 	FinishedAt        *time.Time               `json:"finished_at,omitempty"`
+	// FindingsBySeverity (revisão de exibição de resultados — "quais
+	// erros e warnings foram achados" na tela de histórico de scans):
+	// ausente (nil, omitido do JSON) pra um scan que ainda não persistiu
+	// achado nenhum, nunca um mapa com toda severidade zerada — mesma
+	// convenção de campo opcional que ProjectID já usa acima.
+	FindingsBySeverity map[string]int `json:"findings_by_severity,omitempty"`
 }
 
 // nonNilStrings garante que o campo nunca serializa como JSON `null` —
@@ -344,20 +350,28 @@ func toScanStatusResponse(s *application.ScanStatus) ScanStatusResponse {
 		id := s.ProjectID.String()
 		projectID = &id
 	}
+	var findingsBySeverity map[string]int
+	if len(s.FindingsBySeverity) > 0 {
+		findingsBySeverity = make(map[string]int, len(s.FindingsBySeverity))
+		for severity, count := range s.FindingsBySeverity {
+			findingsBySeverity[string(severity)] = count
+		}
+	}
 	return ScanStatusResponse{
-		JobID:             s.JobID.String(),
-		Status:            s.Status,
-		Target:            s.Target,
-		ProjectID:         projectID,
-		RequestedScanners: nonNilStrings(s.RequestedScanners),
-		SucceededScanners: nonNilStrings(s.SucceededScanners),
-		FailedScanners:    toScannerFailureResponses(s.FailedScanners),
-		ScannerRuns:       toScannerRunResponses(s.ScannerRuns),
-		ProgressPercent:   scanProgressPercent(s),
-		Attempts:          s.Attempts,
-		CreatedAt:         s.CreatedAt,
-		StartedAt:         s.StartedAt,
-		FinishedAt:        s.FinishedAt,
+		JobID:              s.JobID.String(),
+		Status:             s.Status,
+		Target:             s.Target,
+		ProjectID:          projectID,
+		RequestedScanners:  nonNilStrings(s.RequestedScanners),
+		SucceededScanners:  nonNilStrings(s.SucceededScanners),
+		FailedScanners:     toScannerFailureResponses(s.FailedScanners),
+		ScannerRuns:        toScannerRunResponses(s.ScannerRuns),
+		ProgressPercent:    scanProgressPercent(s),
+		Attempts:           s.Attempts,
+		CreatedAt:          s.CreatedAt,
+		StartedAt:          s.StartedAt,
+		FinishedAt:         s.FinishedAt,
+		FindingsBySeverity: findingsBySeverity,
 	}
 }
 
@@ -443,6 +457,27 @@ type ProjectFindingHistoryResponse struct {
 	// quando TriageStatus já não é vazio.
 	TriageExpiresAt *time.Time `json:"triage_expires_at,omitempty"`
 	TriageExpired   bool       `json:"triage_expired,omitempty"`
+}
+
+// ScannerHealthResponse é o formato público de
+// application.ScannerHealth (revisão de exibição de resultados) — a
+// tela "saúde das ferramentas" que o usuário pediu, pra checar antes de
+// disparar um scan novo.
+type ScannerHealthResponse struct {
+	Scanner   string    `json:"scanner"`
+	Healthy   bool      `json:"healthy"`
+	Message   string    `json:"message,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
+}
+
+func toScannerHealthResponses(list []application.ScannerHealth) []ScannerHealthResponse {
+	out := make([]ScannerHealthResponse, 0, len(list))
+	for _, h := range list {
+		out = append(out, ScannerHealthResponse{
+			Scanner: h.Scanner, Healthy: h.Healthy, Message: h.Message, CheckedAt: h.CheckedAt,
+		})
+	}
+	return out
 }
 
 // SecurityPostureResponse é o formato público de

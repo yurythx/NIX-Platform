@@ -215,6 +215,10 @@ func (f *fakeRepositoryCapturingLimit) ListByScanIDs(context.Context, []uuid.UUI
 	panic("ListByScanIDs should not be called by ListRecentFindings")
 }
 
+func (f *fakeRepositoryCapturingLimit) CountBySeverity(context.Context, []uuid.UUID) (map[uuid.UUID]map[domain.Severity]int, error) {
+	panic("CountBySeverity should not be called by ListRecentFindings")
+}
+
 func (f *fakeRepositoryCapturingLimit) ListRecentPage(_ context.Context, offset, limit int) ([]domain.PersistedFinding, int64, error) {
 	f.gotOffset = offset
 	f.gotLimit = limit
