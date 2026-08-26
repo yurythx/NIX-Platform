@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yurythx/nix-platform/internal/domain/pagination"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 )
 
@@ -72,6 +73,17 @@ type ProjectFindingHistory struct {
 	// RECENTE do projeto — a UI usa isto pra separar "ainda um problema"
 	// de "já foi corrigido, só ficou no histórico".
 	StillPresent bool
+	// TriageStatus/TriageReason (Fase 14 — Maturidade de AppSec):
+	// TriageStatus vazio ("") significa "aberto, nunca triado" — o
+	// mesmo estado implícito que domain.TriageStatus documenta (não
+	// existe um TriageStatusOpen persistido, ver ali). Ortogonal a
+	// StillPresent: um achado pode continuar reaparecendo em todo
+	// re-scan (StillPresent=true) e MESMO ASSIM estar triado — é
+	// exatamente esse o propósito de "risco aceito"/"não vou corrigir",
+	// ao contrário de "corrigido" (StillPresent=false), que não precisa
+	// de nenhuma decisão humana pra parar de aparecer como pendente.
+	TriageStatus string
+	TriageReason string
 }
 
 // ListProjectFindingsHistory agrupa por Fingerprint todo achado de TODOS
@@ -149,21 +161,52 @@ func (s *Service) ListProjectFindingsHistory(ctx context.Context, projectID uuid
 		g.scansSeen[f.ScanID] = true
 	}
 
+	// Triagem (Fase 14 — Maturidade de AppSec): uma consulta só, indexada
+	// por fingerprint, decora todo grupo de uma vez — s.triageRepo pode
+	// ser nil (mesmo princípio de tolerância a nil de s.flags) num teste
+	// que nunca chamou WithTriageRepository; nesse caso todo achado
+	// simplesmente aparece como "nunca triado", nunca um erro.
+	var triageByFingerprint map[string]domain.Triage
+	if s.triageRepo != nil {
+		triageByFingerprint, err = s.triageRepo.ListTriageByProject(ctx, projectID)
+		if err != nil {
+			return nil, fmt.Errorf("scanning: list triage for project %s: %w", projectID, err)
+		}
+	}
+
 	out := make([]ProjectFindingHistory, 0, len(order))
 	for _, fp := range order {
 		g := groups[fp]
 		g.entry.ScanCount = len(g.scansSeen)
+		if t, ok := triageByFingerprint[fp]; ok {
+			g.entry.TriageStatus = string(t.Status)
+			g.entry.TriageReason = t.Reason
+		}
 		out = append(out, g.entry)
 	}
 
-	// Ainda presente primeiro (o que precisa de atenção AGORA), depois
-	// mais grave primeiro, depois mais recente primeiro — mesmo
-	// raciocínio de findingSeverityOrder (postgres_repository.go), só que
-	// em memória, já que este resultado nunca vem direto de uma única
-	// query SQL.
+	// Precisa de atenção AGORA (ainda presente E nunca triado) primeiro;
+	// depois o que já foi triado mas continua reaparecendo (alguém já
+	// decidiu o que fazer, não é mais um item pendente de decisão);
+	// depois o que já saiu do scan mais recente (presumido corrigido) —
+	// dentro de cada grupo, mais grave primeiro, depois mais recente
+	// primeiro. Mesmo raciocínio de findingSeverityOrder
+	// (postgres_repository.go), só que em memória, já que este resultado
+	// nunca vem direto de uma única query SQL.
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].StillPresent != out[j].StillPresent {
-			return out[i].StillPresent
+		bucket := func(h ProjectFindingHistory) int {
+			switch {
+			case h.StillPresent && h.TriageStatus == "":
+				return 0
+			case h.StillPresent:
+				return 1
+			default:
+				return 2
+			}
+		}
+		bi, bj := bucket(out[i]), bucket(out[j])
+		if bi != bj {
+			return bi < bj
 		}
 		if out[i].Severity != out[j].Severity {
 			return severityRank(out[i].Severity) < severityRank(out[j].Severity)
@@ -190,41 +233,38 @@ func severityRank(s domain.Severity) int {
 	}
 }
 
-// maxRecentFindings é o teto de ListRecentFindings — nenhum chamador
-// consegue pedir mais que isso, nem passando um limit maior (evita uma
-// consulta acidentalmente sem paginação nenhuma trazer a tabela inteira
-// pro frontend de uma vez).
-const maxRecentFindings = 200
+// ListRecentFindings retorna UMA PÁGINA dos achados mais graves/recentes
+// entre TODAS as execuções de scan — a Fase 9 (UI no frontend) usa isto
+// pra listar achados sem exigir que quem chama já saiba um scan_id de
+// antemão (diferente de ListFindings, escopado a um scan só).
+//
+// Fase 14 (Maturidade de AppSec) trocou o antigo "limit sem OFFSET, teto
+// fixo de 200, o resto simplesmente nunca aparece" por paginação de
+// verdade — reaproveita o mesmo contrato pagination.Params/Meta que o
+// resto da plataforma já usa (ex.: users.List), em vez de uma segunda
+// convenção "limit"/"maxRecentFindings" só deste módulo.
+// pagination.AbsoluteMaxPageSize (200) preserva o mesmo teto por página
+// que já existia — só que agora dá pra pedir a PRÓXIMA página em vez de
+// nunca ver o que passou dele.
+func (s *Service) ListRecentFindings(ctx context.Context, page, pageSize int) ([]domain.PersistedFinding, pagination.Meta, error) {
+	params := pagination.New(page, pageSize, pagination.AbsoluteMaxPageSize)
 
-// ListRecentFindings retorna os achados mais graves/recentes entre TODAS
-// as execuções de scan — a Fase 9 (UI no frontend) usa isto pra listar
-// achados sem exigir que quem chama já saiba um scan_id de antemão
-// (diferente de ListFindings, escopado a um scan só). limit <= 0 usa um
-// default razoável; limit > maxRecentFindings é truncado, nunca rejeitado
-// com erro — um pedido "generoso demais" ainda é atendido, só que com o
-// teto em vez do valor pedido.
-func (s *Service) ListRecentFindings(ctx context.Context, limit int) ([]domain.PersistedFinding, error) {
-	const defaultLimit = 50
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-	if limit > maxRecentFindings {
-		limit = maxRecentFindings
-	}
-
-	findings, err := s.repo.ListRecent(ctx, limit)
+	findings, total, err := s.repo.ListRecentPage(ctx, params.Offset(), params.Limit())
 	if err != nil {
-		return nil, fmt.Errorf("scanning: list recent findings: %w", err)
+		return nil, pagination.Meta{}, fmt.Errorf("scanning: list recent findings: %w", err)
 	}
-	// Filtro de ruído (Fase 13) aplicado DEPOIS do limit — um achado
-	// removido aqui pode deixar a resposta com menos de `limit` linhas
-	// mesmo havendo mais achados não-ruído além da janela buscada; aceito
+	// Filtro de ruído (Fase 13) aplicado DEPOIS da paginação — um achado
+	// removido aqui pode deixar a página com menos linhas do que
+	// PageSize mesmo havendo mais achados não-ruído noutra página; aceito
 	// como o mesmo tipo de trade-off que qualquer filtro pós-consulta já
 	// tem nesta plataforma (nunca justificou mover o filtro pro SQL só
 	// por isso — configurável em runtime via feature flag, não vale a
-	// complexidade de um WHERE dinâmico por padrão de caminho).
+	// complexidade de um WHERE dinâmico por padrão de caminho). Meta
+	// continua refletindo o total ANTES do filtro de ruído — TotalPages
+	// calculado sobre um total que o filtro pode reduzir na prática é uma
+	// pequena imprecisão aceita pelo mesmo motivo.
 	if s.noiseFilterEnabled(ctx) {
 		findings = filterNoise(findings, s.noiseFilterPatterns)
 	}
-	return findings, nil
+	return findings, pagination.NewMeta(params, total), nil
 }

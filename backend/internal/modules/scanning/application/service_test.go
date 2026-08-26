@@ -194,12 +194,13 @@ func (s *slowThenFastScanner) Execute(ctx context.Context, target string) ([]dom
 }
 
 // fakeRepositoryCapturingLimit é um domain.Repository mínimo, sem banco
-// nenhum, só pra provar a lógica de clamping de ListRecentFindings
-// (default quando limit <= 0, teto em maxRecentFindings) sem precisar de
-// Postgres — SaveFindings/ListByScanID nunca deveriam ser chamados por
-// este caminho, então entram em pânico se forem.
+// nenhum, só pra provar a lógica de clamping de página/tamanho de página
+// de ListRecentFindings (ver pagination.New) sem precisar de Postgres —
+// SaveFindings/ListByScanID nunca deveriam ser chamados por este
+// caminho, então entram em pânico se forem.
 type fakeRepositoryCapturingLimit struct {
-	gotLimit int
+	gotOffset int
+	gotLimit  int
 }
 
 func (f *fakeRepositoryCapturingLimit) SaveFindings(context.Context, pgx.Tx, uuid.UUID, string, string, []domain.Finding) error {
@@ -214,9 +215,10 @@ func (f *fakeRepositoryCapturingLimit) ListByScanIDs(context.Context, []uuid.UUI
 	panic("ListByScanIDs should not be called by ListRecentFindings")
 }
 
-func (f *fakeRepositoryCapturingLimit) ListRecent(_ context.Context, limit int) ([]domain.PersistedFinding, error) {
+func (f *fakeRepositoryCapturingLimit) ListRecentPage(_ context.Context, offset, limit int) ([]domain.PersistedFinding, int64, error) {
+	f.gotOffset = offset
 	f.gotLimit = limit
-	return nil, nil
+	return nil, 0, nil
 }
 
 func (f *fakeRepositoryCapturingLimit) StartScannerRun(context.Context, uuid.UUID, string) error {

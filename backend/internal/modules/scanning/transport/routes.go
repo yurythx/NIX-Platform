@@ -36,6 +36,12 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans/{scanID}/findings", h.ListFindings)
 
+	// Fase 14 (Maturidade de AppSec): o mesmo achado, em CSV — pra levar
+	// pra fora da plataforma (planilha, ticket, anexo de auditoria).
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scans/{scanID}/findings.csv", h.ExportFindings)
+
 	// Fase 11 (Syft): inventário de pacotes de uma execução — nunca acha
 	// nada, então nunca aparece em .../findings; rota própria, mesmo
 	// scanID.
@@ -68,4 +74,28 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/projects/{projectID}/findings-history", h.ListProjectFindingsHistory)
+
+	// Fase 14 (Maturidade de AppSec): o mesmo histórico deduplicado, em CSV.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/projects/{projectID}/findings-history.csv", h.ExportProjectFindingsHistory)
+
+	// Fase 14 (Maturidade de AppSec): triar (PUT) ou reabrir (DELETE) um
+	// achado deduplicado — scanning:manage, a mesma permissão que já
+	// exige disparar um scan/criar um projeto: suprimir um achado é uma
+	// decisão de mesmo peso, não uma simples leitura.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningManage),
+	).Put("/scanning/projects/{projectID}/findings/{fingerprint}/triage", h.TriageFinding)
+
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningManage),
+	).Delete("/scanning/projects/{projectID}/findings/{fingerprint}/triage", h.UntriageFinding)
+
+	// Fase 14 (Maturidade de AppSec): resumo agregado pro card de postura
+	// de segurança do dashboard — scanning:read, mesma permissão de
+	// qualquer outra listagem deste módulo.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/posture", h.SecurityPosture)
 }

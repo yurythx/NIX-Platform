@@ -67,11 +67,22 @@ const (
 // vivem em scan_findings, consultáveis por scan_id via ListFindings).
 // Scanners lista só os que tiveram sucesso — os que falharam (se algum) só
 // aparecem nos metadados de auditoria, não neste evento.
+//
+// CriticalCount/HighCount (Fase 14 — Maturidade de AppSec): até aqui este
+// evento só dizia QUANTOS achados no total, nunca QUÃO GRAVE — a
+// notificação que o frontend monta a partir disto (NotificationCenter)
+// não tinha como distinguir "achou 40 coisas de baixa severidade" de
+// "achou 1 CRITICAL", e por isso nunca destacava um scan realmente grave
+// de nenhum outro. Só as duas severidades mais altas — Medium/Low nunca
+// merecem interromper alguém com um toast "danger"; quem quiser o
+// detalhe completo já abre /seguranca.
 type scanCompletedPayload struct {
 	ScanID        uuid.UUID `json:"scan_id"`
 	Scanners      []string  `json:"scanners"`
 	Target        string    `json:"target"`
 	FindingsCount int       `json:"findings_count"`
+	CriticalCount int       `json:"critical_count"`
+	HighCount     int       `json:"high_count"`
 }
 
 // scanJobPayload é o corpo persistido em jobs.Job.Payload para um job de
@@ -122,6 +133,15 @@ type Service struct {
 	outboxWriter *outbox.Writer
 	audit        *audit.Writer
 	scanners     map[string]domain.CodeScanner
+	// triageRepo (Fase 14 — Maturidade de AppSec) persiste as decisões de
+	// triagem (falso positivo/não vou corrigir/risco aceito). Interface
+	// própria, não mais um método em domain.Repository (ver comentário de
+	// domain.TriageRepository) — por isso um campo à parte, não outro
+	// método na mesma repo. Pode ficar nil em teste que nunca chama
+	// TriageFinding/UntriageFinding/ListProjectFindingsHistory, mesmo
+	// princípio de tolerância a nil que flags já tem logo abaixo — só
+	// entra em pânico ou erra se de fato usado sem estar configurado.
+	triageRepo domain.TriageRepository
 	// zipExtractor extrai um Project.UploadZip (Fase 10) pro volume
 	// compartilhado — só usado por ProcessScanJob quando um job de scan
 	// pertence a um projeto criado por upload. domain.ZipExtractor, não
@@ -175,6 +195,23 @@ func NewService(
 		scanners:            byName,
 		logger:              logger,
 	}
+}
+
+// WithTriageRepository devolve uma cópia de s com triageRepo preenchido
+// (Fase 14) — um setter separado do construtor posicional, em vez de
+// mais um parâmetro em NewService: NewService já tem 9 parâmetros
+// posicionais mais os scanners variádicos, e triageRepo é opcional (nil
+// é um estado válido, ver comentário do campo) — encaixá-lo no meio da
+// lista posicional obrigaria TODO call site existente (produção e cada
+// teste) a mudar só para passar nil na maioria dos casos. Chamado uma
+// vez, logo após NewService, por quem tem um domain.TriageRepository de
+// verdade pra oferecer (ver internal/app/modules.go); testes que nunca
+// exercitam triagem simplesmente nunca chamam isto, e s.triageRepo
+// continua nil.
+func (s *Service) WithTriageRepository(triageRepo domain.TriageRepository) *Service {
+	s2 := *s
+	s2.triageRepo = triageRepo
+	return &s2
 }
 
 // noiseFilterEnabled consulta NoiseFilterFlagKey — mesmo padrão de

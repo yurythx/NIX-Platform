@@ -87,7 +87,7 @@ func (s *Service) RunScan(ctx context.Context, scannerName, target string, corre
 // EventScanCompleted sem nenhum sucesso seria enganoso.
 func (s *Service) persistCompletion(ctx context.Context, scanID uuid.UUID, target string, correlationID uuid.UUID, outcomes []scannerOutcome) error {
 	var succeededNames []string
-	totalFindings := 0
+	totalFindings, criticalCount, highCount := 0, 0, 0
 
 	err := database.WithTx(ctx, s.db, func(ctx context.Context, tx pgx.Tx) error {
 		for _, o := range outcomes {
@@ -107,8 +107,23 @@ func (s *Service) persistCompletion(ctx context.Context, scanID uuid.UUID, targe
 			}
 			succeededNames = append(succeededNames, o.scanner)
 			totalFindings += len(o.findings)
+			// CriticalCount/HighCount (Fase 14): contados aqui, sobre os
+			// mesmos o.findings que acabaram de ser gravados — nunca uma
+			// segunda consulta ao banco só pra saber "quantos são graves",
+			// o outcome já tem essa resposta em memória.
+			for _, f := range o.findings {
+				switch f.Severity {
+				case domain.SeverityCritical:
+					criticalCount++
+				case domain.SeverityHigh:
+					highCount++
+				}
+			}
 		}
-		payload := scanCompletedPayload{ScanID: scanID, Scanners: succeededNames, Target: target, FindingsCount: totalFindings}
+		payload := scanCompletedPayload{
+			ScanID: scanID, Scanners: succeededNames, Target: target, FindingsCount: totalFindings,
+			CriticalCount: criticalCount, HighCount: highCount,
+		}
 		return s.outboxWriter.Write(ctx, tx, EventScanCompleted, "scan", scanID.String(), correlationID, payload)
 	})
 	if err != nil {

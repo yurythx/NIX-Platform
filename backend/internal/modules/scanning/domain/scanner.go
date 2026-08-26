@@ -214,12 +214,18 @@ type Repository interface {
 	// devolve uma lista vazia, não erro.
 	ListByScanIDs(ctx context.Context, scanIDs []uuid.UUID) ([]PersistedFinding, error)
 
-	// ListRecent retorna os achados mais graves/recentes entre TODAS as
-	// execuções de scan (não só uma), até limit linhas — o feed que a
-	// Fase 9 (UI no frontend) usa pra listar "achados recentes por
-	// severidade" sem que quem chama precise já saber um scan_id de
-	// antemão (ListByScanID sozinho não serve pra isso).
-	ListRecent(ctx context.Context, limit int) ([]PersistedFinding, error)
+	// ListRecentPage retorna UMA página dos achados mais graves/recentes
+	// entre TODAS as execuções de scan (não só uma) — o feed que a Fase 9
+	// (UI no frontend) usa pra listar "achados recentes por severidade"
+	// sem que quem chama precise já saber um scan_id de antemão
+	// (ListByScanID sozinho não serve pra isso). totalCount é o total de
+	// linhas que EXISTEM (sem paginação), não o total desta página — a
+	// Fase 14 (Maturidade de AppSec) trocou o antigo "só os N mais
+	// recentes, o resto nunca aparece" (limit fixo sem OFFSET) por
+	// paginação de verdade, reaproveitando o mesmo contrato
+	// internal/domain/pagination que o resto da plataforma já usa (ver
+	// application.ListRecentFindings).
+	ListRecentPage(ctx context.Context, offset, limit int) (findings []PersistedFinding, totalCount int64, err error)
 
 	// StartScannerRun registra que scanner começou a rodar dentro de
 	// jobID — chamado no INÍCIO de cada goroutine de

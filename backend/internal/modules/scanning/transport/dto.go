@@ -412,6 +412,49 @@ type ProjectFindingHistoryResponse struct {
 	ScanCount     int          `json:"scan_count"`
 	StillPresent  bool         `json:"still_present"`
 	Tool          ToolResponse `json:"tool"`
+	// TriageStatus (Fase 14 — Maturidade de AppSec): "" quando o achado
+	// nunca foi triado (o estado "aberto" implícito, ver
+	// domain.TriageStatus) — nunca omitido do JSON (sem omitempty),
+	// diferente de campos opcionais como Snippet, porque "" AQUI é um
+	// valor com significado próprio ("aberto"), não "ainda não
+	// implementado nesta versão do achado" — o frontend distingue os
+	// dois de propósito.
+	TriageStatus string `json:"triage_status"`
+	TriageReason string `json:"triage_reason,omitempty"`
+}
+
+// SecurityPostureResponse é o formato público de
+// application.SecurityPosture (Fase 14 — Maturidade de AppSec) — o card
+// "postura de segurança" do dashboard.
+type SecurityPostureResponse struct {
+	OpenCritical    int                      `json:"open_critical"`
+	OpenHigh        int                      `json:"open_high"`
+	OpenMedium      int                      `json:"open_medium"`
+	OpenLow         int                      `json:"open_low"`
+	TriagedCount    int                      `json:"triaged_count"`
+	ProjectsScanned int                      `json:"projects_scanned"`
+	TopVulnerable   []ProjectPostureResponse `json:"top_vulnerable"`
+}
+
+type ProjectPostureResponse struct {
+	ProjectID    string `json:"project_id"`
+	ProjectName  string `json:"project_name"`
+	OpenCritical int    `json:"open_critical"`
+	OpenHigh     int    `json:"open_high"`
+}
+
+func toSecurityPostureResponse(p application.SecurityPosture) SecurityPostureResponse {
+	top := make([]ProjectPostureResponse, 0, len(p.TopVulnerable))
+	for _, pp := range p.TopVulnerable {
+		top = append(top, ProjectPostureResponse{
+			ProjectID: pp.ProjectID, ProjectName: pp.ProjectName,
+			OpenCritical: pp.OpenCritical, OpenHigh: pp.OpenHigh,
+		})
+	}
+	return SecurityPostureResponse{
+		OpenCritical: p.OpenCritical, OpenHigh: p.OpenHigh, OpenMedium: p.OpenMedium, OpenLow: p.OpenLow,
+		TriagedCount: p.TriagedCount, ProjectsScanned: p.ProjectsScanned, TopVulnerable: top,
+	}
 }
 
 func toProjectFindingHistoryResponses(list []application.ProjectFindingHistory) []ProjectFindingHistoryResponse {
@@ -430,6 +473,8 @@ func toProjectFindingHistoryResponses(list []application.ProjectFindingHistory) 
 			ScanCount:     h.ScanCount,
 			StillPresent:  h.StillPresent,
 			Tool:          ToolResponse{Name: toolDisplayName(h.Scanner)},
+			TriageStatus:  h.TriageStatus,
+			TriageReason:  h.TriageReason,
 		})
 	}
 	return out

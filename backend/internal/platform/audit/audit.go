@@ -43,6 +43,15 @@ const (
 	// que "Rodar de novo" é clicado. As duas merecem trilha de auditoria,
 	// mesmo padrão que ActionScanRequested já tem pra CreateScanJob.
 	ActionProjectCreated = "project.created"
+	// ActionFindingTriaged/ActionFindingUntriaged (Fase 14 — Maturidade
+	// de AppSec) registram quando um humano marca um achado como falso
+	// positivo/não vou corrigir/risco aceito, ou reabre um já triado —
+	// a decisão em si (Metadata carrega project_id/fingerprint/status/
+	// reason) é exatamente o tipo de coisa que uma auditoria de
+	// segurança posterior precisa conseguir reconstruir: quem suprimiu
+	// o quê, e por quê.
+	ActionFindingTriaged   = "finding.triaged"
+	ActionFindingUntriaged = "finding.untriaged"
 )
 
 // Entry é um registro de auditoria.

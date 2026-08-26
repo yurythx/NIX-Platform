@@ -75,6 +75,57 @@ func TestRunScan_WithFindings_PersistsFindingsAndOutboxEventAtomically(t *testin
 	}
 }
 
+// TestRunScan_WithFindings_OutboxPayloadCarriesSeverityBreakdown (Fase
+// 14 — Maturidade de AppSec): scanning.scan.completed passou a carregar
+// critical_count/high_count, não só um findings_count sem distinção de
+// gravidade — o NotificationCenter do frontend usa isto pra destacar um
+// scan com achado grave em vez de tratar toda conclusão de scan igual.
+func TestRunScan_WithFindings_OutboxPayloadCarriesSeverityBreakdown(t *testing.T) {
+	pool := testPool(t)
+	findings := []domain.Finding{
+		{ID: "CVE-2026-0001", Severity: domain.SeverityCritical, Description: "grave"},
+		{ID: "semgrep:sql-injection", Severity: domain.SeverityHigh, Description: "alto"},
+		{ID: "semgrep:missing-header", Severity: domain.SeverityLow, Description: "baixo"},
+	}
+	scanner := &fakeScanner{name: "severity-breakdown-scanner", findings: findings}
+	svc := newService(pool, scanner)
+	ctx := context.Background()
+
+	scanID, _, err := svc.RunScan(ctx, "severity-breakdown-scanner", "backend/", uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+
+	// outbox_events.payload é o envelope events.Event INTEIRO (id, type,
+	// source, occurred_at, correlation_id, e só então "payload" com o
+	// scanCompletedPayload de fato) — não o scanCompletedPayload direto,
+	// daí o Unmarshal em duas camadas.
+	var envelope struct {
+		Payload struct {
+			FindingsCount int `json:"findings_count"`
+			CriticalCount int `json:"critical_count"`
+			HighCount     int `json:"high_count"`
+		} `json:"payload"`
+	}
+	err = pool.QueryRow(ctx,
+		`SELECT payload FROM outbox_events WHERE aggregate_id = $1 AND event_type = $2`,
+		scanID.String(), EventScanCompleted,
+	).Scan(&envelope)
+	if err != nil {
+		t.Fatalf("query outbox payload: %v", err)
+	}
+	payload := envelope.Payload
+	if payload.FindingsCount != 3 {
+		t.Errorf("FindingsCount = %d, want 3", payload.FindingsCount)
+	}
+	if payload.CriticalCount != 1 {
+		t.Errorf("CriticalCount = %d, want 1", payload.CriticalCount)
+	}
+	if payload.HighCount != 1 {
+		t.Errorf("HighCount = %d, want 1 (LOW is not counted in either bucket)", payload.HighCount)
+	}
+}
+
 func TestRunScan_ScannerError_ReturnsErrorAndPersistsNothing(t *testing.T) {
 	pool := testPool(t)
 	scanner := &fakeScanner{name: "broken-scanner", err: fmt.Errorf("tool crashed")}

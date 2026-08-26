@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yurythx/nix-platform/internal/domain/pagination"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 )
 
@@ -19,7 +20,7 @@ func TestListRecentFindings_IncludesFindingsFromMultipleScans(t *testing.T) {
 	// abaixo procura por ele especificamente em vez de comparar
 	// contagem exata, porque scan_findings é uma tabela compartilhada
 	// entre todo teste deste pacote (nenhum limpa depois de si) e
-	// ListRecent, por natureza, não filtra por scan_id.
+	// ListRecentPage, por natureza, não filtra por scan_id.
 	const marker = "recent-findings-marker-scanner"
 	scanner := &fakeScanner{name: marker, findings: []domain.Finding{
 		{ID: "MARKER-1", Severity: domain.SeverityCritical, Description: "achado do teste de ListRecentFindings"},
@@ -32,10 +33,11 @@ func TestListRecentFindings_IncludesFindingsFromMultipleScans(t *testing.T) {
 		t.Fatalf("RunScan: %v", err)
 	}
 
-	// Limite generoso — só precisa ser maior que o número total de
-	// achados que a suíte inteira já gravou até este ponto, o que
-	// maxRecentFindings (200) cobre com folga pro tamanho desta suíte.
-	recent, err := svc.ListRecentFindings(ctx, maxRecentFindings)
+	// CRITICAL some pro topo da ordenação (mais grave primeiro) — a
+	// primeira página (pageSize no teto) já é o bastante pra pegar o
+	// achado deste teste, mesmo com a suíte inteira compartilhando a
+	// mesma tabela.
+	recent, _, err := svc.ListRecentFindings(ctx, 1, pagination.AbsoluteMaxPageSize)
 	if err != nil {
 		t.Fatalf("ListRecentFindings: %v", err)
 	}
@@ -52,40 +54,80 @@ func TestListRecentFindings_IncludesFindingsFromMultipleScans(t *testing.T) {
 	}
 }
 
-func TestListRecentFindings_NeverExceedsMaxEvenWithoutExplicitLimit(t *testing.T) {
+func TestListRecentFindings_ReturnsMetaWithTotalCount(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
 
-	recent, err := svc.ListRecentFindings(context.Background(), 0) // 0 usa o default, não maxRecentFindings
+	recent, meta, err := svc.ListRecentFindings(context.Background(), 1, 5)
 	if err != nil {
 		t.Fatalf("ListRecentFindings: %v", err)
 	}
-	if len(recent) > maxRecentFindings {
-		t.Errorf("ListRecentFindings returned %d rows, want at most %d (the hard cap)", len(recent), maxRecentFindings)
+	if len(recent) > 5 {
+		t.Errorf("page size not respected: got %d rows, want at most 5", len(recent))
+	}
+	if meta.PageSize != 5 || meta.Page != 1 {
+		t.Errorf("meta = %+v, want Page=1 PageSize=5", meta)
+	}
+	// TotalItems é sobre a tabela INTEIRA (compartilhada com toda a
+	// suíte), não sobre esta página — só afirma que reflete PELO MENOS o
+	// que esta página já devolveu, nunca menos (senão a paginação em si
+	// estaria mentindo sobre quanto ainda falta).
+	if meta.TotalItems < int64(len(recent)) {
+		t.Errorf("meta.TotalItems = %d, want at least %d (the size of the page itself)", meta.TotalItems, len(recent))
 	}
 }
 
-func TestListRecentFindings_LimitClamping(t *testing.T) {
+// TestListRecentFindings_PageBeyondTotal_ReturnsEmptyPageWithCorrectTotal
+// prova o caso que motivou o comentário de ListRecentPage sobre
+// count(*) OVER() nunca aparecer numa página vazia — uma página bem além
+// do fim ainda devolve o TotalItems real, não zero.
+func TestListRecentFindings_PageBeyondTotal_ReturnsEmptyPageWithCorrectTotal(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+
+	_, metaFirstPage, err := svc.ListRecentFindings(context.Background(), 1, 1)
+	if err != nil {
+		t.Fatalf("ListRecentFindings (page 1): %v", err)
+	}
+	if metaFirstPage.TotalItems == 0 {
+		t.Skip("no findings in the shared test database yet — nothing to prove a beyond-the-end page against")
+	}
+
+	recent, meta, err := svc.ListRecentFindings(context.Background(), 999_999, 1)
+	if err != nil {
+		t.Fatalf("ListRecentFindings (way beyond the end): %v", err)
+	}
+	if len(recent) != 0 {
+		t.Errorf("recent = %d rows, want 0 for a page far beyond the total", len(recent))
+	}
+	if meta.TotalItems != metaFirstPage.TotalItems {
+		t.Errorf("TotalItems on an empty page = %d, want it to still match the real total (%d), not 0", meta.TotalItems, metaFirstPage.TotalItems)
+	}
+}
+
+func TestListRecentFindings_PageAndPageSizeClamping(t *testing.T) {
 	cases := []struct {
-		name      string
-		requested int
-		want      int
+		name           string
+		page, pageSize int
+		wantOffset     int
+		wantLimit      int
 	}{
-		{"zero uses the default", 0, 50},
-		{"negative uses the default", -5, 50},
-		{"within range is passed through unchanged", 10, 10},
-		{"above the cap is clamped", 10_000, maxRecentFindings},
+		{"zero page and size use the defaults", 0, 0, 0, pagination.DefaultPageSize},
+		{"negative page and size use the defaults", -5, -5, 0, pagination.DefaultPageSize},
+		{"within range is passed through unchanged", 2, 10, 10, 10},
+		{"page size above the cap is clamped", 1, 10_000, 0, pagination.AbsoluteMaxPageSize},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &fakeRepositoryCapturingLimit{}
 			svc := &Service{repo: repo, logger: testLogger()}
 
-			if _, err := svc.ListRecentFindings(context.Background(), tc.requested); err != nil {
+			if _, _, err := svc.ListRecentFindings(context.Background(), tc.page, tc.pageSize); err != nil {
 				t.Fatalf("ListRecentFindings: %v", err)
 			}
-			if repo.gotLimit != tc.want {
-				t.Errorf("limit passed to the repository = %d, want %d", repo.gotLimit, tc.want)
+			if repo.gotOffset != tc.wantOffset || repo.gotLimit != tc.wantLimit {
+				t.Errorf("repository received offset=%d limit=%d, want offset=%d limit=%d",
+					repo.gotOffset, repo.gotLimit, tc.wantOffset, tc.wantLimit)
 			}
 		})
 	}
