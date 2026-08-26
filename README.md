@@ -316,6 +316,17 @@ Keycloak descartável só pro backend completar o discovery OIDC no boot.
 - **DLQ**: uma vez que `RABBITMQ_MAX_RETRIES` se esgota, a mensagem é rejeitada (nack) sem
   requeue, o que o RabbitMQ roteia nativamente para a DLQ da própria fila (cada fila principal
   declara `x-dead-letter-exchange`/`-routing-key` apontando para ela).
+- **Job órfão (achado real — um scan preso em "0% Rodando" por horas, o worker que o processava
+  tinha morrido no meio do trabalho)**: se o worker que processa um job morre no meio do trabalho
+  (crash, OOM, `docker compose restart`/reimplantação no meio de um job), a mensagem que disparou o
+  processamento já foi confirmada (ack) muito antes de morrer — nenhuma redelivery chega nunca, e o
+  job ficaria preso em "processing" pra sempre. `jobs.SweepStale` (`internal/platform/jobs/sweeper.go`,
+  registrado como processor do worker) varre periodicamente (a cada 5min, primeira varredura
+  imediata ao subir) todo job "processing" sem atividade há mais de `JOB_STALE_AFTER` (default
+  45min — acima do maior timeout interno de qualquer scanner, `SCANNING_ZAP_SCAN_TIMEOUT`, 30min por
+  padrão) e o dead-letra com o mesmo pipeline (evento de outbox, auditoria, notificação) que uma
+  falha "normal" já teria — nunca "max retries exceeded" no motivo, sempre um texto explicando que
+  foi órfão, não retry esgotado.
 - **Publisher confirms**: toda publicação (`internal/platform/messaging.Publisher` e o publicador
   do outbox) bloqueia até o RabbitMQ confirmar que a mensagem foi aceita.
 - **Outbox Transacional**: as escritas de negócio e o evento que elas disparam são inseridos na
