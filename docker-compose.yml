@@ -181,6 +181,24 @@ services:
     environment:
       DB_HOST: postgres
       RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-nix}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/${RABBITMQ_DEFAULT_VHOST:-nix}
+      # Endereços internos dos sidecars de scanning — achado real
+      # (usuário viu "Saúde das ferramentas" reportando TODO scanner
+      # "fora do ar" apesar dos sidecars estarem saudáveis): GET
+      # /scanning/scanners/health é servido por ESTE container
+      # (cmd/api), não pelo backend-worker — até esta mudança, só o
+      # backend-worker tinha esta mesma sobrescrita (ver o comentário
+      # completo no bloco `environment:` dele, alguns serviços abaixo),
+      # porque só ele de fato PRECISAVA falar com os sidecars pra
+      # escanear. A tela de saúde (revisão de exibição de resultados)
+      # criou uma SEGUNDA razão pra esses endereços existirem — checagem
+      # sob demanda, sem job/worker envolvido — que ficou pra trás
+      # quando esta seção foi escrita antes daquela feature existir.
+      # Mesmos valores, nunca devem divergir entre os dois blocos.
+      SCANNING_TRIVY_SERVICE_URL: http://trivy-scanner:8080
+      SCANNING_GITLEAKS_SERVICE_URL: http://gitleaks-scanner:8080
+      SCANNING_SYFT_SERVICE_URL: http://syft-scanner:8080
+      SCANNING_SEMGREP_SERVICE_URL: http://semgrep-scanner:8080
+      SCANNING_SONAR_SCANNER_SERVICE_URL: http://sonar-scanner-cli:8080
     volumes:
       # A chave privada RSA do login local (§ ADR 003) — nunca no
       # controle de versão, montada somente leitura no mesmo caminho que

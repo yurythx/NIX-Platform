@@ -348,7 +348,12 @@ Keycloak descartável só pro backend completar o discovery OIDC no boot.
   nunca confiada cegamente.
 - **Reconexão**: backoff exponencial limitado (até 30s) em qualquer fechamento/erro, mais o
   tratamento nativo de ping/pong do navegador para heartbeat — nunca um loop de reconexão
-  agressivo.
+  agressivo. **Exceção deliberada (achado real — usuário reportou nunca ver progresso de scan em
+  tempo real; o log mostrava `POST /ws/ticket` devolvendo 401 pra sempre, a cada ~30s)**: uma
+  sessão genuinamente expirada (401 ao buscar um ticket novo, não um erro de rede/servidor)
+  entra num estado terminal `"unauthorized"` em vez de continuar reconectando — retry nunca
+  resolveria sozinho, só um login novo. A Topbar mostra "Sessão expirada — atualize a página" em
+  vermelho nesse caso, distinto de "Reconectando…" (âmbar, transitório).
 
 ## Segurança
 
