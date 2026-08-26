@@ -1,9 +1,10 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
 - **Fase 14 (Maturidade de AppSec — triagem, paginação de verdade, notificação de crítico, postura
-  de segurança, exportação CSV) ✅ completa** — ver seção própria no fim deste documento. RBAC por
-  projeto, fingerprint resiliente a deslocamento de linha e exportação SARIF ficaram documentados
-  como adiados, com o motivo de cada um.
+  de segurança, exportação CSV) ✅ completa**, mais sua **continuação (expiração de triagem +
+  tendência histórica) ✅ completa** — ver as duas seções próprias no fim deste documento. RBAC por
+  projeto, fingerprint resiliente a deslocamento de linha e exportação SARIF continuam adiados, com
+  o motivo de cada um.
 - **Status:** Fases 1, 3-9 concluídas (Fundação, Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração
   concorrente, CLI + CI/CD, Frontend). Fase 2 (TruffleHog) pulada por decisão explícita do usuário,
   redundante com o gitleaks já no CI (decisão revisitada na Fase 11 abaixo — sob demanda deixou de
@@ -978,6 +979,46 @@ triagem, sem visão executiva, sem exportação, sem destaque pra achado crític
    `Content-Disposition` (só repassava `Content-Type` antes) e ganhar `PUT`/`DELETE` (usados pela
    triagem, item 1) — os dois únicos ajustes de infraestrutura que esta fase exigiu fora do módulo
    scanning em si.
+
+### Fase 14, continuação — expiração de triagem e tendência histórica
+
+**Status: ✅ implementada e verificada** (mesmo rigor da Fase 14 original: Postgres isolado, suíte
+inteira com `-p 1`, `gofmt`/`go vet`/`staticcheck`/`deadcode` limpos; frontend `tsc`/`eslint`/`vitest`
+(175 testes)/`next build` limpos).
+
+**Origem:** pedido direto do usuário — "o que mais podemos fazer pra melhorar o que as grandes
+empresas fazem?" — depois da Fase 14 original. Das quatro opções levantadas (expiração de
+triagem+tendência, Slack, Jira, CI comentando em PR), o usuário escolheu a de menor risco/maior
+reaproveitamento do que já existia.
+
+1. **Expiração de triagem** — `scanning_finding_triage` ganhou `expires_at` opcional (migration
+   000024). `domain.Triage.Expired(now)` é puro (recebe `now` como parâmetro, não `time.Now()`
+   direto — testável sem depender do relógio real). Uma triagem VENCIDA nunca é apagada
+   automaticamente (a decisão que alguém tomou fica registrada — auditoria de "o que foi decidido e
+   quando" não desaparece só porque o prazo passou); em vez disso, `TriageExpired=true` faz o achado
+   voltar a contar como ABERTO em `ListProjectFindingsHistory` (bucket de ordenação) e
+   `SecurityPosture` (`OpenCritical`/`OpenHigh`/etc., não `TriagedCount`) — exatamente como se nunca
+   tivesse sido triado, até alguém revisar de novo. UI: campo de data opcional no diálogo de
+   triagem ("Revisar até"), selo "Vencida: <status>" em vermelho + botão "Renovar…" (pré-preenche o
+   diálogo com a triagem anterior) quando expirado.
+2. **Tendência histórica** — `scanning_posture_snapshots` (migration 000025, PRIMARY KEY em
+   `snapshot_date` — no máximo uma linha "oficial" por dia). Gravado por um processor NOVO do worker
+   (`PostureSnapshotLoop`, mesmo padrão de `ratelimit.Cleanup`/`idempotency.Cleanup` — ver
+   `internal/app/worker.go`), uma vez por dia (24h), com uma diferença deliberada do padrão usual: o
+   PRIMEIRO snapshot roda imediatamente ao iniciar o worker, não só depois do primeiro tick — com um
+   intervalo de 24h, esperar o tick faria o gráfico só ganhar seu primeiro ponto um dia inteiro
+   depois de habilitado. `GET /scanning/posture/history?days=30` alimenta `PostureTrendChart`, um
+   SVG desenhado à mão no frontend (2 séries — crítico/alto, as únicas que mudam a decisão de "está
+   piorando?" — sem biblioteca de gráfico nova: nenhuma já existe nas dependências, e a
+   complexidade não justificava adicionar uma só pra isto).
+
+Achado real durante a verificação (não um bug em produção, nunca chegou a rodar contra dado real —
+pego pela suíte de testes contra o Postgres isolado antes de qualquer commit): a primeira versão de
+`ListSnapshots` usava `($1 || ' days')::interval` pra construir a janela de dias — o operador `||`
+força o pgx a tentar codificar o parâmetro inteiro como texto, e falha em tempo de execução
+("cannot find encode plan") porque o Go `int` não tem um plano de codificação pra OID texto. Corrigido
+pra `make_interval(days => $1)`, o mesmo padrão que `internal/platform/idempotency/postgres.go`'s
+`Cleanup` já usa pra construir intervalo a partir de um inteiro do Go.
 
 ### Adiado, com motivo — não esquecimento
 

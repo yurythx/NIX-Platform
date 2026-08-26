@@ -616,6 +616,44 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/scanning/posture/history:
+    get:
+      tags: [scanning]
+      summary: Série temporal de SecurityPosture (Fase 14, continuação — tendência histórica)
+      operationId: getSecurityPostureHistory
+      description: >
+        Um ponto por dia, gravado periodicamente pelo worker (nunca por esta requisição — GET aqui só
+        lê o que já foi gravado). Alimenta o gráfico de tendência do dashboard — "estamos melhorando
+        ou piorando?", a pergunta que GET /api/v1/scanning/posture sozinho (só o AGORA) não respondia.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: Quantos dias de histórico. <= 0 ou ausente usa o default (30); acima de 366 é reduzido a 366.
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Snapshots, data mais antiga primeiro (lista vazia se o worker ainda não gravou nenhum).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PostureSnapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/scanning/projects/{projectID}/findings-history:
     get:
       tags: [scanning]
@@ -728,6 +766,14 @@ paths:
                 reason:
                   type: string
                   description: Obrigatório — motivo da triagem, no máximo 2000 caracteres.
+                expires_at:
+                  type: string
+                  format: date-time
+                  description: >
+                    Opcional (Fase 14, continuação — expiração de triagem). Precisa estar no futuro.
+                    Quando o prazo passa, o achado volta a contar como aberto em
+                    SecurityPosture/ListProjectFindingsHistory (mas a decisão em si nunca é apagada
+                    automaticamente — ver GET .../findings-history's triage_expired).
       responses:
         "200":
           description: Triagem gravada.
@@ -736,7 +782,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Envelope"
         "400":
-          description: projectID/fingerprint inválido, status desconhecido, ou reason vazio/longo demais.
+          description: projectID/fingerprint inválido, status desconhecido, reason vazio/longo demais, ou expires_at no passado.
           content:
             application/json:
               schema:
@@ -1261,6 +1307,39 @@ components:
         triage_reason:
           type: string
           description: Ausente quando triage_status é vazio.
+        triage_expires_at:
+          type: string
+          format: date-time
+          description: Fase 14, continuação — expiração de triagem. Ausente sem prazo, ou sem triagem.
+        triage_expired:
+          type: boolean
+          description: >
+            true quando triage_expires_at já passou — o achado continua carregando
+            triage_status/triage_reason (a decisão fica registrada), mas conta como ABERTO em
+            SecurityPosture, não como triado.
+
+    PostureSnapshot:
+      type: object
+      description: >
+        Um ponto da série temporal de SecurityPosture (Fase 14, continuação — tendência histórica),
+        gravado uma vez por dia pelo worker. Ver GET /api/v1/scanning/posture/history.
+      properties:
+        date:
+          type: string
+          format: date
+          description: "YYYY-MM-DD — só a data, não um timestamp."
+        open_critical:
+          type: integer
+        open_high:
+          type: integer
+        open_medium:
+          type: integer
+        open_low:
+          type: integer
+        triaged_count:
+          type: integer
+        projects_scanned:
+          type: integer
 
     ProjectPosture:
       type: object
