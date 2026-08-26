@@ -35,6 +35,7 @@ describe("Topbar", () => {
     ["connecting", "Conectando…"],
     ["open", "Ao vivo"],
     ["closed", "Reconectando…"],
+    ["unauthorized", "Sessão expirada — atualize a página"],
   ] as const)("estado da conexão %s mostra o rótulo '%s'", (state, label) => {
     render(<Topbar userLabel="admin" connectionState={state} onToggleSidebar={() => {}} />);
     expect(screen.getByText(label)).toBeInTheDocument();

@@ -1,6 +1,15 @@
+import { ApiError } from "@/lib/api/client";
 import { parseEventEnvelope, type EventEnvelope } from "@/lib/validation/schemas";
 
-export type ConnectionState = "idle" | "connecting" | "open" | "closed";
+// "unauthorized" (achado real — usuário reportou nunca ver progresso de
+// scan em tempo real; o log do backend mostrava POST /api/v1/ws/ticket
+// devolvendo 401 a cada ~30s, pra sempre, na mesma sessão): getTicket
+// falhando com 401 significa que a SESSÃO em si expirou (o token que
+// tentaria buscar um ticket novo já não é mais válido) — reconectar com
+// backoff nunca vai funcionar até um login novo, ao contrário de um erro
+// de rede/servidor fora do ar (que scheduleReconnect já cobre bem).
+// Estado TERMINAL — nunca agenda outra tentativa a partir daqui.
+export type ConnectionState = "idle" | "connecting" | "open" | "closed" | "unauthorized";
 
 interface NotificationClientOptions {
   /** Busca um ticket novo de curta duração (§38) — chamado ao conectar e
@@ -56,7 +65,15 @@ export class NotificationClient {
     let ticket: string;
     try {
       ticket = await this.opts.getTicket();
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Sessão expirada — retry é inútil até um login novo (nunca vai
+        // deixar de dar 401 sozinho). Pra qualquer OUTRO erro (rede,
+        // servidor fora do ar), continua reconectando com backoff, igual
+        // sempre fez.
+        this.setState("unauthorized");
+        return;
+      }
       this.scheduleReconnect();
       return;
     }
