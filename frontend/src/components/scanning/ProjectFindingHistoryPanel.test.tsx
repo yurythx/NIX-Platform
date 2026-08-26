@@ -18,6 +18,21 @@ function mockFetchOnce(status: number, body: unknown) {
   );
 }
 
+// getBadgeText: TriageControls (revisão de exibição de resultados)
+// sempre renderiza o <dialog> de triagem no DOM, mesmo fechado (o
+// <dialog> nativo só vira display:none via CSS quando falta o atributo
+// open, mas continua presente pra queries de texto, que não filtram por
+// visibilidade) — o <select> dentro dele tem um <option> pro mesmo
+// texto que o Badge de status já mostra (ex. "Risco aceito"), então um
+// getByText plano ficaria ambíguo. Este helper ignora qualquer match
+// dentro de um <option>.
+function getBadgeText(text: string) {
+  return screen.getByText((content, element) => content === text && element?.tagName.toLowerCase() !== "option");
+}
+function queryBadgeText(text: string) {
+  return screen.queryByText((content, element) => content === text && element?.tagName.toLowerCase() !== "option");
+}
+
 function makeHistory(overrides: Partial<ProjectFindingHistory> = {}): ProjectFindingHistory {
   return {
     fingerprint: "fp-1",
@@ -97,7 +112,7 @@ describe("ProjectFindingHistoryPanel", () => {
     renderPanel("44444444-2222-3333-4444-555555555555");
 
     expect(await screen.findByText("Triar…")).toBeInTheDocument();
-    expect(screen.getByText("Risco aceito")).toBeInTheDocument();
+    expect(getBadgeText("Risco aceito")).toBeInTheDocument();
     expect(screen.getByText("Reabrir")).toBeInTheDocument();
   });
 
@@ -186,7 +201,7 @@ describe("ProjectFindingHistoryPanel", () => {
 
     expect(await screen.findByText("Vencida: Risco aceito")).toBeInTheDocument();
     expect(screen.getByText("Renovar…")).toBeInTheDocument();
-    expect(screen.queryByText("Risco aceito")).not.toBeInTheDocument(); // não o selo normal também
+    expect(queryBadgeText("Risco aceito")).not.toBeInTheDocument(); // não o selo normal também
   });
 
   it("triagem com prazo (não vencida) mostra a data no selo, sem 'Renovar…'", async () => {

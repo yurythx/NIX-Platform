@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -78,9 +78,15 @@ describe("PaginatedFindingsFeed", () => {
     renderFeed([makeFinding()], meta({ page: 1, total_pages: 2, total_items: 2 }));
     await user.click(screen.getByText("Carregar mais"));
 
-    await waitFor(() => expect(screen.getByText("achado da segunda página")).toBeInTheDocument());
-    // O achado da primeira página continua visível — acumula, não substitui.
-    expect(screen.getByText("achado da primeira página")).toBeInTheDocument();
+    // O achado da página 2 entra como uma linha nova na lista (a
+    // seleção do painel de detalhe continua no da página 1, que
+    // carregou primeiro — auto-seleção nunca troca sozinha só porque a
+    // lista cresceu).
+    await waitFor(() => expect(screen.getByRole("option", { name: /CVE-2026-0002/ })).toBeInTheDocument());
+    // O achado da primeira página continua visível — acumula, não
+    // substitui — e continua sendo o selecionado no painel de detalhe.
+    const detailPanel = screen.getByRole("region", { name: "Detalhe do achado" });
+    expect(within(detailPanel).getByText("achado da primeira página")).toBeInTheDocument();
     // page (2) == total_pages (2) agora — não há mais o que carregar.
     expect(screen.queryByText("Carregar mais")).not.toBeInTheDocument();
 
@@ -104,6 +110,7 @@ describe("PaginatedFindingsFeed", () => {
     await user.click(screen.getByText("Carregar mais"));
 
     expect(await screen.findByText("falha ao buscar mais achados")).toBeInTheDocument();
-    expect(screen.getByText("achado da primeira página")).toBeInTheDocument();
+    const detailPanel = screen.getByRole("region", { name: "Detalhe do achado" });
+    expect(within(detailPanel).getByText("achado da primeira página")).toBeInTheDocument();
   });
 });

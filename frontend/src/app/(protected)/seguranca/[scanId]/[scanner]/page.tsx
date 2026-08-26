@@ -70,7 +70,7 @@ export default async function ScannerFindingsPage({
 
       {failure && <ScannerFailureCard failure={failure} />}
 
-      <FindingsTable findings={findings} showScanLink={false} />
+      <FindingsTable findings={findings} showScanLink={false} projectId={status.project_id} />
     </div>
   );
 }

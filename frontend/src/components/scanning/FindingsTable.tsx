@@ -1,64 +1,131 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 
 import { Button } from "@/components/ui/Button";
-import { Dialog } from "@/components/ui/Dialog";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@/components/ui/Table";
 import { useToast } from "@/components/notifications/ToastProvider";
 import { buildAIPrompt } from "@/lib/scanning/aiPrompt";
 import { remediationFor } from "@/lib/scanning/remediation";
 import { scannerMeta } from "@/lib/scanning/scannerRegistry";
-import type { ScanFinding, ScanSeverity } from "@/types/api";
+import { useApiQuery } from "@/lib/api/swr";
+import type { ProjectFindingHistory, ScanFinding, ScanSeverity } from "@/types/api";
 
 import { SeverityBadge } from "./SeverityBadge";
+import { SeverityDistributionBar } from "./SeverityDistributionBar";
+import { TriageControls } from "./TriageControls";
 
 // Ordem de exibição dos filtros de severidade — sempre da mais grave pra
-// menos grave, igual à ordem que qualquer painel de segurança (inclusive
-// o do GitGuard, referência pedida pelo usuário) usa.
+// menos grave, igual à ordem que qualquer painel de segurança usa.
 const SEVERITY_ORDER: ScanSeverity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+const SEVERITY_RANK: Record<ScanSeverity, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
 
-// FindingsTable: pedido do usuário de "poder clicar [nos achados] de
-// forma individual e ver os detalhes de cada erro" — cada linha abre um
-// Dialog com o achado por extenso. A tabela em si continua truncando
-// descrição/local por espaço (mesmo comportamento de antes desta
-// mudança); o Dialog nunca trunca nada, e é onde "como corrigir"
-// (remediationFor) aparece por completo, não só no title="" de hover que
-// a versão anterior desta tabela usava.
+type SortKey = "severity" | "date-desc" | "date-asc" | "file";
+
+// urlFindingId: lido via useSyncExternalStore (não useState+useEffect) —
+// a primitiva que o próprio React recomenda pra "estado que vive fora do
+// React" (aqui, a query string), sem o padrão setState-dentro-de-efeito
+// que a regra de lint react-hooks/set-state-in-effect desencoraja (mesmo
+// raciocínio de lib/theme/usePrefersDark.ts). subscribe reage a
+// popstate (voltar/avançar do navegador), não só ao mount — voltar pro
+// achado anterior com o botão "Voltar" do navegador funciona de graça.
+function subscribeToPopstate(callback: () => void): () => void {
+  window.addEventListener("popstate", callback);
+  return () => window.removeEventListener("popstate", callback);
+}
+function getFindingIdFromURL(): string | null {
+  return new URLSearchParams(window.location.search).get("finding");
+}
+// SSR não tem query string de navegador nenhuma — null é o valor certo
+// (equivalente a "nenhum ?finding= ainda", useSyncExternalStore
+// reconcilia com o valor real assim que hidrata, sem aviso de mismatch).
+function getServerFindingId(): null {
+  return null;
+}
+
+function sortFindings(list: ScanFinding[], sortKey: SortKey): ScanFinding[] {
+  const copy = [...list];
+  switch (sortKey) {
+    case "severity":
+      copy.sort(
+        (a, b) =>
+          SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
+      break;
+    case "date-desc":
+      copy.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      break;
+    case "date-asc":
+      copy.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      break;
+    case "file":
+      copy.sort((a, b) => (a.file || "").localeCompare(b.file || ""));
+      break;
+  }
+  return copy;
+}
+
+// FindingsTable (revisão de exibição de resultados — pedido do usuário:
+// "quero focar em como esses resultados são mostrados, quero a melhor
+// prática"): reescrita de um modal por-cima-da-tabela pra uma view
+// MESTRE-DETALHE (lista + painel de detalhe lado a lado, como GitHub
+// Advanced Security/Snyk/GitLab Secure fazem) — o modal anterior
+// obrigava fechar → clicar → abrir de novo pra passar pro próximo
+// achado, sem seta de teclado, sem link direto pra UM achado específico.
+// Continua tudo client-side sobre a lista já carregada (nenhum filtro
+// chama a API de novo), mesmo princípio de antes.
 //
-// showScanLink liga o Dialog de volta pra página do scan inteiro
-// (/seguranca/[scanId]) — só faz sentido na visão AGREGADA de
-// /seguranca (achados de todos os scans misturados); a própria página de
-// um scan específico já é essa página, então passa showScanLink={false}.
+// showScanLink liga o painel de detalhe de volta pra página do scan
+// inteiro (/seguranca/[scanId]) — só faz sentido na visão AGREGADA de
+// /seguranca; a própria página de um scan específico já é essa página.
 //
-// § Filtro de achados (pedido do usuário — "igual ao que o GitGuard
-// usa"): o mockup do GitGuard mostra achados agrupados por repositório,
-// com selo de severidade (Crítico/Alto/Médio/Baixo) e uma aba "Achados
-// abertos" com contagem. NIX não tem um conceito de "aberto/resolvido"
-// no nível agregado (só por projeto, via still_present do histórico
-// deduplicado — ProjectFindingHistoryPanel) — o que dá pra replicar de
-// verdade, com os dados que o backend já expõe, é: filtro por severidade
-// (com contagem por selo, como as abas do GitGuard) + filtro por
-// ferramenta + busca livre, e — só na visão agregada (showScanLink) —
-// um agrupamento opcional por alvo, espelhando o agrupamento por
-// repositório do GitGuard. Nenhum desses filtros chama a API de novo:
-// tudo client-side sobre a lista já carregada, sem re-fetch a cada
-// clique.
+// projectId (novo — ScanStatusResponse ganhou project_id nesta mesma
+// revisão): quando presente, o painel de detalhe também mostra
+// TriageControls pro achado selecionado — busca
+// GET .../projects/{projectId}/findings-history (o mesmo dado que
+// ProjectFindingHistoryPanel já usa) só pra saber, por fingerprint, se
+// cada achado já foi triado. Ausente (scan avulso, ou visão agregada
+// sem um projeto único) — nenhuma chamada extra, TriageControls
+// simplesmente não aparece, mesma restrição que ProjectFindingHistoryPanel
+// já tinha (a triagem é escopada a projeto).
 export function FindingsTable({
   findings,
   showScanLink = false,
+  projectId,
 }: {
   findings: ScanFinding[];
   showScanLink?: boolean;
+  projectId?: string;
 }) {
-  const [selected, setSelected] = useState<ScanFinding | null>(null);
   const [severityFilter, setSeverityFilter] = useState<Set<ScanSeverity>>(new Set());
   const [scannerFilter, setScannerFilter] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [groupByTarget, setGroupByTarget] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("severity");
+  // manualSelectedId: só o que o próprio usuário escolheu NESTA sessão
+  // (clique, Enter, seta, Anterior/Próximo) — null enquanto ele ainda
+  // não escolheu nada, caso em que a seleção efetiva (ver
+  // `selectedId` abaixo) cai pro que já estava em ?finding= na URL, ou
+  // pro primeiro achado da lista. Nunca "corrigido" por um efeito
+  // observando a lista mudar — a derivação abaixo já resolve isso
+  // puramente durante o render, sem setState escondido.
+  const [manualSelectedId, setManualSelectedId] = useState<string | null>(null);
+  const urlFindingId = useSyncExternalStore(subscribeToPopstate, getFindingIdFromURL, getServerFindingId);
   const { showToast } = useToast();
+
+  // history/projectId (Fase 14, continuação desta revisão): busca sob
+  // demanda, só quando projectId está presente — useApiQuery aceita
+  // path null pra "não busca nada" (ver lib/api/swr.ts).
+  const { data: history, mutate: mutateHistory } = useApiQuery<ProjectFindingHistory[]>(
+    projectId ? `v1/scanning/projects/${projectId}/findings-history` : null,
+  );
+  const historyByFingerprint = useMemo(() => {
+    const map = new Map<string, ProjectFindingHistory>();
+    for (const h of history ?? []) map.set(h.fingerprint, h);
+    return map;
+  }, [history]);
 
   async function copyAIPrompt(finding: ScanFinding) {
     try {
@@ -72,9 +139,7 @@ export function FindingsTable({
   // severityCounts/availableScanners: calculados sobre TODOS os achados
   // (nunca sobre o resultado já filtrado) — os selos de contagem
   // continuam mostrando "quantos existem no total", não "quantos sobram
-  // depois do filtro atual", mesmo princípio das abas com contador do
-  // GitGuard (a aba em si não desaparece só porque outro filtro reduziu a
-  // lista visível).
+  // depois do filtro atual".
   const severityCounts = useMemo(() => {
     const counts: Record<ScanSeverity, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
     for (const f of findings) counts[f.severity] += 1;
@@ -88,7 +153,7 @@ export function FindingsTable({
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return findings.filter((f) => {
+    const list = findings.filter((f) => {
       if (severityFilter.size > 0 && !severityFilter.has(f.severity)) return false;
       if (scannerFilter.size > 0 && !scannerFilter.has(f.scanner)) return false;
       if (term) {
@@ -97,7 +162,8 @@ export function FindingsTable({
       }
       return true;
     });
-  }, [findings, severityFilter, scannerFilter, search]);
+    return sortFindings(list, sortKey);
+  }, [findings, severityFilter, scannerFilter, search, sortKey]);
 
   const groups = useMemo(() => {
     if (!groupByTarget) return null;
@@ -109,16 +175,47 @@ export function FindingsTable({
     }
     // Alvo com o achado mais recente primeiro — mesma convenção de
     // recência que ScanList/ScanCard já usam em toda a plataforma.
-    // a[0]/b[0] nunca são undefined na prática — toda entrada de
-    // byTarget só existe porque pelo menos um achado foi empurrado nela
-    // no loop acima —, mas noUncheckedIndexedAccess não consegue provar
-    // isso a partir do tipo de Map, daí o "?? ""` (nunca de fato
-    // alcançado).
     return Array.from(byTarget.entries()).sort(
-      ([, a], [, b]) =>
-        new Date(b[0]?.created_at ?? "").getTime() - new Date(a[0]?.created_at ?? "").getTime(),
+      ([, a], [, b]) => new Date(b[0]?.created_at ?? "").getTime() - new Date(a[0]?.created_at ?? "").getTime(),
     );
   }, [filtered, groupByTarget]);
+
+  // orderedFindings: a lista FLAT, na ordem de exibição real (respeita
+  // agrupamento por alvo quando ligado) — usada tanto pra renderizar a
+  // lista quanto pra Anterior/Próximo no painel de detalhe, os dois
+  // precisam concordar na mesma ordem.
+  const orderedFindings = useMemo(() => (groups ? groups.flatMap(([, list]) => list) : filtered), [groups, filtered]);
+
+  // selectedId: derivado, nunca guardado em estado próprio — a ordem de
+  // prioridade é (1) o que o usuário escolheu nesta sessão, (2) o que já
+  // estava em ?finding= na URL (deep link, inclusive num F5), (3) o
+  // primeiro achado da lista atual. Calculado PURAMENTE durante o
+  // render (nenhum useEffect "corrigindo" a seleção quando o filtro
+  // muda) — um candidato que saiu da lista (filtro mudou, ou o id não
+  // existe) cai pro primeiro achado igual a qualquer outro caso sem
+  // seleção válida, sem precisar de um estado de sincronização à parte.
+  const selectedId = useMemo(() => {
+    const candidate = manualSelectedId ?? urlFindingId;
+    if (candidate && orderedFindings.some((f) => f.id === candidate)) return candidate;
+    return orderedFindings[0]?.id ?? null;
+  }, [manualSelectedId, urlFindingId, orderedFindings]);
+
+  const selectedIndex = orderedFindings.findIndex((f) => f.id === selectedId);
+  const selected = selectedIndex >= 0 ? orderedFindings[selectedIndex] : undefined;
+
+  // Sincronização de volta pra URL: um efeito de verdade (atualiza um
+  // SISTEMA EXTERNO — a URL do navegador — a partir do estado React
+  // mais recente, exatamente o uso que a documentação do React recomenda
+  // pra useEffect, ao contrário de setState dentro de efeito).
+  // history.replaceState (não pushState, não o router do Next.js):
+  // reflete a seleção na URL pra dar de compartilhar/atualizar a página
+  // sem recarregar nem empilhar uma entrada de histórico por clique.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (selectedId) url.searchParams.set("finding", selectedId);
+    else url.searchParams.delete("finding");
+    window.history.replaceState(null, "", url);
+  }, [selectedId]);
 
   function toggleSeverity(s: ScanSeverity) {
     setSeverityFilter((prev) => {
@@ -138,6 +235,19 @@ export function FindingsTable({
     });
   }
 
+  function goToOffset(offset: number) {
+    if (selectedIndex < 0) return;
+    const next = orderedFindings[selectedIndex + offset];
+    if (next) setManualSelectedId(next.id);
+  }
+
+  function handleRowKeyDown(e: KeyboardEvent<HTMLDivElement>, finding: ScanFinding) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setManualSelectedId(finding.id);
+    }
+  }
+
   if (findings.length === 0) {
     return (
       <EmptyState
@@ -147,61 +257,39 @@ export function FindingsTable({
     );
   }
 
-  function handleRowKeyDown(e: KeyboardEvent<HTMLTableRowElement>, finding: ScanFinding) {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      setSelected(finding);
-    }
-  }
-
-  function renderRows(list: ScanFinding[]) {
-    return list.map((finding) => (
-      <TableRow
+  function renderRow(finding: ScanFinding) {
+    const isSelected = finding.id === selectedId;
+    return (
+      <div
         key={finding.id}
-        onClick={() => setSelected(finding)}
+        onClick={() => setManualSelectedId(finding.id)}
         onKeyDown={(e) => handleRowKeyDown(e, finding)}
-        role="button"
+        role="option"
+        aria-selected={isSelected}
         tabIndex={0}
         aria-label={`Ver detalhes do achado ${finding.finding_id}`}
-        className="cursor-pointer hover:bg-black/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary dark:hover:bg-white/5"
+        className={`flex cursor-pointer flex-col gap-1 rounded-md border-l-4 px-3 py-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${
+          isSelected
+            ? "border-l-primary bg-primary/10"
+            : "border-l-transparent hover:bg-black/5 dark:hover:bg-white/5"
+        }`}
       >
-        <TableCell>
+        <div className="flex items-center gap-2">
           <SeverityBadge severity={finding.severity} />
-        </TableCell>
-        <TableCell>
-          <div className="font-medium text-foreground">{finding.finding_id}</div>
-          <div className="max-w-md truncate text-muted" title={finding.description}>
-            {finding.description}
-          </div>
-        </TableCell>
-        <TableCell className="text-muted">{finding.owasp_category || "—"}</TableCell>
-        <TableCell className="text-muted">{finding.scanner}</TableCell>
-        <TableCell className="text-muted">
-          {finding.file ? (finding.line > 0 ? `${finding.file}:${finding.line}` : finding.file) : "—"}
-        </TableCell>
-        <TableCell className="whitespace-nowrap text-muted">
-          {new Date(finding.created_at).toLocaleString()}
-        </TableCell>
-      </TableRow>
-    ));
+          <span className="truncate text-sm font-medium text-foreground">{finding.finding_id}</span>
+        </div>
+        <p className="truncate text-xs text-muted">{finding.description}</p>
+        <p className="truncate text-xs text-muted">
+          {finding.scanner}
+          {finding.file && ` · ${finding.file}${finding.line > 0 ? `:${finding.line}` : ""}`}
+        </p>
+      </div>
+    );
   }
 
-  const columnHeaders = (
-    <TableHead>
-      <TableRow>
-        <TableHeaderCell>Severidade</TableHeaderCell>
-        <TableHeaderCell>Achado</TableHeaderCell>
-        <TableHeaderCell>Categoria OWASP</TableHeaderCell>
-        <TableHeaderCell>Scanner</TableHeaderCell>
-        <TableHeaderCell>Local</TableHeaderCell>
-        <TableHeaderCell>Quando</TableHeaderCell>
-      </TableRow>
-    </TableHead>
-  );
-
   return (
-    <>
-      <div className="mb-4 flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
           {SEVERITY_ORDER.map((sev) => {
             const count = severityCounts[sev];
@@ -247,6 +335,8 @@ export function FindingsTable({
             })}
         </div>
 
+        <SeverityDistributionBar counts={severityCounts} />
+
         <div className="flex flex-wrap items-center gap-3">
           <input
             type="search"
@@ -256,6 +346,20 @@ export function FindingsTable({
             aria-label="Buscar achados"
             className="min-w-0 flex-1 rounded-md border border-surface-border bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary sm:max-w-xs"
           />
+          <label className="flex items-center gap-1.5 text-sm text-muted">
+            Ordenar
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              aria-label="Ordenar achados"
+              className="rounded-md border border-surface-border bg-surface px-2 py-1 text-sm text-foreground"
+            >
+              <option value="severity">Mais grave primeiro</option>
+              <option value="date-desc">Mais recente primeiro</option>
+              <option value="date-asc">Mais antigo primeiro</option>
+              <option value="file">Arquivo (A-Z)</option>
+            </select>
+          </label>
           {showScanLink && (
             <label className="flex items-center gap-1.5 text-sm text-muted">
               <input
@@ -278,122 +382,149 @@ export function FindingsTable({
           title="Nenhum achado corresponde aos filtros"
           description="Ajuste ou limpe os filtros de severidade/ferramenta/busca acima pra ver os achados de novo."
         />
-      ) : groups ? (
-        <div className="flex flex-col gap-4">
-          {groups.map(([target, groupFindings]) => (
-            <div key={target}>
-              <div className="mb-2 flex items-center gap-2">
-                <span className="truncate text-sm font-medium text-foreground" title={target}>
-                  {target}
-                </span>
-                <span className="shrink-0 text-xs text-muted">
-                  {groupFindings.length} achado{groupFindings.length === 1 ? "" : "s"}
-                </span>
-              </div>
-              <Table>
-                {columnHeaders}
-                <TableBody>{renderRows(groupFindings)}</TableBody>
-              </Table>
-            </div>
-          ))}
-        </div>
       ) : (
-        <Table>
-          {columnHeaders}
-          <TableBody>{renderRows(filtered)}</TableBody>
-        </Table>
-      )}
-
-      <Dialog
-        open={selected !== null}
-        onClose={() => setSelected(null)}
-        title={selected?.finding_id ?? ""}
-        description={selected ? `${selected.scanner} · ${selected.severity}` : undefined}
-      >
-        {selected && (
-          <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto text-sm">
-            {/* Dados da ferramenta — pedido explícito do usuário: "quero
-                que esse detalhe tenha os dados da ferramenta". Nome de
-                exibição (não o slug "sonarqube" que já aparece na
-                tabela) + um link pra abrir esse achado (ou pelo menos a
-                regra/CVE por trás dele) na própria ferramenta, quando o
-                backend consegue montar um (ver toolLink no backend —
-                nem toda ferramenta/achado permite, então o link some em
-                vez de aparecer quebrado). */}
-            <div className="flex flex-wrap items-center gap-2 rounded-md bg-black/5 p-2 dark:bg-white/5">
-              <span className="font-medium text-foreground">{selected.tool?.name ?? selected.scanner}</span>
-              {selected.tool?.url && (
-                <a
-                  href={selected.tool.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  Abrir na ferramenta →
-                </a>
-              )}
-            </div>
-            <div>
-              <div className="font-medium text-foreground">Descrição</div>
-              <p className="text-muted">{selected.description}</p>
-            </div>
-            {selected.owasp_category && (
-              <div>
-                <div className="font-medium text-foreground">Categoria OWASP</div>
-                <p className="text-muted">{selected.owasp_category}</p>
-              </div>
-            )}
-            {selected.file && (
-              <div>
-                <div className="font-medium text-foreground">Local</div>
-                <p className="text-muted">
-                  {selected.file}
-                  {selected.line > 0 ? `:${selected.line}` : ""}
-                </p>
-              </div>
-            )}
-            {/* Trecho do código (Fase 12) — pedido implícito de "ver o
-                código da vulnerabilidade sem abrir o repositório", já que
-                esta plataforma nunca mantém um checkout persistente pra
-                navegar livremente (ver docs/roadmap-secops-orchestrator.md).
-                Achado sem snippet (ferramenta sem linha específica, ou
-                achado de antes desta fase) simplesmente omite esta seção,
-                nunca mostra um bloco vazio. */}
-            {selected.snippet && (
-              <div>
-                <div className="font-medium text-foreground">Trecho do código</div>
-                <SnippetBlock snippet={selected.snippet} highlightLine={selected.line} />
-              </div>
-            )}
-            <div>
-              <div className="font-medium text-foreground">Como corrigir</div>
-              <p className="text-muted">{remediationFor(selected)}</p>
-            </div>
-            {/* "Copiar prompt pra IA" (Fase 13) — monta o mesmo markdown
-                do bloco "Como corrigir" acima + os dados da ferramenta/
-                trecho de código, pronto pra colar numa IA de preferência
-                do usuário. navigator.clipboard.writeText, nenhuma
-                dependência nova. */}
-            <div>
-              <Button size="sm" variant="secondary" onClick={() => copyAIPrompt(selected)}>
-                Copiar prompt pra IA
-              </Button>
-            </div>
-            <div className="text-xs text-muted">
-              Encontrado em {new Date(selected.created_at).toLocaleString()}
-            </div>
-            {showScanLink && (
-              <Link
-                href={`/seguranca/${selected.scan_id}`}
-                className="text-primary hover:underline"
-              >
-                Ver o scan completo →
-              </Link>
-            )}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[380px_1fr]">
+          <div
+            role="listbox"
+            aria-label="Lista de achados"
+            onKeyDown={(e) => {
+              // Seta pra baixo/cima navega pro achado seguinte/anterior
+              // sem precisar clicar nos botões "Anterior/Próximo" do
+              // painel de detalhe — mesmo atalho que qualquer lista
+              // mestre-detalhe (e-mail, Gmail, GitHub) já tem.
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                goToOffset(1);
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                goToOffset(-1);
+              }
+            }}
+            className="flex flex-col gap-3 lg:max-h-[70vh] lg:overflow-y-auto lg:pr-2">
+            {groups
+              ? groups.map(([target, groupFindings]) => (
+                  <div key={target}>
+                    <div className="mb-1 flex items-center gap-2 px-1">
+                      <span className="truncate text-xs font-semibold uppercase tracking-wide text-muted" title={target}>
+                        {target}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted">({groupFindings.length})</span>
+                    </div>
+                    <div className="flex flex-col gap-1">{groupFindings.map(renderRow)}</div>
+                  </div>
+                ))
+              : <div className="flex flex-col gap-1">{filtered.map(renderRow)}</div>}
           </div>
-        )}
-      </Dialog>
-    </>
+
+          <section aria-label="Detalhe do achado" className="lg:max-h-[70vh] lg:overflow-y-auto">
+            {selected ? (
+              <div className="flex flex-col gap-3 rounded-lg border border-surface-border bg-surface p-4 text-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h2 className="text-base font-semibold text-foreground">{selected.finding_id}</h2>
+                    <p className="text-xs text-muted">
+                      {selected.scanner} · {selected.severity}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => goToOffset(-1)}
+                      disabled={selectedIndex <= 0}
+                      aria-label="Achado anterior"
+                      className="rounded-md border border-surface-border px-2 py-1 text-xs text-foreground hover:bg-black/5 disabled:opacity-40 dark:hover:bg-white/5"
+                    >
+                      ← Anterior
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => goToOffset(1)}
+                      disabled={selectedIndex < 0 || selectedIndex >= orderedFindings.length - 1}
+                      aria-label="Próximo achado"
+                      className="rounded-md border border-surface-border px-2 py-1 text-xs text-foreground hover:bg-black/5 disabled:opacity-40 dark:hover:bg-white/5"
+                    >
+                      Próximo →
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dados da ferramenta — nome de exibição + link pra abrir
+                    esse achado (ou a regra/CVE por trás dele) na própria
+                    ferramenta, quando o backend consegue montar um. */}
+                <div className="flex flex-wrap items-center gap-2 rounded-md bg-black/5 p-2 dark:bg-white/5">
+                  <span className="font-medium text-foreground">{selected.tool?.name ?? selected.scanner}</span>
+                  {selected.tool?.url && (
+                    <a
+                      href={selected.tool.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Abrir na ferramenta →
+                    </a>
+                  )}
+                </div>
+
+                {projectId && selected.fingerprint && (
+                  <TriageControls
+                    projectId={projectId}
+                    fingerprint={selected.fingerprint}
+                    status={historyByFingerprint.get(selected.fingerprint)?.triage_status ?? ""}
+                    reason={historyByFingerprint.get(selected.fingerprint)?.triage_reason}
+                    expiresAt={historyByFingerprint.get(selected.fingerprint)?.triage_expires_at}
+                    expired={historyByFingerprint.get(selected.fingerprint)?.triage_expired}
+                    onChanged={mutateHistory}
+                  />
+                )}
+
+                <div>
+                  <div className="font-medium text-foreground">Descrição</div>
+                  <p className="text-muted">{selected.description}</p>
+                </div>
+                {selected.owasp_category && (
+                  <div>
+                    <div className="font-medium text-foreground">Categoria OWASP</div>
+                    <p className="text-muted">{selected.owasp_category}</p>
+                  </div>
+                )}
+                {selected.file && (
+                  <div>
+                    <div className="font-medium text-foreground">Local</div>
+                    <p className="text-muted">
+                      {selected.file}
+                      {selected.line > 0 ? `:${selected.line}` : ""}
+                    </p>
+                  </div>
+                )}
+                {selected.snippet && (
+                  <div>
+                    <div className="font-medium text-foreground">Trecho do código</div>
+                    <SnippetBlock snippet={selected.snippet} highlightLine={selected.line} />
+                  </div>
+                )}
+                <div>
+                  <div className="font-medium text-foreground">Como corrigir</div>
+                  <p className="text-muted">{remediationFor(selected)}</p>
+                </div>
+                <div>
+                  <Button size="sm" variant="secondary" onClick={() => copyAIPrompt(selected)}>
+                    Copiar prompt pra IA
+                  </Button>
+                </div>
+                <div className="text-xs text-muted">Encontrado em {new Date(selected.created_at).toLocaleString()}</div>
+                {showScanLink && (
+                  <Link href={`/seguranca/${selected.scan_id}`} className="text-primary hover:underline">
+                    Ver o scan completo →
+                  </Link>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted">Selecione um achado à esquerda.</p>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
   );
 }
 

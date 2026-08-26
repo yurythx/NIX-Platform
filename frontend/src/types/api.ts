@@ -230,6 +230,11 @@ export interface ScanStatus {
   job_id: string;
   status: JobStatus;
   target: string;
+  // project_id (revisão de exibição de resultados): ausente pra um scan
+  // avulso — presente quando este scan foi disparado a partir de um
+  // Project (Fase 10). Usado pra saber se os achados deste scan podem
+  // ser triados (a triagem é escopada a projeto, ver TriageStatus).
+  project_id?: string;
   requested_scanners: string[];
   succeeded_scanners: string[] | null;
   failed_scanners: ScannerFailure[];
