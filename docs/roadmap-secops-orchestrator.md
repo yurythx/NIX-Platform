@@ -1042,12 +1042,10 @@ pra `make_interval(days => $1)`, o mesmo padrão que `internal/platform/idempote
   estratégia de versionamento/backfill — risco real de corromper dado que o usuário está usando
   agora, por um ganho de robustez menor que os 5 itens acima. Adiado até ter um plano de migração
   explícito, não decidido sozinho no meio desta fase.
-- **Exportação SARIF** (o formato que GitHub Code Scanning consome nativamente) — CSV (item 5 acima)
-  cobre o caso de uso mais comum (planilha/auditoria/ticket) com risco baixo; um exportador SARIF
-  correto precisa modelar `rules`/`results`/`physicalLocation` por scanner de origem e não há
-  ferramenta de validação contra o schema oficial neste ambiente — o risco de sair com um arquivo
-  tecnicamente inválido (silenciosamente, sem quem valide) é maior que o valor de implementá-lo sem
-  essa rede de segurança. Fica como próximo passo natural, não descartado.
+- ~~**Exportação SARIF**~~ — **implementada**, ver "Exportação SARIF — shift-left de verdade" mais
+  abaixo. Na época deste adiamento não havia ferramenta de validação contra o schema oficial neste
+  ambiente; isso deixou de ser verdade (`ajv-cli` via npm, ver seção abaixo), então o motivo do
+  adiamento não se aplica mais.
 
 ## Revisão de exibição de resultados
 
@@ -1147,3 +1145,62 @@ uma tela onde mostra a saúde das ferramentas que estamos usando antes de inici�
   travado, não só fora do ar. `GET /scanning/scanners/health` (novo endpoint,
   `scanning:read`) expõe isso; o frontend busca via SWR (revalida sozinho ao voltar pra aba, mais um
   botão "Verificar de novo").
+
+## Exportação SARIF — shift-left de verdade
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`deadcode`
+limpos — `deadcode` confirma os mesmos 6 itens intencionais de sempre; testes puros de
+`buildSarifLog`/helpers rodam sem depender de Postgres e passam 100%; os testes de handler HTTP de
+ponta a ponta seguem o mesmo padrão de todo o resto da suíte — pulados sem `TEST_DATABASE_URL`, não
+rodados nesta sessão por falta de acesso ao socket do Docker neste ambiente específico, ver adiante;
+frontend: `tsc --noEmit`/`eslint --max-warnings=0` limpos. **Validação extra, específica deste
+formato:** o schema oficial SARIF 2.1.0 foi baixado de
+`raw.githubusercontent.com/schemastore/schemastore` e um documento de amostra gerado por
+`buildSarifLog` (cobrindo: achado com CVE repetido em 2 arquivos, achado sem OWASP category, achado
+sem File/Line — DAST, e um scanner que "rodou" e não achou nada) foi validado com `ajv-cli`
+(`--spec=draft7 -c ajv-formats`, o mesmo draft que o `$schema` do SARIF 2.1.0 declara) contra esse
+schema — `sample.sarif.json valid`, não só "parece certo".
+
+**Origem:** pedido direto do usuário — "o que mais podemos fazer pra melhorar o que as grandes
+empresas fazem?" — depois da reestruturação de `/seguranca` acima. Das quatro opções levantadas
+(SARIF, scans agendados, gate de CI/PR, alertas Slack/Jira), o usuário escolheu a de menor risco: já
+estava mapeada como "próximo passo natural" desde a Fase 14 (ver `csv_export.go`), sem exigir mudança
+de schema/histórico nenhuma.
+
+### O que mudou
+
+- **`GET /scanning/scans/{scanID}/findings.sarif`** (novo endpoint, `scanning:read`) — devolve o
+  documento SARIF 2.1.0 CRU na raiz da resposta, nunca dentro do envelope `{data, error, meta}`
+  padrão desta API: um consumidor de SARIF (GitHub Code Scanning incluso) espera
+  `{"version": ..., "runs": [...]}` direto, o schema oficial não conhece nem toleraria um envelope
+  por cima. Mesmo escopo de `ExportFindings` (CSV) — um scan, sem deduplicação entre re-scans: SARIF
+  representa UMA execução de análise.
+- **Um `run` por scanner, não por scan** — o modelo do SARIF é "uma ferramenta de análise produziu
+  este conjunto de resultados". `buildSarifLog` recebe `ScanStatus.SucceededScanners` (não só os
+  achados) justamente pra garantir um run com `results: []` pra todo scanner que RODOU e não achou
+  nada — sem isso, um scanner limpo ficaria indistinguível de um scanner que nunca rodou aos olhos
+  de quem consome o SARIF.
+- **Uma `rule` por `Finding.ID` distinto, dentro de cada run** — o mesmo CVE encontrado em 2 arquivos
+  vira 1 `rule` (deduplicada) + 2 `results` (um por ocorrência), nunca 2 rules idênticas.
+- **Severidade → `level`** — CRITICAL/HIGH viram `"error"` (o único nível que barra um gate de CI por
+  padrão no GitHub Code Scanning), MEDIUM vira `"warning"`, LOW vira `"note"`. Cada `rule` carrega
+  também `properties["security-severity"]` (convenção do GitHub, score 0.0–10.0 em texto) pra colorir
+  a severidade na aba Security — sem isso todo achado apareceria com a mesma cor neutra lá.
+- **`Region` nunca com `startLine: 0`** — o schema oficial exige `minimum: 1` em `startLine`; um
+  achado sem `File`/`Line` (ex.: DAST contra uma API rodando, sem arquivo específico) omite
+  `Locations` inteiro, nunca manda uma linha zero.
+- **Frontend** — `ScanDetailLive` ganhou "Exportar SARIF →" ao lado de "Exportar CSV →" (mesmo padrão
+  de link direto pro proxy BFF, é navegação de download, não uma chamada `apiClient`).
+
+### Achado real durante a verificação
+
+Sem acesso ao socket do Docker nesta sessão específica (usuário está configurando `sudo` sem senha
+pra Docker, ver histórico da conversa — pendente), não foi possível subir um Postgres isolado como em
+toda rodada anterior desta sessão. Os testes de handler HTTP de ponta a ponta
+(`sarif_export_test.go`) foram escritos seguindo o mesmo padrão de `csv_export_test.go`, mas ainda
+não RODARAM contra banco nenhum — só compilam e pulam (`t.Skip`) como o resto da suíte sem
+`TEST_DATABASE_URL`, o mesmo comportamento de sempre, não uma falha nova. Os testes puros de
+`buildSarifLog` (`sarif_build_test.go`, sem dependência de banco) e a validação `ajv-cli` contra o
+schema oficial cobrem a lógica de construção do documento com confiança real; falta rodar a suíte de
+integração completa (handler HTTP → `ProcessScanJob` → `ListFindings`) assim que houver acesso ao
+Docker de novo — registrado como pendência, não esquecido.

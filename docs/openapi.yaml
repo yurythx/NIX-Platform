@@ -619,6 +619,54 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/scanning/scans/{scanID}/findings.sarif:
+    get:
+      tags: [scanning]
+      summary: Exporta os achados de uma execução de scan em SARIF 2.1.0 (shift-left)
+      operationId: exportScanFindingsSarif
+      description: >
+        O formato que GitHub Code Scanning/Azure DevOps consomem nativamente — um upload vira
+        anotação direto no diff do PR e na aba Security, sem esta plataforma construir UI de
+        comentário em PR própria. Um run por scanner que participou do scan (RequestedScanners que
+        tiveram sucesso), inclusive um scanner que rodou e não achou nada (results: []) — um
+        consumidor de SARIF usa a AUSÊNCIA de um run pra inferir "essa ferramenta nunca rodou", o que
+        seria enganoso pra um scanner limpo. Uma rule por Finding.ID distinto dentro de cada run
+        (achado repetido em arquivos diferentes vira 1 rule + N results). Severidade CRITICAL/HIGH
+        vira level "error" (o único nível que barra um gate de CI por padrão no GitHub Code Scanning),
+        MEDIUM vira "warning", LOW vira "note"; cada rule carrega também
+        properties["security-severity"] (convenção do GitHub, score 0.0–10.0 em texto) pra colorir a
+        severidade na aba Security. O documento raiz é o SARIF cru (nunca o envelope {data, error,
+        meta} padrão desta API) — validado com ajv-cli contra o schema oficial 2.1.0 antes deste
+        endpoint ser publicado.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: scanID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >
+            Documento SARIF 2.1.0, com Content-Disposition attachment (download, não exibição
+            inline).
+          content:
+            application/sarif+json:
+              schema:
+                type: object
+        "400":
+          description: scanID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/scanning/posture:
     get:
       tags: [scanning]
