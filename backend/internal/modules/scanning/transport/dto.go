@@ -300,9 +300,17 @@ func scanProgressPercent(s *application.ScanStatus) int {
 // visibilidade EM ANDAMENTO (mesmo job "processing"), não só o resumo
 // final — o painel de progresso pedido pelo usuário depende disso.
 type ScanStatusResponse struct {
-	JobID             string                   `json:"job_id"`
-	Status            string                   `json:"status"`
-	Target            string                   `json:"target"`
+	JobID  string `json:"job_id"`
+	Status string `json:"status"`
+	Target string `json:"target"`
+	// ProjectID (exposto a partir da revisão de exibição de resultados —
+	// docs/roadmap-secops-orchestrator.md, Fase 14) — nil pra um scan
+	// avulso, o mesmo application.ScanStatus.ProjectID que já existia
+	// internamente desde a Fase 10, só nunca tinha chegado à API. O
+	// frontend usa isto pra saber se um achado deste scan pode ser
+	// TRIADO (a triagem é escopada a projeto, ver domain.Triage) sem
+	// precisar adivinhar ou fazer uma segunda consulta.
+	ProjectID         *string                  `json:"project_id,omitempty"`
 	RequestedScanners []string                 `json:"requested_scanners"`
 	SucceededScanners []string                 `json:"succeeded_scanners"`
 	FailedScanners    []ScannerFailureResponse `json:"failed_scanners"`
@@ -331,10 +339,16 @@ func nonNilStrings(list []string) []string {
 }
 
 func toScanStatusResponse(s *application.ScanStatus) ScanStatusResponse {
+	var projectID *string
+	if s.ProjectID != nil {
+		id := s.ProjectID.String()
+		projectID = &id
+	}
 	return ScanStatusResponse{
 		JobID:             s.JobID.String(),
 		Status:            s.Status,
 		Target:            s.Target,
+		ProjectID:         projectID,
 		RequestedScanners: nonNilStrings(s.RequestedScanners),
 		SucceededScanners: nonNilStrings(s.SucceededScanners),
 		FailedScanners:    toScannerFailureResponses(s.FailedScanners),
