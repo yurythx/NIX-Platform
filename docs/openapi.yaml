@@ -545,6 +545,33 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /api/v1/diario-oficial/health:
+    get:
+      tags: [diario-oficial]
+      summary: Checagem síncrona da saúde da fonte de dados configurada (DJEN)
+      operationId: getDiarioOficialHealth
+      description: >
+        Nunca cria job, nunca grava nada — uma leitura direta (timeout de 5s) pra uma tela mostrar
+        "a fonte está respondendo?" antes do usuário estranhar por que nenhuma publicação nova
+        apareceu. Equivalente diario_oficial de GET /api/v1/scanning/scanners/health.
+      security:
+        - bearerAuth: [diario_oficial:read]
+      responses:
+        "200":
+          description: Resultado da checagem — sempre 200, mesmo com a fonte fora do ar (isso é dado do payload, não erro HTTP).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SourceHealth" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/scanning/scans:
     post:
       tags: [scanning]
@@ -1651,6 +1678,24 @@ components:
         message:
           type: string
           description: Ausente quando healthy=true; o motivo (não configurado, inalcançável, status inesperado) caso contrário.
+        checked_at:
+          type: string
+          format: date-time
+
+    SourceHealth:
+      type: object
+      description: >
+        Resultado da checagem de saúde da fonte de dados do Diário Oficial (DJEN hoje). Mesmo shape
+        de ScannerHealth (source no lugar de scanner). Ver GET /api/v1/diario-oficial/health.
+      properties:
+        source:
+          type: string
+          example: "djen"
+        healthy:
+          type: boolean
+        message:
+          type: string
+          description: Ausente quando healthy=true; o motivo (não configurado, inalcançável, erro de rede) caso contrário.
         checked_at:
           type: string
           format: date-time

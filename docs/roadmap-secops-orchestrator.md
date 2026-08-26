@@ -1307,11 +1307,49 @@ chegou a quebrar a UI de verdade, mas teria se o teste não tivesse pego.
   seria pior que não calcular (um prazo perdido por um cálculo errado é um risco real, não só uma
   imprecisão de UI). Fica como próximo passo natural, precisa de uma fonte confiável de calendário
   forense antes de começar.
-- **Paginação "carregar mais" no feed de publicações** — `MatchedPublicationsFeed` busca só a
-  primeira página (20 mais recentes); o padrão `PaginatedFindingsFeed` (Fase 14) já existe pra
-  reaproveitar quando isso importar de verdade — não implementado agora pra manter o escopo do MVP
-  contido.
+- ~~**Paginação "carregar mais" no feed de publicações**~~ — **implementada**, ver "Filtros, saúde
+  da fonte e paginação" logo abaixo.
 - **RBAC por termo monitorado** (só quem cadastrou um termo consegue vê-lo/removê-lo) — mesmo motivo
   já registrado pra RBAC por projeto (scanning, ver "Adiado" da Fase 14 acima): esta plataforma não
   tem NENHUM controle de acesso por-recurso hoje, só role→permissão global. Fica registrado pra
   quando o usuário decidir priorizar o épico de Times/Organizações.
+
+### Filtros, saúde da fonte e paginação
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`deadcode`
+limpos, mesmos 6 itens intencionais de sempre; `CheckHealth` testado puro — construído por struct
+literal direto, sem `NewService`, então roda sem depender de Postgres, ao contrário do resto deste
+módulo; frontend: `tsc`/`eslint --max-warnings=0`/`vitest run` (216 testes)/`next build`, todos
+limpos).
+
+**Origem:** perguntas diretas do usuário depois do MVP — "quando eu tiver acesso à API do diário
+oficial da minha prefeitura vou conseguir integrar? como vou visualizar as informações, como serão
+feitos os filtros?". A resposta pra prefeitura ficou registrada como explicação (fonte diferente do
+DJEN, cada município tem sua própria API, o adapter só pode ser escrito depois de ver a API real —
+mesmo cuidado que levou ao DJEN ser confirmado por `curl` antes de qualquer código). Pra "como vou
+visualizar/filtrar", o usuário escolheu implementar as 3 sugestões levantadas: filtro por termo/
+tribunal/tipo, paginação, e um painel de saúde da fonte.
+
+- **`GET /diario-oficial/health`** (novo endpoint, `diario_oficial:read`) — `Service.CheckHealth`
+  chama `client.Check` direto (timeout de 5s), sem job/outbox: mesmo espírito de
+  `scanning.CheckScannersHealth` (reestruturação de /seguranca), escopo menor (uma fonte, não N
+  scanners em paralelo). `SourceHealthPanel` (frontend) no topo de `/diario-oficial`, mesmo padrão
+  de `ScannerHealthPanel` (SWR, botão "Verificar de novo").
+- **Filtro por termo** — `MatchedPublicationsFeed` ganhou um seletor que troca a ORIGEM da busca
+  entre o feed global (`GET /diario-oficial/publications`) e `GET /diario-oficial/monitored-terms/
+  {termID}/publications` — endpoint que já existia desde o MVP, só não estava exposto na UI.
+  Filtro por tribunal/tipo de comunicação é client-side, sobre o que já foi carregado (mesmo
+  raciocínio de `FindingsTable`'s filtro de severidade/ferramenta).
+- **Paginação "carregar mais"** — acumula páginas em memória (mesmo padrão de
+  `PaginatedFindingsFeed`, scanning); trocar de termo reinicia a paginação do zero.
+- **Achado real de lint**: a primeira versão de `MatchedPublicationsFeed` chamava `setLoading(true)`/
+  `setError(null)` SÍNCRONO no corpo de um `useEffect` (pra resetar estado antes de buscar a página
+  1 de um termo novo) — `react-hooks/set-state-in-effect` acusou, o mesmo achado real que já tinha
+  pego `FindingsTable` na revisão de exibição de resultados. Corrigido movendo esses `setState`
+  síncronos pra `handleTermFilterChange` (um event handler de verdade, chamado pelo `onChange` do
+  `<select>`), deixando o `useEffect` só com `setState` dentro de callbacks assíncronos
+  (`.then`/`.catch`/`.finally`).
+- **Achado real de teste**: `getByText("TJMG")` ficou ambíguo depois do filtro de tribunal existir —
+  o mesmo texto aparece no badge da publicação E numa `<option>` do `<select>` (populado a partir do
+  que já foi carregado). Mesmo fix já usado em `FindingsTable.test.tsx`/`ScanList.test.tsx`:
+  matcher de função excluindo elementos `<option>`.
