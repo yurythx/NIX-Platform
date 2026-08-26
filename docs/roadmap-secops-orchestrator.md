@@ -1,5 +1,9 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
+- **Fase 14 (Maturidade de AppSec — triagem, paginação de verdade, notificação de crítico, postura
+  de segurança, exportação CSV) ✅ completa** — ver seção própria no fim deste documento. RBAC por
+  projeto, fingerprint resiliente a deslocamento de linha e exportação SARIF ficaram documentados
+  como adiados, com o motivo de cada um.
 - **Status:** Fases 1, 3-9 concluídas (Fundação, Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração
   concorrente, CLI + CI/CD, Frontend). Fase 2 (TruffleHog) pulada por decisão explícita do usuário,
   redundante com o gitleaks já no CI (decisão revisitada na Fase 11 abaixo — sob demanda deixou de
@@ -895,3 +899,110 @@ de uma migração depois — mesmo `Dockerfile`/UID-fixo/healthcheck que Trivy/G
   metadado — nome, alvo, histórico — nunca o checkout em si.
 - Qualquer execução automática deste roadmap nesta sessão — este documento é o planejamento;
   implementação começa quando o usuário escolher uma fase.
+
+## Fase 14 — Maturidade de AppSec
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`go test ./...`
+limpos, suíte inteira — incluindo os testes de integração contra Postgres real deste módulo, que
+antes desta sessão nunca rodavam de fato aqui por falta de `TEST_DATABASE_URL` — passando contra um
+Postgres isolado subido só pra este fim, nunca o Postgres do `docker-compose` que o usuário estava
+testando ao vivo; frontend: `tsc --noEmit`/`eslint`/`vitest run` (165 testes)/`next build` de
+produção, todos limpos).
+
+**Origem:** pedido direto do usuário depois de uma análise da sessão sobre front-end + regras de
+negócio de scanning: "existe responsabilidades? existe jeito melhor de listar e mostrar os
+resultados? como as grandes empresas fazem? quão maduro estamos?". A resposta (maturidade ~2,5/5)
+apontou a maior lacuna real: a plataforma **achava** vulnerabilidade muito bem, mas não tinha
+NENHUM jeito de **gerenciar o ciclo de vida** dela — sem paginação de verdade no feed agregado, sem
+triagem, sem visão executiva, sem exportação, sem destaque pra achado crítico nas notificações.
+
+### O que foi implementado
+
+1. **Triagem** (`false_positive`/`wont_fix`/`risk_accepted`, com motivo obrigatório) — a lacuna mais
+   séria: até aqui, um achado só tinha dois estados possíveis, os dois INFERIDOS automaticamente por
+   re-scan (`still_present` sim/não), nunca um humano decidindo "isto é falso positivo" ou "risco
+   aceito por ora". Sem isto, o mesmo falso positivo reaparecia pra sempre, todo re-scan.
+   - Nova tabela `scanning_finding_triage` (migration 000023), chave `(project_id, fingerprint)` —
+     não por achado/scan individual: o mesmo raciocínio que `ListProjectFindingsHistory` (Fase 12)
+     já usa pra "este problema, entre re-scans, é o fingerprint dentro de um projeto" — e por isso
+     escopado a PROJETO, não a scan avulso, pelo mesmo motivo que o histórico deduplicado já é: só
+     um projeto persistente tem "próxima execução" garantida pra uma triagem valer a pena.
+   - `domain.TriageRepository` — interface PRÓPRIA, não mais um método em `domain.Repository`
+     (que já carrega achados/pacotes/progresso de scanner/projetos): a mesma `PostgresRepository`
+     implementa as duas, mas nenhum fake de teste do `domain.Repository` precisou ganhar métodos que
+     não usa.
+   - `Service.WithTriageRepository(...)` — setter pós-construção, não mais um parâmetro posicional
+     em `NewService` (que já tinha 9 + variádicos): `triageRepo` é opcional (nil tolerado, mesmo
+     princípio de `flags`), então um parâmetro a mais obrigaria todo call site — produção e cada
+     teste — a mudar só pra passar nil na maioria dos casos.
+   - `PUT`/`DELETE /api/v1/scanning/projects/{projectID}/findings/{fingerprint}/triage`
+     (`scanning:manage`, mesma permissão de disparar scan/criar projeto) — reason vazio é rejeitado
+     (400): suprimir um achado sem justificativa registrada é exatamente o tipo de decisão que uma
+     auditoria de segurança depois cobra explicação. `audit.ActionFindingTriaged`/
+     `ActionFindingUntriaged` gravam quem/quando/por quê.
+   - `ProjectFindingHistory` ganhou `TriageStatus`/`TriageReason`; a ordenação passou a priorizar
+     "ainda presente E NUNCA triado" (precisa de atenção AGORA) acima de "ainda presente mas já
+     triado" (alguém já decidiu o que fazer) — mesmo raciocínio de por que um item triado deveria
+     afundar na fila de trabalho ativo sem desaparecer da vista.
+   - UI: `ProjectFindingHistoryPanel` ganhou coluna "Triagem" (botão "Triar…" abre um Dialog com
+     status + motivo obrigatório; achado já triado mostra o motivo e um link "Reabrir").
+2. **Paginação de verdade em `GET /scanning/findings`** — antes, um `limit` sem `OFFSET` (teto fixo
+   de 200): qualquer achado além disso simplesmente nunca aparecia em lugar nenhum da UI, sem nem um
+   aviso de que havia mais. Trocado por `page`/`page_size`, reaproveitando o contrato compartilhado
+   `internal/domain/pagination` (o mesmo que `users.List` já usa) em vez de uma segunda convenção
+   `limit`/`maxRecentFindings` só deste módulo. `ListRecentPage` no repositório usa
+   `count(*) OVER()` (uma window function, não uma segunda query `COUNT(*)` separada) pra devolver a
+   página E o total na mesma viagem ao banco, com um fallback pro caso raro de uma página vazia (o
+   `OVER()` não aparece se nenhuma linha bate o `OFFSET`/`LIMIT`). Frontend:
+   `PaginatedFindingsFeed` — a primeira página continua vindo do Server Component (primeiro paint
+   rápido), um botão "Carregar mais" busca as seguintes e ACUMULA (o filtro client-side de
+   severidade/ferramenta/busca que `FindingsTable` já fazia precisa da lista completa carregada até
+   agora, não só da última página).
+3. **Notificação de achado crítico** — o evento `scanning.scan.completed` (WebSocket, já existia)
+   ganhou `critical_count`/`high_count` no payload; `NotificationCenter` (frontend) agora usa tom
+   "danger" (não mais o mesmo "info" neutro de sempre) e destaca a contagem quando um scan encontra
+   pelo menos 1 CRITICAL. Reaproveitou 100% da infraestrutura já existente (Hub de WebSocket,
+   outbox, `NotificationCenter`) — só o payload e a lógica de apresentação mudaram.
+4. **Postura de segurança** — `Service.SecurityPosture` agrega, entre TODO projeto persistente, os
+   achados ABERTOS (ainda presentes no scan mais recente E não triados — nunca um `COUNT(*)` direto
+   em `scan_findings`, que contaria o mesmo achado uma vez por re-scan em que apareceu) por
+   severidade, mais os projetos com mais crítico/alto aberto (`TopVulnerable`). Custo O(projetos)
+   documentado (`maxPostureProjects = 200`) — aceitável na escala de uso interno de um time que esta
+   plataforma atende hoje, não um SaaS multi-tenant. `GET /scanning/posture` alimenta o card novo
+   `SecurityPostureCard` no `/dashboard` — a primeira vez que a plataforma responde "quantos
+   problemas abertos existem AGORA, no total" sem abrir Segurança e contar na mão.
+5. **Exportação CSV** — `GET /scanning/scans/{scanID}/findings.csv` (um scan) e
+   `GET /scanning/projects/{projectID}/findings-history.csv` (deduplicado, com triagem) — a primeira
+   exportação desta plataforma; até aqui, tirar um achado da NIX significava copiar da tela na mão
+   ou consumir a API JSON. O proxy BFF (`app/api/backend/[...path]/route.ts`) precisou propagar
+   `Content-Disposition` (só repassava `Content-Type` antes) e ganhar `PUT`/`DELETE` (usados pela
+   triagem, item 1) — os dois únicos ajustes de infraestrutura que esta fase exigiu fora do módulo
+   scanning em si.
+
+### Adiado, com motivo — não esquecimento
+
+- **RBAC por projeto** (só o dono/time consegue ver ou disparar scan de um projeto específico) —
+  meu recomendação inicial na análise, mas a investigação encontrou que **nenhum recurso desta
+  plataforma tem controle de acesso por-recurso hoje** (RBAC é só role→permissão GLOBAL —
+  `scanning:read`/`scanning:manage`, sem escopo por projeto/repositório), o módulo `users` não tem
+  nenhum conceito de time/organização pra ancorar isso, e o próprio Hub de WebSocket já documenta
+  (`internal/platform/ws/hub.go`) que segmentar notificação por usuário "exigiria primeiro um schema
+  de evento que carregasse o dono, não existe ainda". Construir ACL por projeto só pra scanning,
+  sozinho, seria inconsistente com o resto da plataforma e arriscaria um falso senso de fronteira de
+  segurança meio-implementado. É um épico de produto de verdade (Times/Organizações), não um item
+  desta fase — fica registrado pra quando o usuário decidir priorizar.
+- **Fingerprint resiliente a deslocamento de linha** — hoje `SHA256(scanner, findingID, file, line)`
+  (Fase 10): inserir uma linha acima da vulnerabilidade muda `line`, muda o fingerprint, e o
+  histórico/triagem tratam como um achado NOVO mesmo sendo o mesmo bug (GitHub/Semgrep sobrevivem a
+  isso hashando o snippet ao redor, que esta plataforma já captura — daria pra reaproveitar).
+  Trocar o algoritmo de fingerprint é uma mudança de schema/semântica que invalida todo histórico
+  JÁ GRAVADO (inclusive na demo ao vivo que o usuário estava testando durante esta sessão) sem uma
+  estratégia de versionamento/backfill — risco real de corromper dado que o usuário está usando
+  agora, por um ganho de robustez menor que os 5 itens acima. Adiado até ter um plano de migração
+  explícito, não decidido sozinho no meio desta fase.
+- **Exportação SARIF** (o formato que GitHub Code Scanning consome nativamente) — CSV (item 5 acima)
+  cobre o caso de uso mais comum (planilha/auditoria/ticket) com risco baixo; um exportador SARIF
+  correto precisa modelar `rules`/`results`/`physicalLocation` por scanner de origem e não há
+  ferramenta de validação contra o schema oficial neste ambiente — o risco de sair com um arquivo
+  tecnicamente inválido (silenciosamente, sem quem valide) é maior que o valor de implementá-lo sem
+  essa rede de segurança. Fica como próximo passo natural, não descartado.

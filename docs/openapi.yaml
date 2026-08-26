@@ -514,16 +514,24 @@ paths:
       security:
         - bearerAuth: [scanning:read]
       parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
         - name: limit
           in: query
           required: false
-          description: Máximo de achados a retornar. Valores <= 0 ou ausentes usam o default (50); valores acima de 200 são reduzidos a 200; um valor não numérico é tratado como ausente (nunca 400).
+          description: >
+            Alias de page_size, aceito por compatibilidade com chamador anterior à Fase 14
+            (Maturidade de AppSec) — só usado quando page_size não vem explícito. Prefira page_size
+            em código novo.
           schema:
             type: integer
-            default: 50
       responses:
         "200":
-          description: Achados mais graves/recentes primeiro (lista vazia se nenhum scan rodou ainda).
+          description: >
+            Uma PÁGINA de achados, mais graves/recentes primeiro (lista vazia se nenhum scan rodou
+            ainda). Antes da Fase 14, este endpoint tinha um `limit` sem `OFFSET` (teto fixo de 200)
+            — qualquer achado além disso nunca aparecia; agora é paginação de verdade, mesmo
+            contrato que GET /api/v1/users já usa.
           content:
             application/json:
               schema:
@@ -535,6 +543,248 @@ paths:
                         type: array
                         items:
                           $ref: "#/components/schemas/Finding"
+                      meta:
+                        $ref: "#/components/schemas/PaginationMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/scans/{scanID}/findings.csv:
+    get:
+      tags: [scanning]
+      summary: Exporta os achados de uma execução de scan em CSV (Fase 14 — Maturidade de AppSec)
+      operationId: exportScanFindingsCSV
+      description: >
+        Equivalente em CSV de GET /api/v1/scanning/scans/{scanID}/findings — uma linha por achado,
+        sem deduplicação (é UM scan). A primeira exportação desta plataforma; até a Fase 14, tirar
+        um achado da NIX significava copiar da tela na mão ou consumir a API JSON.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: scanID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Arquivo CSV, com Content-Disposition attachment (download, não exibição inline).
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: scanID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/posture:
+    get:
+      tags: [scanning]
+      summary: Resumo agregado de achados abertos entre todo projeto (Fase 14 — Maturidade de AppSec)
+      operationId: getSecurityPosture
+      description: >
+        Achados ABERTOS = ainda presentes no scan mais recente de cada projeto E não triados — nunca
+        um COUNT(*) direto em scan_findings, que contaria o mesmo achado uma vez por re-scan. Escopado
+        a projetos persistentes (Fase 10); um scan avulso sem projeto não entra nesta contagem, pelo
+        mesmo motivo que não entra em GET /api/v1/scanning/projects/{projectID}/findings-history.
+        Alimenta o card "Postura de segurança" do dashboard.
+      security:
+        - bearerAuth: [scanning:read]
+      responses:
+        "200":
+          description: O resumo agregado.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SecurityPosture"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/projects/{projectID}/findings-history:
+    get:
+      tags: [scanning]
+      summary: Histórico de achados deduplicado de um projeto (Fase 12)
+      operationId: listProjectFindingsHistory
+      description: >
+        Um achado por fingerprint, não por linha de scan_findings — "apareceu pela primeira vez no
+        scan de 12/08, ainda presente no scan de 20/08" em vez de listar a mesma vulnerabilidade uma
+        vez por re-scan. Nunca documentado antes desta revisão (Fase 14), apesar de existir desde a
+        Fase 12 — lacuna da documentação, não do endpoint em si.
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Histórico deduplicado, achado aberto e não triado primeiro (lista vazia se o projeto nunca rodou um scan).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ProjectFindingHistory"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/projects/{projectID}/findings-history.csv:
+    get:
+      tags: [scanning]
+      summary: Exporta o histórico deduplicado de um projeto em CSV (Fase 14 — Maturidade de AppSec)
+      operationId: exportProjectFindingsHistoryCSV
+      description: >
+        Equivalente em CSV de GET /api/v1/scanning/projects/{projectID}/findings-history, com a
+        triagem incluída — a exportação que faz sentido levar pra uma reunião de status ou um ticket
+        de compliance, ao contrário do CSV por scan (uma execução isolada, sem dedup).
+      security:
+        - bearerAuth: [scanning:read]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Arquivo CSV, com Content-Disposition attachment.
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: projectID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/scanning/projects/{projectID}/findings/{fingerprint}/triage:
+    put:
+      tags: [scanning]
+      summary: Tria um achado deduplicado (Fase 14 — Maturidade de AppSec)
+      operationId: triageFinding
+      description: >
+        Marca o fingerprint como false_positive/wont_fix/risk_accepted dentro do projeto — chamar de
+        novo no MESMO fingerprint substitui a decisão anterior, não acumula histórico. reason é
+        obrigatório: uma supressão sem justificativa registrada é o tipo de decisão que uma auditoria
+        de segurança depois cobra explicação. Gravado em audit_logs (finding.triaged).
+      security:
+        - bearerAuth: [scanning:manage]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fingerprint
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, reason]
+              properties:
+                status:
+                  type: string
+                  enum: [false_positive, wont_fix, risk_accepted]
+                reason:
+                  type: string
+                  description: Obrigatório — motivo da triagem, no máximo 2000 caracteres.
+      responses:
+        "200":
+          description: Triagem gravada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: projectID/fingerprint inválido, status desconhecido, ou reason vazio/longo demais.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Projeto não encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+    delete:
+      tags: [scanning]
+      summary: Reabre um achado já triado (Fase 14 — Maturidade de AppSec)
+      operationId: untriageFinding
+      description: >
+        Apaga a decisão de triagem — idempotente, chamar num fingerprint nunca triado (ou já
+        reaberto) não é erro. Gravado em audit_logs (finding.untriaged).
+      security:
+        - bearerAuth: [scanning:manage]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fingerprint
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Achado reaberto (ou já estava aberto).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: projectID/fingerprint inválido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -968,6 +1218,88 @@ components:
         created_at:
           type: string
           format: date-time
+
+    ProjectFindingHistory:
+      type: object
+      description: >
+        Um achado deduplicado por fingerprint ENTRE os re-scans de um projeto (Fase 12), decorado
+        com sua triagem se alguma (Fase 14 — Maturidade de AppSec). Ver
+        `/api/v1/scanning/projects/{projectID}/findings-history`.
+      properties:
+        fingerprint:
+          type: string
+        scanner:
+          type: string
+          example: "trivy"
+        owasp_category:
+          type: string
+        severity:
+          type: string
+          enum: [CRITICAL, HIGH, MEDIUM, LOW]
+        description:
+          type: string
+        file:
+          type: string
+        line:
+          type: integer
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        scan_count:
+          type: integer
+          description: Quantos scans DISTINTOS deste projeto incluíram este fingerprint.
+        still_present:
+          type: boolean
+          description: Se este fingerprint aparece no scan MAIS RECENTE do projeto.
+        triage_status:
+          type: string
+          enum: ["", false_positive, wont_fix, risk_accepted]
+          description: "\"\" (vazio) é o estado implícito \"aberto, nunca triado\" — nunca omitido do JSON."
+        triage_reason:
+          type: string
+          description: Ausente quando triage_status é vazio.
+
+    ProjectPosture:
+      type: object
+      description: Contribuição de UM projeto pro SecurityPosture agregado — ver `top_vulnerable`.
+      properties:
+        project_id:
+          type: string
+          format: uuid
+        project_name:
+          type: string
+        open_critical:
+          type: integer
+        open_high:
+          type: integer
+
+    SecurityPosture:
+      type: object
+      description: >
+        Resumo agregado de achados ABERTOS (ainda presentes + não triados) entre todo projeto
+        persistente (Fase 14 — Maturidade de AppSec). Ver `/api/v1/scanning/posture`.
+      properties:
+        open_critical:
+          type: integer
+        open_high:
+          type: integer
+        open_medium:
+          type: integer
+        open_low:
+          type: integer
+        triaged_count:
+          type: integer
+          description: Achados ainda presentes mas já triados — não contam em open_*.
+        projects_scanned:
+          type: integer
+        top_vulnerable:
+          type: array
+          description: Até 5 projetos, os com mais crítico/alto aberto primeiro.
+          items:
+            $ref: "#/components/schemas/ProjectPosture"
 
     FeatureFlag:
       type: object
