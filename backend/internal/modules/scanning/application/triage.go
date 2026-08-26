@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,8 +30,12 @@ const maxTriageReasonLength = 2000
 // escopo é (project_id, fingerprint), não um achado/scan individual.
 // reason é obrigatório: uma supressão sem motivo registrado é
 // exatamente o tipo de decisão que uma auditoria de segurança depois
-// cobra explicação, e a resposta não pode ser "não sabemos".
-func (s *Service) TriageFinding(ctx context.Context, projectID uuid.UUID, fingerprint string, status domain.TriageStatus, reason string, actorUserID *uuid.UUID) error {
+// cobra explicação, e a resposta não pode ser "não sabemos". expiresAt
+// é OPCIONAL (nil = sem prazo, ver domain.Triage.ExpiresAt) — quando
+// preenchido, precisa estar no futuro: uma triagem que já nasce vencida
+// não faz sentido nenhum (o achado voltaria a contar como aberto no
+// instante seguinte).
+func (s *Service) TriageFinding(ctx context.Context, projectID uuid.UUID, fingerprint string, status domain.TriageStatus, reason string, actorUserID *uuid.UUID, expiresAt *time.Time) error {
 	if s.triageRepo == nil {
 		return apperrors.Internal(fmt.Errorf("scanning: triage repository not configured"))
 	}
@@ -47,6 +52,9 @@ func (s *Service) TriageFinding(ctx context.Context, projectID uuid.UUID, finger
 	}
 	if len(reason) > maxTriageReasonLength {
 		return apperrors.BadRequest(fmt.Sprintf("reason must be at most %d characters", maxTriageReasonLength))
+	}
+	if expiresAt != nil && !expiresAt.After(time.Now()) {
+		return apperrors.BadRequest("expires_at must be in the future")
 	}
 
 	// GetProject antes de gravar: um fingerprint triado num projeto que
@@ -65,17 +73,22 @@ func (s *Service) TriageFinding(ctx context.Context, projectID uuid.UUID, finger
 		Status:      status,
 		Reason:      reason,
 		ActorUserID: actorUserID,
+		ExpiresAt:   expiresAt,
 	}); err != nil {
 		return fmt.Errorf("scanning: triage finding: %w", err)
 	}
 
 	if s.audit != nil {
+		metadata := map[string]any{"project_id": projectID.String(), "fingerprint": fingerprint, "status": string(status), "reason": reason}
+		if expiresAt != nil {
+			metadata["expires_at"] = expiresAt.Format(time.RFC3339)
+		}
 		_ = s.audit.Record(ctx, audit.Entry{
 			UserID:       actorUserID,
 			Action:       audit.ActionFindingTriaged,
 			ResourceType: "scanning_finding_triage",
 			ResourceID:   fmt.Sprintf("%s/%s", projectID, fingerprint),
-			Metadata:     map[string]any{"project_id": projectID.String(), "fingerprint": fingerprint, "status": string(status), "reason": reason},
+			Metadata:     metadata,
 		})
 	}
 	return nil

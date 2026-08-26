@@ -59,6 +59,10 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 			supervised("outbox_publisher", deps.Logger, outboxPublisher.Run),
 			supervised("rate_limit_cleanup", deps.Logger, ratelimit.Cleanup(deps.DB)),
 			supervised("idempotency_cleanup", deps.Logger, idempotency.Cleanup(deps.DB)),
+			// scanning_posture_snapshot (Fase 14, continuação — tendência
+			// histórica): grava o resumo agregado do dia uma vez por dia,
+			// pra alimentar o gráfico de tendência do dashboard.
+			supervised("scanning_posture_snapshot", deps.Logger, scanningWorker.PostureSnapshotLoop(deps.Modules.Scanning.Service, deps.Logger)),
 			supervised("diario_oficial.worker", deps.Logger, func(ctx context.Context) error {
 				return diarioConsumer.Consume(ctx, diarioWorker.JobCreatedHandler(deps.Modules.DiarioOficial.Service))
 			}),

@@ -84,6 +84,17 @@ type ProjectFindingHistory struct {
 	// de nenhuma decisão humana pra parar de aparecer como pendente.
 	TriageStatus string
 	TriageReason string
+	// TriageExpiresAt/TriageExpired (Fase 14, continuação — expiração de
+	// triagem): TriageExpiresAt é nil quando a triagem não tem prazo (ou
+	// quando TriageStatus é vazio — nunca houve triagem nenhuma pra ter
+	// prazo). TriageExpired é true quando o prazo já passou — o achado
+	// CONTINUA carregando TriageStatus/TriageReason (a decisão que
+	// alguém tomou fica registrada, nunca é apagada só por vencer — ver
+	// domain.Triage.ExpiresAt), mas volta a contar como ABERTO em
+	// SecurityPosture/na ordenação abaixo, porque o prazo de revisão
+	// passou e ninguém decidiu de novo.
+	TriageExpiresAt *time.Time
+	TriageExpired   bool
 }
 
 // ListProjectFindingsHistory agrupa por Fingerprint todo achado de TODOS
@@ -174,6 +185,7 @@ func (s *Service) ListProjectFindingsHistory(ctx context.Context, projectID uuid
 		}
 	}
 
+	now := time.Now()
 	out := make([]ProjectFindingHistory, 0, len(order))
 	for _, fp := range order {
 		g := groups[fp]
@@ -181,22 +193,24 @@ func (s *Service) ListProjectFindingsHistory(ctx context.Context, projectID uuid
 		if t, ok := triageByFingerprint[fp]; ok {
 			g.entry.TriageStatus = string(t.Status)
 			g.entry.TriageReason = t.Reason
+			g.entry.TriageExpiresAt = t.ExpiresAt
+			g.entry.TriageExpired = t.Expired(now)
 		}
 		out = append(out, g.entry)
 	}
 
-	// Precisa de atenção AGORA (ainda presente E nunca triado) primeiro;
-	// depois o que já foi triado mas continua reaparecendo (alguém já
-	// decidiu o que fazer, não é mais um item pendente de decisão);
-	// depois o que já saiu do scan mais recente (presumido corrigido) —
-	// dentro de cada grupo, mais grave primeiro, depois mais recente
-	// primeiro. Mesmo raciocínio de findingSeverityOrder
-	// (postgres_repository.go), só que em memória, já que este resultado
-	// nunca vem direto de uma única query SQL.
+	// Precisa de atenção AGORA (ainda presente E [nunca triado OU
+	// triagem vencida]) primeiro; depois o que já foi triado e continua
+	// dentro do prazo (alguém já decidiu o que fazer, não é mais um item
+	// pendente de decisão); depois o que já saiu do scan mais recente
+	// (presumido corrigido) — dentro de cada grupo, mais grave primeiro,
+	// depois mais recente primeiro. Mesmo raciocínio de
+	// findingSeverityOrder (postgres_repository.go), só que em memória,
+	// já que este resultado nunca vem direto de uma única query SQL.
 	sort.Slice(out, func(i, j int) bool {
 		bucket := func(h ProjectFindingHistory) int {
 			switch {
-			case h.StillPresent && h.TriageStatus == "":
+			case h.StillPresent && (h.TriageStatus == "" || h.TriageExpired):
 				return 0
 			case h.StillPresent:
 				return 1

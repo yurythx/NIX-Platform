@@ -110,7 +110,7 @@ func TestExportProjectFindingsHistory_KnownProject_IncludesTriageColumns(t *test
 		t.Fatalf("ProcessScanJob: %v", err)
 	}
 	fingerprint := domain.Fingerprint("trivy", finding.ID, finding.File, finding.Line)
-	if err := svc.TriageFinding(ctx, project.ID, fingerprint, domain.TriageWontFix, "aceito por ora", nil); err != nil {
+	if err := svc.TriageFinding(ctx, project.ID, fingerprint, domain.TriageWontFix, "aceito por ora", nil, nil); err != nil {
 		t.Fatalf("TriageFinding: %v", err)
 	}
 

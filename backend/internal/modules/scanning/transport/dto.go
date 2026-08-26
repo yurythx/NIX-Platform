@@ -421,6 +421,14 @@ type ProjectFindingHistoryResponse struct {
 	// dois de propósito.
 	TriageStatus string `json:"triage_status"`
 	TriageReason string `json:"triage_reason,omitempty"`
+	// TriageExpiresAt/TriageExpired (Fase 14, continuação — expiração de
+	// triagem): os dois omitidos quando a triagem não tem prazo (ou não
+	// existe triagem nenhuma) — omitempty em TriageExpired é seguro
+	// aqui porque "sem triagem" e "triagem sem prazo, não vencida"
+	// colapsam no mesmo false ausente; o frontend só olha pra este campo
+	// quando TriageStatus já não é vazio.
+	TriageExpiresAt *time.Time `json:"triage_expires_at,omitempty"`
+	TriageExpired   bool       `json:"triage_expired,omitempty"`
 }
 
 // SecurityPostureResponse é o formato público de
@@ -457,24 +465,55 @@ func toSecurityPostureResponse(p application.SecurityPosture) SecurityPostureRes
 	}
 }
 
+// PostureSnapshotResponse é o formato público de domain.PostureSnapshot
+// (Fase 14, continuação — tendência histórica) — um ponto da série
+// temporal que alimenta o gráfico de tendência do dashboard.
+type PostureSnapshotResponse struct {
+	Date            string `json:"date"` // YYYY-MM-DD, não um timestamp — só a data importa (ver domain.PostureSnapshot.Date)
+	OpenCritical    int    `json:"open_critical"`
+	OpenHigh        int    `json:"open_high"`
+	OpenMedium      int    `json:"open_medium"`
+	OpenLow         int    `json:"open_low"`
+	TriagedCount    int    `json:"triaged_count"`
+	ProjectsScanned int    `json:"projects_scanned"`
+}
+
+func toPostureSnapshotResponses(list []domain.PostureSnapshot) []PostureSnapshotResponse {
+	out := make([]PostureSnapshotResponse, 0, len(list))
+	for _, s := range list {
+		out = append(out, PostureSnapshotResponse{
+			Date:            s.Date.Format("2006-01-02"),
+			OpenCritical:    s.OpenCritical,
+			OpenHigh:        s.OpenHigh,
+			OpenMedium:      s.OpenMedium,
+			OpenLow:         s.OpenLow,
+			TriagedCount:    s.TriagedCount,
+			ProjectsScanned: s.ProjectsScanned,
+		})
+	}
+	return out
+}
+
 func toProjectFindingHistoryResponses(list []application.ProjectFindingHistory) []ProjectFindingHistoryResponse {
 	out := make([]ProjectFindingHistoryResponse, 0, len(list))
 	for _, h := range list {
 		out = append(out, ProjectFindingHistoryResponse{
-			Fingerprint:   h.Fingerprint,
-			Scanner:       h.Scanner,
-			OWASPCategory: h.OWASPCategory,
-			Severity:      string(h.Severity),
-			Description:   h.Description,
-			File:          h.File,
-			Line:          h.Line,
-			FirstSeenAt:   h.FirstSeenAt,
-			LastSeenAt:    h.LastSeenAt,
-			ScanCount:     h.ScanCount,
-			StillPresent:  h.StillPresent,
-			Tool:          ToolResponse{Name: toolDisplayName(h.Scanner)},
-			TriageStatus:  h.TriageStatus,
-			TriageReason:  h.TriageReason,
+			Fingerprint:     h.Fingerprint,
+			Scanner:         h.Scanner,
+			OWASPCategory:   h.OWASPCategory,
+			Severity:        string(h.Severity),
+			Description:     h.Description,
+			File:            h.File,
+			Line:            h.Line,
+			FirstSeenAt:     h.FirstSeenAt,
+			LastSeenAt:      h.LastSeenAt,
+			ScanCount:       h.ScanCount,
+			StillPresent:    h.StillPresent,
+			Tool:            ToolResponse{Name: toolDisplayName(h.Scanner)},
+			TriageStatus:    h.TriageStatus,
+			TriageReason:    h.TriageReason,
+			TriageExpiresAt: h.TriageExpiresAt,
+			TriageExpired:   h.TriageExpired,
 		})
 	}
 	return out

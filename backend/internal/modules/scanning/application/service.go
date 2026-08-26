@@ -142,6 +142,11 @@ type Service struct {
 	// princípio de tolerância a nil que flags já tem logo abaixo — só
 	// entra em pânico ou erra se de fato usado sem estar configurado.
 	triageRepo domain.TriageRepository
+	// postureRepo (Fase 14, continuação) persiste a série temporal de
+	// SecurityPosture (ver domain.PostureRepository/application/posture.go's
+	// SnapshotSecurityPosture/PostureHistory) — mesmo raciocínio de
+	// triageRepo: interface própria, campo opcional, nil tolerado.
+	postureRepo domain.PostureRepository
 	// zipExtractor extrai um Project.UploadZip (Fase 10) pro volume
 	// compartilhado — só usado por ProcessScanJob quando um job de scan
 	// pertence a um projeto criado por upload. domain.ZipExtractor, não
@@ -211,6 +216,15 @@ func NewService(
 func (s *Service) WithTriageRepository(triageRepo domain.TriageRepository) *Service {
 	s2 := *s
 	s2.triageRepo = triageRepo
+	return &s2
+}
+
+// WithPostureRepository é o par de WithTriageRepository, mesmo
+// raciocínio (opcional, setter pós-construção em vez de mais um
+// parâmetro posicional em NewService) — pra domain.PostureRepository.
+func (s *Service) WithPostureRepository(postureRepo domain.PostureRepository) *Service {
+	s2 := *s
+	s2.postureRepo = postureRepo
 	return &s2
 }
 

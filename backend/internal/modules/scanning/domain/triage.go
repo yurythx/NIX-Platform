@@ -54,8 +54,27 @@ type Triage struct {
 	Status      TriageStatus
 	Reason      string
 	ActorUserID *uuid.UUID
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// ExpiresAt (migration 000024) é OPCIONAL — nil significa "sem
+	// prazo", o mesmo comportamento que toda Triage tinha antes desta
+	// coluna existir. Quando preenchido, é a data até quando a decisão
+	// vale; depois disso, Expired reporta true e a camada application
+	// volta a contar o achado como ABERTO (ver
+	// application.Service.ListProjectFindingsHistory/SecurityPosture) —
+	// a linha em si NUNCA é apagada só por vencer (reabrir de propósito
+	// continua sendo DeleteTriage): o registro de que ALGUÉM decidiu
+	// algo, em algum momento, é auditoria que vale a pena preservar
+	// mesmo depois de vencida.
+	ExpiresAt *time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Expired reporta se t já passou do prazo de revisão, em relação a now
+// (parâmetro explícito, não time.Now() direto, pra manter esta função
+// pura e testável sem depender do relógio real). Uma Triage sem
+// ExpiresAt (nil) nunca expira.
+func (t Triage) Expired(now time.Time) bool {
+	return t.ExpiresAt != nil && t.ExpiresAt.Before(now)
 }
 
 // TriageRepository persiste e consulta as decisões de triagem de um

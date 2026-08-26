@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -347,16 +348,36 @@ func (h *Handlers) SecurityPosture(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteOK(w, toSecurityPostureResponse(posture))
 }
 
+// PostureHistory trata GET /api/v1/scanning/posture/history (Fase 14,
+// continuação — tendência histórica) — a série temporal que
+// SecurityPosture sozinho não respondia ("estamos melhorando ou
+// piorando?"), gravada periodicamente pelo worker (ver
+// application.Service.SnapshotSecurityPosture).
+func (h *Handlers) PostureHistory(w http.ResponseWriter, r *http.Request) {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+
+	snapshots, err := h.service.PostureHistory(r.Context(), days)
+	if err != nil {
+		httputil.WriteError(w, r, h.logger, err)
+		return
+	}
+
+	httputil.WriteOK(w, toPostureSnapshotResponses(snapshots))
+}
+
 // triageFindingRequest é o corpo de PUT
 // .../projects/{projectID}/findings/{fingerprint}/triage (Fase 14 —
 // Maturidade de AppSec). Reason é obrigatório — validado de novo em
 // application.Service.TriageFinding (a mesma regra não pode depender só
 // da camada HTTP, ver §33), mas rejeitado aqui também com uma mensagem
 // específica de "campo faltando" em vez de deixar a validação de
-// domínio genérica ser a primeira a reclamar.
+// domínio genérica ser a primeira a reclamar. ExpiresAt é opcional —
+// ponteiro pra RFC 3339, nil quando o campo vem ausente/vazio, "sem
+// prazo" continua sendo o comportamento padrão.
 type triageFindingRequest struct {
-	Status string `json:"status"`
-	Reason string `json:"reason"`
+	Status    string     `json:"status"`
+	Reason    string     `json:"reason"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 type triageResponse struct {
@@ -391,7 +412,7 @@ func (h *Handlers) TriageFinding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.service.TriageFinding(r.Context(), projectID, fingerprint, domain.TriageStatus(req.Status), req.Reason, actorUserID); err != nil {
+	if err := h.service.TriageFinding(r.Context(), projectID, fingerprint, domain.TriageStatus(req.Status), req.Reason, actorUserID, req.ExpiresAt); err != nil {
 		httputil.WriteError(w, r, h.logger, err)
 		return
 	}

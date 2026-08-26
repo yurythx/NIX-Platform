@@ -7,8 +7,10 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -37,7 +39,7 @@ func newTriageService(t *testing.T, scanners ...domain.CodeScanner) (*Service, u
 func TestTriageFinding_RequiresReason(t *testing.T) {
 	svc, projectID := newTriageService(t)
 
-	err := svc.TriageFinding(context.Background(), projectID, "fp-1", domain.TriageFalsePositive, "", nil)
+	err := svc.TriageFinding(context.Background(), projectID, "fp-1", domain.TriageFalsePositive, "", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error for an empty reason")
 	}
@@ -50,7 +52,7 @@ func TestTriageFinding_RequiresReason(t *testing.T) {
 func TestTriageFinding_RejectsUnknownStatus(t *testing.T) {
 	svc, projectID := newTriageService(t)
 
-	err := svc.TriageFinding(context.Background(), projectID, "fp-1", domain.TriageStatus("archived"), "motivo válido", nil)
+	err := svc.TriageFinding(context.Background(), projectID, "fp-1", domain.TriageStatus("archived"), "motivo válido", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error for an unrecognized status")
 	}
@@ -63,7 +65,7 @@ func TestTriageFinding_RejectsUnknownStatus(t *testing.T) {
 func TestTriageFinding_UnknownProject_ReturnsNotFound(t *testing.T) {
 	svc, _ := newTriageService(t)
 
-	err := svc.TriageFinding(context.Background(), uuid.New(), "fp-1", domain.TriageWontFix, "motivo válido", nil)
+	err := svc.TriageFinding(context.Background(), uuid.New(), "fp-1", domain.TriageWontFix, "motivo válido", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error for an unknown project")
 	}
@@ -77,7 +79,7 @@ func TestTriageFinding_WithoutTriageRepositoryConfigured_ReturnsInternalError(t 
 	pool := testPool(t)
 	svc := newService(pool) // sem .WithTriageRepository — mesmo estado que todo outro teste deste pacote já usa
 
-	err := svc.TriageFinding(context.Background(), uuid.New(), "fp-1", domain.TriageWontFix, "motivo válido", nil)
+	err := svc.TriageFinding(context.Background(), uuid.New(), "fp-1", domain.TriageWontFix, "motivo válido", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error when triageRepo is nil")
 	}
@@ -121,7 +123,7 @@ func TestTriageFinding_AppearsInProjectFindingHistory(t *testing.T) {
 		t.Fatalf("TriageStatus before triaging = %q, want empty (open)", beforeStatus)
 	}
 
-	if err := svc.TriageFinding(ctx, projectID, fingerprint, domain.TriageRiskAccepted, "mitigado por WAF em produção", nil); err != nil {
+	if err := svc.TriageFinding(ctx, projectID, fingerprint, domain.TriageRiskAccepted, "mitigado por WAF em produção", nil, nil); err != nil {
 		t.Fatalf("TriageFinding: %v", err)
 	}
 
@@ -171,10 +173,10 @@ func TestTriageFinding_ReplacesPreviousDecision(t *testing.T) {
 	svc, projectID := newTriageService(t)
 	ctx := context.Background()
 
-	if err := svc.TriageFinding(ctx, projectID, "fp-replace", domain.TriageFalsePositive, "motivo inicial", nil); err != nil {
+	if err := svc.TriageFinding(ctx, projectID, "fp-replace", domain.TriageFalsePositive, "motivo inicial", nil, nil); err != nil {
 		t.Fatalf("TriageFinding (first): %v", err)
 	}
-	if err := svc.TriageFinding(ctx, projectID, "fp-replace", domain.TriageWontFix, "motivo revisado", nil); err != nil {
+	if err := svc.TriageFinding(ctx, projectID, "fp-replace", domain.TriageWontFix, "motivo revisado", nil, nil); err != nil {
 		t.Fatalf("TriageFinding (second): %v", err)
 	}
 
@@ -203,8 +205,139 @@ func TestTriageFinding_ReasonTooLong_IsRejected(t *testing.T) {
 	svc, projectID := newTriageService(t)
 
 	huge := strings.Repeat("a", maxTriageReasonLength+1)
-	err := svc.TriageFinding(context.Background(), projectID, "fp-1", domain.TriageWontFix, huge, nil)
+	err := svc.TriageFinding(context.Background(), projectID, "fp-1", domain.TriageWontFix, huge, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error for a reason above the length limit")
+	}
+}
+
+// A partir daqui: Fase 14, continuação — expiração de triagem.
+
+func TestTriageFinding_ExpiresAtInThePast_IsRejected(t *testing.T) {
+	svc, projectID := newTriageService(t)
+
+	past := time.Now().Add(-time.Hour)
+	err := svc.TriageFinding(context.Background(), projectID, "fp-1", domain.TriageWontFix, "motivo válido", nil, &past)
+	if err == nil {
+		t.Fatal("expected an error for expires_at in the past")
+	}
+	appErr, ok := apperrors.As(err)
+	if !ok || appErr.Code != apperrors.CodeBadRequest {
+		t.Errorf("err = %v, want a BAD_REQUEST apperrors.Error", err)
+	}
+}
+
+func TestTriageFinding_ExpiresAtInTheFuture_IsAccepted(t *testing.T) {
+	svc, projectID := newTriageService(t)
+	ctx := context.Background()
+
+	// Truncado pra microssegundo: TIMESTAMPTZ do Postgres não guarda
+	// nanossegundo, e o round-trip pelo banco perderia essa precisão —
+	// comparar sem truncar compararia um time.Time de antes do INSERT
+	// (nanossegundos completos) com um lido de volta do banco
+	// (microssegundos), que nunca seriam .Equal por definição.
+	future := time.Now().Add(24 * time.Hour).Truncate(time.Microsecond)
+	if err := svc.TriageFinding(ctx, projectID, "fp-1", domain.TriageWontFix, "motivo válido", nil, &future); err != nil {
+		t.Fatalf("TriageFinding: %v", err)
+	}
+
+	triage, err := svc.triageRepo.ListTriageByProject(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListTriageByProject: %v", err)
+	}
+	got, ok := triage["fp-1"]
+	if !ok {
+		t.Fatal("expected a triage entry for fp-1")
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(future) {
+		t.Errorf("ExpiresAt = %v, want %v", got.ExpiresAt, future)
+	}
+	if got.Expired(time.Now()) {
+		t.Error("a triage that expires in 24h should not be Expired() right now")
+	}
+}
+
+// TestTriageExpired_TreatedAsOpen_InHistoryAndPosture prova o
+// comportamento de ponta a ponta: uma triagem cujo prazo já passou
+// continua carregando TriageStatus/TriageReason (a decisão fica
+// registrada — ver domain.Triage.ExpiresAt), mas volta a contar como
+// ABERTA em ListProjectFindingsHistory/SecurityPosture, exatamente como
+// se nunca tivesse sido triada. Grava a expiração PASSADA direto via
+// triageRepo (não TriageFinding, que rejeitaria) — simula uma triagem
+// que era válida no passado e só venceu depois, não uma vencida desde o
+// início.
+//
+// 20 achados CRITICAL (não 1): SecurityPosture.TopVulnerable é um
+// ranking TOP-5 sobre TODO projeto do banco compartilhado (ver nota no
+// topo de posture_test.go) — um projeto com 1 crítico só pode ser
+// verificado ali se nenhum OUTRO teste, rodando na mesma suíte,
+// coincidentemente também tiver exatamente 1 crítico aberto e ter rodado
+// depois (empate de peso, ordem de desempate não é garantida). 20 é
+// grande o bastante pra nunca perder essa corrida por acidente, sem
+// depender de limpar o banco entre testes.
+func TestTriageExpired_TreatedAsOpen_InHistoryAndPosture(t *testing.T) {
+	const findingCount = 20
+	findings := make([]domain.Finding, findingCount)
+	for i := range findings {
+		findings[i] = domain.Finding{
+			ID: fmt.Sprintf("CVE-2026-EXPIRED-TRIAGE-%d", i), Severity: domain.SeverityCritical,
+			Description: "vencido", File: "e.go", Line: i + 1,
+		}
+	}
+
+	svc, projectID := newTriageService(t, &fakeScanner{name: "trivy", findings: findings})
+	ctx := context.Background()
+	corrID := uuid.New()
+
+	job, err := svc.CreateProjectScanJob(ctx, corrID, []string{"trivy"}, projectID, nil)
+	if err != nil {
+		t.Fatalf("CreateProjectScanJob: %v", err)
+	}
+	if err := svc.ProcessScanJob(ctx, job.ID, corrID); err != nil {
+		t.Fatalf("ProcessScanJob: %v", err)
+	}
+
+	past := time.Now().Add(-time.Hour)
+	for _, f := range findings {
+		fingerprint := domain.Fingerprint("trivy", f.ID, f.File, f.Line)
+		if err := svc.triageRepo.UpsertTriage(ctx, domain.Triage{
+			ProjectID: projectID, Fingerprint: fingerprint, Status: domain.TriageRiskAccepted,
+			Reason: "vencido de propósito neste teste", ExpiresAt: &past,
+		}); err != nil {
+			t.Fatalf("UpsertTriage(%s): %v", fingerprint, err)
+		}
+	}
+
+	history, err := svc.ListProjectFindingsHistory(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListProjectFindingsHistory: %v", err)
+	}
+	if len(history) != findingCount {
+		t.Fatalf("history = %d entries, want %d", len(history), findingCount)
+	}
+	for _, h := range history {
+		if h.TriageStatus != string(domain.TriageRiskAccepted) {
+			t.Errorf("TriageStatus = %q, want it to still carry the (expired) decision, not be cleared", h.TriageStatus)
+		}
+		if !h.TriageExpired {
+			t.Errorf("fingerprint %s: TriageExpired = false, want true — the deadline already passed", h.Fingerprint)
+		}
+	}
+
+	posture, err := svc.SecurityPosture(ctx)
+	if err != nil {
+		t.Fatalf("SecurityPosture: %v", err)
+	}
+	var projectPosture *ProjectPosture
+	for i, tv := range posture.TopVulnerable {
+		if tv.ProjectID == projectID.String() {
+			projectPosture = &posture.TopVulnerable[i]
+		}
+	}
+	if projectPosture == nil {
+		t.Fatal("expected project to appear in TopVulnerable — an expired triage counts as OPEN again, not triaged")
+	}
+	if projectPosture.OpenCritical != findingCount {
+		t.Errorf("OpenCritical = %d, want %d (expired triage counts as open again)", projectPosture.OpenCritical, findingCount)
 	}
 }

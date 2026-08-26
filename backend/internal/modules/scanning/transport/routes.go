@@ -98,4 +98,10 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 	r.With(
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/posture", h.SecurityPosture)
+
+	// Fase 14, continuação (tendência histórica): a série temporal por
+	// trás do gráfico de tendência do dashboard.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/posture/history", h.PostureHistory)
 }

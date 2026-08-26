@@ -4,6 +4,7 @@ package application
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -52,7 +53,7 @@ func TestSecurityPosture_AggregatesOpenFindingsAcrossProjects(t *testing.T) {
 	}
 
 	triagedFingerprint := domain.Fingerprint("trivy", triaged.ID, triaged.File, triaged.Line)
-	if err := svc.TriageFinding(ctx, projectA.ID, triagedFingerprint, domain.TriageRiskAccepted, "mitigado", nil); err != nil {
+	if err := svc.TriageFinding(ctx, projectA.ID, triagedFingerprint, domain.TriageRiskAccepted, "mitigado", nil, nil); err != nil {
 		t.Fatalf("TriageFinding: %v", err)
 	}
 
@@ -135,4 +136,95 @@ func TestSecurityPosture_ProjectNeverScanned_IsExcluded(t *testing.T) {
 	// projetos escaneados no mesmo banco compartilhado) — só que este
 	// projeto específico, nunca escaneado, não quebrou o cálculo.
 	_ = posture
+}
+
+// A partir daqui: Fase 14, continuação — tendência histórica
+// (SnapshotSecurityPosture/PostureHistory).
+
+func TestSnapshotSecurityPosture_WithoutPostureRepositoryConfigured_ReturnsInternalError(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool) // sem .WithPostureRepository
+
+	if err := svc.SnapshotSecurityPosture(context.Background()); err == nil {
+		t.Fatal("expected an error when postureRepo is nil")
+	}
+}
+
+func TestSnapshotSecurityPosture_And_PostureHistory_RoundTrip(t *testing.T) {
+	pool := testPool(t)
+	repo := infrastructure.NewPostgresRepository(pool)
+	svc := newService(pool).WithPostureRepository(repo)
+	ctx := context.Background()
+
+	if err := svc.SnapshotSecurityPosture(ctx); err != nil {
+		t.Fatalf("SnapshotSecurityPosture: %v", err)
+	}
+
+	history, err := svc.PostureHistory(ctx, 30)
+	if err != nil {
+		t.Fatalf("PostureHistory: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatal("expected at least today's snapshot in the history")
+	}
+	today := history[len(history)-1] // mais recente por último (ORDER BY snapshot_date ASC)
+	now := time.Now()
+	if today.Date.Year() != now.Year() || today.Date.YearDay() != now.YearDay() {
+		t.Errorf("most recent snapshot date = %v, want today (%v)", today.Date, now)
+	}
+}
+
+// TestSnapshotSecurityPosture_RunningTwiceSameDay_OverwritesNotAccumulates
+// prova o ON CONFLICT (snapshot_date) — rodar o snapshot duas vezes no
+// mesmo dia (ex.: worker reiniciado) não deveria deixar duas linhas pro
+// mesmo dia.
+func TestSnapshotSecurityPosture_RunningTwiceSameDay_OverwritesNotAccumulates(t *testing.T) {
+	pool := testPool(t)
+	repo := infrastructure.NewPostgresRepository(pool)
+	svc := newService(pool).WithPostureRepository(repo)
+	ctx := context.Background()
+
+	if err := svc.SnapshotSecurityPosture(ctx); err != nil {
+		t.Fatalf("SnapshotSecurityPosture (1): %v", err)
+	}
+	if err := svc.SnapshotSecurityPosture(ctx); err != nil {
+		t.Fatalf("SnapshotSecurityPosture (2): %v", err)
+	}
+
+	history, err := svc.PostureHistory(ctx, 30)
+	if err != nil {
+		t.Fatalf("PostureHistory: %v", err)
+	}
+	var todayCount int
+	now := time.Now()
+	for _, s := range history {
+		if s.Date.Year() == now.Year() && s.Date.YearDay() == now.YearDay() {
+			todayCount++
+		}
+	}
+	if todayCount != 1 {
+		t.Errorf("snapshots for today = %d, want exactly 1 (upsert, not accumulate)", todayCount)
+	}
+}
+
+func TestPostureHistory_DaysClamping(t *testing.T) {
+	pool := testPool(t)
+	repo := infrastructure.NewPostgresRepository(pool)
+	svc := newService(pool).WithPostureRepository(repo)
+	ctx := context.Background()
+
+	// 0/negativo não deveria virar erro (usa o default) — só confirma que
+	// a chamada não falha; o teto (maxPostureHistoryDays) não é
+	// observável de fora sem inspecionar o SQL, então este teste cobre
+	// só "não quebra com entrada estranha", mesmo espírito de
+	// TestListRecentFindings_PageAndPageSizeClamping.
+	if _, err := svc.PostureHistory(ctx, 0); err != nil {
+		t.Errorf("PostureHistory(0): %v, want nil (falls back to the default)", err)
+	}
+	if _, err := svc.PostureHistory(ctx, -5); err != nil {
+		t.Errorf("PostureHistory(-5): %v, want nil (falls back to the default)", err)
+	}
+	if _, err := svc.PostureHistory(ctx, 10_000); err != nil {
+		t.Errorf("PostureHistory(10000): %v, want nil (clamped to the cap, not rejected)", err)
+	}
 }

@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 
+	apperrors "github.com/yurythx/nix-platform/internal/domain/errors"
 	"github.com/yurythx/nix-platform/internal/modules/scanning/domain"
 )
 
@@ -93,7 +95,11 @@ func (s *Service) SecurityPosture(ctx context.Context) (SecurityPosture, error) 
 			if !h.StillPresent {
 				continue // presumido corrigido — não conta nem como aberto, nem como triado
 			}
-			if h.TriageStatus != "" {
+			// Triagem VENCIDA (h.TriageExpired) conta como aberta de novo,
+			// não como triada — o prazo de revisão passou e ninguém
+			// decidiu de novo, mesmo raciocínio do bucket de ordenação em
+			// ListProjectFindingsHistory (findings.go).
+			if h.TriageStatus != "" && !h.TriageExpired {
 				posture.TriagedCount++
 				continue
 			}
@@ -130,4 +136,62 @@ func (s *Service) SecurityPosture(ctx context.Context) (SecurityPosture, error) 
 	posture.TopVulnerable = perProject
 
 	return posture, nil
+}
+
+// maxPostureHistoryDays limita PostureHistory pelo mesmo motivo que todo
+// outro teto desta plataforma (ex.: pagination.AbsoluteMaxPageSize) —
+// evita que um `days` absurdamente grande vire uma consulta sem limite
+// nenhum; um ano de série temporal diária já é mais do que qualquer
+// gráfico de tendência precisa mostrar de uma vez.
+const maxPostureHistoryDays = 366
+
+// SnapshotSecurityPosture calcula SecurityPosture(ctx) e grava o
+// resultado como o snapshot do dia — chamado periodicamente pelo worker
+// (ver internal/modules/scanning/worker's PostureSnapshotLoop), nunca
+// por uma requisição HTTP direta: capturar a série temporal é
+// responsabilidade de um processo de fundo, não de quem só quer LER a
+// postura atual (GET /scanning/posture continua chamando SecurityPosture
+// direto, sem gravar nada).
+func (s *Service) SnapshotSecurityPosture(ctx context.Context) error {
+	if s.postureRepo == nil {
+		return apperrors.Internal(fmt.Errorf("scanning: posture repository not configured"))
+	}
+	posture, err := s.SecurityPosture(ctx)
+	if err != nil {
+		return err
+	}
+	snapshot := domain.PostureSnapshot{
+		Date:            time.Now(),
+		OpenCritical:    posture.OpenCritical,
+		OpenHigh:        posture.OpenHigh,
+		OpenMedium:      posture.OpenMedium,
+		OpenLow:         posture.OpenLow,
+		TriagedCount:    posture.TriagedCount,
+		ProjectsScanned: posture.ProjectsScanned,
+	}
+	if err := s.postureRepo.SaveSnapshot(ctx, snapshot); err != nil {
+		return fmt.Errorf("scanning: snapshot security posture: %w", err)
+	}
+	return nil
+}
+
+// PostureHistory retorna a série temporal de PostureSnapshot dos últimos
+// `days` dias (default 30 se <= 0, teto em maxPostureHistoryDays) —
+// alimenta o gráfico de tendência do dashboard.
+func (s *Service) PostureHistory(ctx context.Context, days int) ([]domain.PostureSnapshot, error) {
+	if s.postureRepo == nil {
+		return nil, apperrors.Internal(fmt.Errorf("scanning: posture repository not configured"))
+	}
+	const defaultDays = 30
+	if days <= 0 {
+		days = defaultDays
+	}
+	if days > maxPostureHistoryDays {
+		days = maxPostureHistoryDays
+	}
+	snapshots, err := s.postureRepo.ListSnapshots(ctx, days)
+	if err != nil {
+		return nil, fmt.Errorf("scanning: list posture history: %w", err)
+	}
+	return snapshots, nil
 }
