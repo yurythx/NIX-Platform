@@ -1,33 +1,29 @@
+import Link from "next/link";
+
+import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { Section } from "@/components/ui/Section";
-import { NewProjectForm } from "@/components/scanning/NewProjectForm";
 import { PaginatedFindingsFeed } from "@/components/scanning/PaginatedFindingsFeed";
-import { ProjectCard } from "@/components/scanning/ProjectCard";
 import { ScanList } from "@/components/scanning/ScanList";
-import { TriggerScanForm } from "@/components/scanning/TriggerScanForm";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
-import type { PaginationMeta, Project, ScanFinding, ScanStatus } from "@/types/api";
+import type { PaginationMeta, ScanFinding, ScanStatus } from "@/types/api";
 
-// Segurança (Fase 9 do roadmap de segurança —
-// docs/roadmap-secops-orchestrator.md): originalmente só um feed de
-// achados entre TODOS os scans, sem separação nenhuma por execução.
-// Pedido do usuário: "quero os resultados separados por scan... quero
-// poder clicar neles de forma individual e ver os detalhes". Agora duas
-// seções — Scans recentes (ScanList, cada entrada com seu próprio link
-// pra /seguranca/[scanId], onde o progresso ao vivo e o detalhe de cada
-// achado desse scan específico vivem) e Achados recentes (FindingsTable,
-// a visão AGREGADA entre todos os scans, que continua útil pra achar "o
-// que há de mais grave em qualquer lugar" sem precisar abrir scan por
-// scan — cada linha aqui também clicável, com showScanLink levando de
-// volta pro scan de origem).
+// Segurança (revisão de exibição de resultados — pedido do usuário:
+// "não seria melhor abrir uma tela inicial em segurança com os scans
+// que já foram feitos, quais ferramentas foram usadas nesse scan e
+// quais erros e warnings foram achados?"): esta página virou a TELA
+// INICIAL de histórico — ScanList (cada execução, ferramentas usadas,
+// erro/warning contados por severidade) é o primeiro conteúdo, não mais
+// um formulário de disparo. "Novo scan" (botão em destaque) leva pra
+// /seguranca/novo, que é literalmente a página que existia AQUI antes
+// desta revisão (TriggerScanForm + Projetos + a tela de saúde das
+// ferramentas, pedida junto).
 //
-// TriggerScanForm (Client Component) dispara um scan novo e já mostra o
-// progresso ao vivo ali mesmo, com um link pra página de detalhe própria
-// desse job — a resposta mais direta a "resultados separados por scan":
-// o resultado de CADA disparo já nasce na sua própria URL, não misturado
-// num feed genérico.
+// "Achados recentes" (a visão AGREGADA entre todos os scans) continua
+// existindo, só que rebaixada pro fim da página — ainda útil pra achar
+// "o que há de mais grave em qualquer lugar" sem abrir scan por scan,
+// mas não é mais a primeira coisa que a tela mostra.
 export default async function SegurancaPage() {
   let scans: ScanStatus[] = [];
   let scansError: string | null = null;
@@ -54,52 +50,19 @@ export default async function SegurancaPage() {
     findingsError = err instanceof ApiError ? err.message : "Falha ao carregar achados";
   }
 
-  // projects (Fase 10 — Projeto persistente + upload .zip): best-effort,
-  // mesmo princípio das outras duas buscas acima — uma falha aqui não
-  // deveria impedir o resto da página (scans/achados) de renderizar.
-  let projects: Project[] = [];
-  let projectsError: string | null = null;
-  try {
-    const { data } = await serverApiGet<Project[]>("v1/scanning/projects?limit=20");
-    projects = data;
-  } catch (err) {
-    projectsError = err instanceof ApiError ? err.message : "Falha ao carregar projetos";
-  }
-
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <h1 className="text-xl font-semibold">Segurança</h1>
-        <p className="text-sm text-muted">
-          Dispare um scan (Trivy, Gitleaks, Syft, Semgrep, SonarQube, OWASP ZAP), acompanhe o
-          progresso e veja os achados de cada execução, separadamente.
-        </p>
-      </div>
-
-      <TriggerScanForm />
-
-      <Section
-        title="Projetos"
-        description="Salve um alvo pra rodar de novo depois sem digitar a URL (ou reanexar o .zip) toda vez."
-      >
-        <div className="flex flex-col gap-4">
-          <NewProjectForm />
-          {projectsError ? (
-            <ErrorState message={projectsError} />
-          ) : projects.length === 0 ? (
-            <EmptyState
-              title="Nenhum projeto ainda"
-              description="Crie um acima pra rodar o mesmo alvo de novo depois sem digitar a URL (ou reanexar o .zip) toda vez."
-            />
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {projects.map((p) => (
-                <ProjectCard key={p.id} project={p} />
-              ))}
-            </div>
-          )}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold">Segurança</h1>
+          <p className="text-sm text-muted">
+            Scans já disparados, as ferramentas usadas em cada um e os achados por severidade.
+          </p>
         </div>
-      </Section>
+        <Link href="/seguranca/novo">
+          <Button>Novo scan</Button>
+        </Link>
+      </div>
 
       <Section title="Scans recentes">
         {scansError ? <ErrorState message={scansError} /> : <ScanList scans={scans} />}

@@ -248,4 +248,20 @@ export interface ScanStatus {
   created_at: string;
   started_at?: string;
   finished_at?: string;
+  // findings_by_severity (revisão de exibição de resultados — "quais
+  // erros e warnings foram achados" na tela de histórico de scans):
+  // ausente pra um scan que ainda não persistiu achado nenhum. Chaves
+  // são CRITICAL/HIGH/MEDIUM/LOW — nunca todas presentes, só as que têm
+  // pelo menos 1 achado (ver o backend's toScanStatusResponse).
+  findings_by_severity?: Partial<Record<ScanSeverity, number>>;
+}
+
+// GET /api/v1/scanning/scanners/health (revisão de exibição de
+// resultados — "quero ter uma tela onde mostra a saúde das
+// ferramentas... antes de iniciá-las").
+export interface ScannerHealth {
+  scanner: string;
+  healthy: boolean;
+  message?: string;
+  checked_at: string;
 }

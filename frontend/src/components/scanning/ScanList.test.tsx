@@ -68,4 +68,29 @@ describe("ScanList", () => {
     scan.failed_scanners = null;
     expect(() => render(<ScanList scans={[scan]} />)).not.toThrow();
   });
+
+  // A partir daqui: revisão de exibição de resultados — ScanList virou a
+  // tela inicial de /seguranca, ganhou o nome de cada ferramenta usada e
+  // a contagem de erro/warning.
+
+  it("mostra o nome de exibição de cada ferramenta pedida, não o slug cru", () => {
+    const scan = makeScan({ requested_scanners: ["trivy", "sonarqube"] });
+    render(<ScanList scans={[scan]} />);
+    expect(screen.getByText("Trivy")).toBeInTheDocument();
+    expect(screen.getByText("SonarQube")).toBeInTheDocument();
+  });
+
+  it("CRITICAL+HIGH viram 'erro(s)', MEDIUM+LOW viram 'warning(s)'", () => {
+    const scan = makeScan({ findings_by_severity: { CRITICAL: 2, HIGH: 1, MEDIUM: 3, LOW: 1 } });
+    render(<ScanList scans={[scan]} />);
+    expect(screen.getByText("3 erro(s)")).toBeInTheDocument();
+    expect(screen.getByText("4 warning(s)")).toBeInTheDocument();
+  });
+
+  it("sem findings_by_severity (scan sem achado, ou ainda rodando), não mostra selo de erro/warning nenhum", () => {
+    const scan = makeScan({ findings_by_severity: undefined });
+    render(<ScanList scans={[scan]} />);
+    expect(screen.queryByText(/erro\(s\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/warning\(s\)/)).not.toBeInTheDocument();
+  });
 });
