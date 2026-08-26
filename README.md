@@ -1,16 +1,24 @@
 # NIX Platform
 
 Uma plataforma corporativa modular que centraliza funcionalidades internas, integrações,
-automações e notificações numa única aplicação extensível.
+automações e notificações numa única aplicação extensível — construída como um **Monólito
+Modular** (API Go + Worker Go + frontend Next.js, um único código-fonte, dois binários) com um
+núcleo **orientado a eventos**: PostgreSQL para estado, RabbitMQ para processamento assíncrono, e
+um Keycloak externo já existente para identidade.
 
-Construída como um **Monólito Modular** (API Go + Worker Go + frontend Next.js, um único
-código-fonte, dois binários) com um núcleo **orientado a eventos**: PostgreSQL para estado,
-RabbitMQ para processamento assíncrono, e um Keycloak externo já existente para identidade. O
-módulo inicial é **Diário Oficial** (uma verificação externa agendada/sob demanda), seguindo o
-pipeline job → outbox → fila → worker → notificação — o mesmo pipeline que qualquer integração
-nova (ver [`/integracoes`](#rotas-do-frontend) e o
-[roadmap de segurança](docs/roadmap-secops-orchestrator.md)) reaproveita sem precisar de código
-de plataforma novo.
+Dois módulos de negócio reais rodam sobre esse núcleo hoje, cada um seguindo o mesmo pipeline
+job → outbox → fila → worker → notificação — o mesmo que qualquer integração nova (ver
+[`/integracoes`](#rotas-do-frontend)) reaproveita sem precisar de código de plataforma novo:
+
+- **[`scanning`](#appsec-orquestrador-de-scanners)** — um orquestrador de AppSec: dispara 6
+  scanners de segurança reais (Trivy, Semgrep, SonarQube, OWASP ZAP, Gitleaks, Syft) em paralelo
+  contra um alvo, com triagem, postura de segurança agregada, exportação CSV/SARIF, e uma UI
+  mestre-detalhe pros achados. Ver [`/seguranca`](#rotas-do-frontend).
+- **[`diario_oficial`](#diário-oficial-monitoramento-jurídico)** — monitoramento real de
+  publicações judiciais: cadastra um termo (OAB, número de processo, texto livre) e sincroniza
+  automaticamente contra o **DJEN** (Diário de Justiça Eletrônico Nacional, mantido pelo CNJ), a
+  mesma base pública que legaltechs como Jusbrasil/Escavador/Turivius usam. Ver
+  [`/diario-oficial`](#rotas-do-frontend).
 
 ## Arquitetura em resumo
 
@@ -196,20 +204,25 @@ Com os containers saudáveis:
 | `/` | pública | Página inicial — filosofia da plataforma e os serviços/módulos disponíveis. |
 | `/sobre` | pública | Sobre a plataforma: princípios de arquitetura e como é construída. |
 | `/login` | pública | Login (usuário/senha local ou SSO via Keycloak — ver [Login local](#login-local-adicional-ao-keycloak)). |
-| `/dashboard` | autenticada | Visão geral — só isso: status das integrações e atalhos. |
+| `/dashboard` | autenticada | Visão geral — status das integrações, postura de segurança agregada, atalhos. |
 | `/integracoes` | autenticada | Lista toda integração configurada — cada uma leva pra sua página de detalhe. |
 | `/integracoes/{key}` | autenticada | Página de detalhe genérica (rota dinâmica) de uma integração — status e teste de conectividade. `{key}` é o mesmo valor que a integração tem no backend (`diario-oficial`, e cada integração nova que for adicionada). |
-| `/seguranca` | autenticada | Dispara um scan novo (um ou mais scanners) e lista os achados mais graves/recentes entre todos os scans (Trivy, Semgrep, SonarQube, ZAP) — Fase 9 do roadmap de segurança. |
+| `/seguranca` | autenticada | Tela inicial de histórico: todo scan já disparado, ferramentas usadas, erro/warning por severidade. Botão "Novo scan" leva pra `/seguranca/novo`. |
+| `/seguranca/novo` | autenticada | Saúde de cada scanner (antes de disparar), formulário de disparo (um ou mais dos 6 scanners) e projetos persistentes salvos. |
+| `/seguranca/{scanId}` | autenticada | Detalhe de UMA execução — achados por ferramenta, exportação CSV/SARIF, inventário de pacotes (Syft). |
+| `/seguranca/{scanId}/{scanner}` | autenticada | Achados mestre-detalhe de UM scanner dentro de um scan — navegação por teclado, link direto por achado, triagem. |
+| `/diario-oficial` | autenticada | Saúde da fonte (DJEN), cadastro de termos monitorados (OAB/processo/texto livre) e o feed de publicações casadas — filtro por termo/tribunal/tipo, paginação. |
 | `/configuracao` | autenticada | Aba "Sistema" — configuração dinâmica (feature flags, `nix-admin`). |
 | `/configuracao/usuarios` | autenticada | Aba "Usuários" — diretório de usuários. |
 
-`/dashboard`, `/integracoes`, `/seguranca` e `/configuracao` compartilham um único grupo de rotas autenticado
-(`app/(protected)/`, sem segmento próprio na URL) — a checagem de sessão e o shell visual
-(Sidebar/Topbar) são definidos uma única vez ali. Todo nome usado por essas páginas em qualquer
-momento anterior da reestruturação (`/dashboard/users`, `/dashboard/settings[/integrations/diario]`,
-`/dashboard/integrations[/diario]`, `/configuracao/integracoes[/diario]`) redireciona
-permanentemente para os caminhos acima (`frontend/next.config.ts`) — nenhum é removido dali quando
-o destino muda de novo, só atualizado para o caminho canônico atual.
+`/dashboard`, `/integracoes`, `/seguranca`, `/diario-oficial` e `/configuracao` compartilham um
+único grupo de rotas autenticado (`app/(protected)/`, sem segmento próprio na URL) — a checagem de
+sessão e o shell visual (Sidebar/Topbar) são definidos uma única vez ali. Todo nome usado por essas
+páginas em qualquer momento anterior de uma reestruturação (`/dashboard/users`,
+`/dashboard/settings[/integrations/diario]`, `/dashboard/integrations[/diario]`,
+`/configuracao/integracoes[/diario]`) redireciona permanentemente para os caminhos acima
+(`frontend/next.config.ts`) — nenhum é removido dali quando o destino muda de novo, só atualizado
+para o caminho canônico atual.
 
 ## Migrations
 
@@ -273,7 +286,7 @@ discovery OIDC no boot.
   |---|---|---|
   | `nix.diario_oficial.worker` | `diario_oficial.job.created` | `nix.diario_oficial.dlq` |
   | `nix.scanning.worker` | `scanning.scan.requested` | `nix.scanning.dlq` |
-  | `nix.notification.websocket` | `notification.created`, `diario_oficial.job.completed`, `diario_oficial.job.failed`, `integration.status.changed`, `scanning.scan.completed`, `scanning.scan.failed` | `nix.notification.dlq` |
+  | `nix.notification.websocket` | `notification.created`, `diario_oficial.job.completed`, `diario_oficial.job.failed`, `diario_oficial.publication.matched`, `integration.status.changed`, `scanning.scan.completed`, `scanning.scan.failed` | `nix.notification.dlq` |
 
 - **Consumidor**: ack manual — `internal/platform/messaging.Consumer` despacha cada entrega para
   sua própria goroutine (limitado por `RABBITMQ_PREFETCH_COUNT`).
@@ -355,34 +368,84 @@ discovery OIDC no boot.
   funcionando, e nenhum campo atual (email corporativo, por exemplo) justifica essa complexidade
   extra sem um requisito concreto.
 
-**Roadmap de segurança**: [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md)
-mapeia o que já está implementado (tabela acima) contra o OWASP Top 10. O módulo `scanning`
-(`POST /api/v1/scanning/scans` — aceita mais de um scanner por chamada, todos rodando em paralelo,
-`GET /api/v1/scanning/scans/{scanID}/findings`) orquestra quatro scanners reais, todos seguindo o
-mesmo padrão Strategy/Adapter e o mesmo pipeline job → outbox → fila → worker → notificação de
+## AppSec (orquestrador de scanners)
+
+[`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md) é o histórico completo
+(cada fase, decisão e achado real, em ordem) — esta seção é o resumo do que está de pé hoje. O
+módulo `scanning` (`POST /api/v1/scanning/scans` — aceita mais de um scanner por chamada, todos
+rodando em PARALELO sob o mesmo `scan_id`) orquestra **6 scanners reais**, todos seguindo o mesmo
+padrão Strategy/Adapter e o mesmo pipeline job → outbox → fila → worker → notificação de
 `diario_oficial`:
 
 - **Trivy** — clona o alvo via git e escaneia dependências/Dockerfiles.
 - **Semgrep** — SAST (`p/owasp-top-ten`), mesmo mecanismo de clone.
+- **Gitleaks** — segredos/credenciais vazadas no histórico do repositório.
+- **Syft** — inventário de pacotes/SBOM (nunca acha vulnerabilidade sozinho — alimenta uma tela
+  própria de inventário por scan).
 - **SonarQube** — qualidade de código/bugs/vulnerabilidades via um servidor self-hosted
   (`docker-compose.yml`, serviços `sonarqube`/`sonarqube-db`); assíncrono em dois níveis (upload +
   processamento pela Compute Engine do servidor).
 - **OWASP ZAP** — DAST: dispara um crawl seguido de ataques ativos de verdade (injeção, XSS, ...)
   contra uma URL rodando de verdade, via um daemon self-hosted (`docker-compose.yml`, serviço
-  `zap`). Estruturalmente diferente dos outros três — não lê código-fonte, ataca um serviço vivo —
+  `zap`). Estruturalmente diferente dos outros cinco — não lê código-fonte, ataca um serviço vivo —
   por isso exige uma allowlist de hosts explícita (`SCANNING_ZAP_ALLOWED_HOSTS`, vazia por padrão:
   recusa todo alvo até um host de staging/homologação ser autorizado). **Nunca aponte para
   produção.**
 
+Além dos 6 scanners em si, a plataforma gerencia o CICLO DE VIDA do achado, não só encontra:
+
+- **Saúde antes de escanear** — `GET /scanning/scanners/health` checa os 6 scanners em paralelo
+  (timeout de 5s cada) antes de disparar um scan novo (`/seguranca/novo`), pra nunca descobrir um
+  sidecar fora do ar só depois de esperar o scan falhar.
+- **Triagem** — um achado pode ser marcado `false_positive`/`wont_fix`/`risk_accepted` (motivo
+  obrigatório, auditado), com expiração opcional — sem isso, o mesmo falso positivo reaparecia pra
+  sempre a cada re-scan.
+- **Postura de segurança** — achados ABERTOS agregados entre todo projeto persistente
+  (`GET /scanning/posture`), mais tendência histórica diária (`GET /scanning/posture/history`) —
+  visível no `/dashboard`.
+- **Exportação CSV e SARIF** — CSV pra planilha/auditoria/ticket; SARIF 2.1.0 (validado contra o
+  schema oficial) pro GitHub Code Scanning consumir nativamente, virando anotação direto no diff
+  de um PR.
+- **UI mestre-detalhe** — lista + painel de detalhe sempre visível (nunca um modal), navegação por
+  teclado, link direto por achado (`?finding=<id>`), ordenação escolhida pelo usuário.
+
 Além da API HTTP, `cmd/secscan` (`nix-secscan scan --repo . --scanners trivy,semgrep`, ou
 `make secscan`) roda Trivy/Semgrep contra um repositório já no disco — sem precisar de
 Postgres/RabbitMQ/Keycloak rodando — usado tanto localmente quanto num job adicional em `ci.yml`
-(`secscan`, que não substitui nenhum dos jobs de scanning já existentes). Achados recentes de
-qualquer scanner ficam visíveis em [`/seguranca`](#rotas-do-frontend) no próprio painel — menu
-próprio na Sidebar, `GET /api/v1/scanning/findings` por trás.
+(`secscan`, que não substitui nenhum dos jobs de scanning já existentes).
 
-TruffleHog (Fase 2) foi pulado por redundância com o gitleaks já no CI. Todas as demais fases
-propostas estão implementadas — o roadmap está concluído.
+TruffleHog (Fase 2 do roadmap original) foi pulado por redundância com o Gitleaks já embutido.
+
+## Diário Oficial (monitoramento jurídico)
+
+Até certo ponto desta plataforma, `diario_oficial` era só um teste de conectividade — um `GET`
+numa URL configurada, sem ler nada do diário de verdade. Hoje é um monitoramento real, no mesmo
+espírito do que Jusbrasil/Escavador/Turivius/Codilo oferecem, construído sobre uma fonte pública de
+verdade: o **DJEN** (Diário de Justiça Eletrônico Nacional, mantido pelo CNJ,
+`comunicaapi.pje.jus.br`) — API gratuita que cobre eletronicamente a maior parte dos tribunais
+brasileiros, já configurada como default (`DefaultDiarioOficialBaseURL`) sem exigir nenhuma
+credencial de terceiro.
+
+- **Termo monitorado** (`POST/GET/DELETE /diario-oficial/monitored-terms`) — OAB+UF, número de
+  processo, ou texto livre (pelo menos um obrigatório). Cadastrado em [`/diario-oficial`](#rotas-do-frontend).
+- **Sincronização automática** — o worker (`worker.DiarioOficialSyncLoop`) busca no DJEN a cada 6h
+  (primeiro ciclo imediato ao subir), com uma janela de sobreposição de 24h e deduplicação real
+  (`ON CONFLICT DO NOTHING` em publicação e em casamento termo↔publicação) — nunca duplica uma
+  publicação nem renotifica o mesmo achado.
+- **Notificação** — `diario_oficial.publication.matched` no mesmo pipeline de outbox/WebSocket que
+  todo evento desta plataforma já usa, só publicado quando o casamento é REALMENTE novo.
+- **Saúde da fonte** (`GET /diario-oficial/health`) — checagem síncrona (timeout de 5s) do DJEN,
+  sem job/outbox — mesma UX de "saúde antes de escanear" do scanning.
+- **Filtros e feed** (`GET /diario-oficial/publications`, `.../monitored-terms/{id}/publications`)
+  — por termo (troca a origem da busca no backend), por tribunal/tipo de comunicação (client-side),
+  com paginação "carregar mais".
+
+Uma prefeitura (ou qualquer outro provedor) pode virar uma segunda fonte no futuro sem mudar a
+arquitetura — `domain.Client` (`Check`/`Search`) é uma interface, o mesmo padrão Strategy/Adapter
+que os 6 scanners de `scanning` já usam; só falta escrever o adapter contra a API real de cada
+provedor específico, quando ela existir. Contagem regressiva de prazo processual (o que
+Jusbrasil/Escavador também oferecem) fica fora de escopo até haver uma fonte confiável de
+calendário forense por tribunal — calcular prazo errado é pior que não calcular.
 
 ## Observabilidade
 
@@ -418,12 +481,14 @@ nix-platform/
 
 Novos módulos de negócio seguem a mesma estrutura de quatro a cinco camadas dos já existentes
 (`domain/`, `application/`, `infrastructure/`, `transport/`, opcionalmente `worker/`) e são
-conectados em exatamente um lugar: `backend/internal/app/modules.go`. `diario_oficial` é a
-referência a seguir: um cliente HTTP próprio por trás de uma interface pequena
-(`domain.Client`), reaproveitando outbox/circuit breaker/feature flags/idempotência da
-plataforma sem precisar de nenhuma mudança nesses pacotes. Ver
-[`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md) para o desenho de
-um módulo de segurança orquestrando múltiplas ferramentas externas seguindo o mesmo princípio.
+conectados em exatamente um lugar: `backend/internal/app/modules.go`. O padrão a seguir é o mesmo
+que `diario_oficial` (um cliente HTTP próprio por trás de uma interface pequena, `domain.Client`,
+com `Search` trocável por adapter quando uma segunda fonte de dados entrar — ver
+[Diário Oficial](#diário-oficial-monitoramento-jurídico) acima) e `scanning` (6 implementações de
+`domain.CodeScanner`, cada uma um adapter independente) já demonstram: reaproveitar outbox/circuit
+breaker/feature flags/idempotência da plataforma sem precisar de nenhuma mudança nesses pacotes.
+Ver [`docs/roadmap-secops-orchestrator.md`](docs/roadmap-secops-orchestrator.md) para o histórico
+completo de decisões de design dos dois módulos.
 
 Extrair um módulo para um serviço separado é deliberadamente não uma decisão inicial — o monólito
 modular é o plano até que um módulo tenha um motivo concreto e real (escala independente, deploy
