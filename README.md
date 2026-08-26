@@ -146,15 +146,22 @@ sessão da aplicação.
   Trocar a chave invalida imediatamente todo token local emitido antes da troca — aceitável dado
   o TTL curto (1h por padrão).
 
-**Usuário administrador pronto para teste** (criado pela migration `000011_local_auth.sql`, já
-aplicada no ambiente de desenvolvimento):
+**Criando um administrador local** (auditoria de segurança — nenhuma senha pronta vem mais
+semeada no banco; a migration `000011_local_auth.sql` chegou a criar `admin`/`Admin123!`, mas a
+migration `000027_remove_default_admin_password.sql` a remove: um aviso em README pra "trocar
+antes de produção" é disciplina humana, não um controle técnico, e uma senha pública e conhecida
+não deveria existir em NENHUM ambiente por padrão, nem local):
 
-| Usuário | Senha | Roles |
-|---|---|---|
-| `admin` | `Admin123!` | `nix-admin`, `nix-user` |
+```bash
+make seed-admin
+```
 
-Troque essa senha (ou desative a conta) antes de qualquer deploy que não seja puramente local —
-ela existe só para permitir testar a aplicação sem precisar configurar o Keycloak primeiro.
+Cria (ou reseta a senha de) um usuário local `admin`/`nix-admin`+`nix-user` com uma senha
+**aleatória gerada na hora**, impressa uma única vez no terminal — nunca gravada em nenhum
+arquivo, log ou migration. Rodar de novo gera uma senha nova e destrava a conta, se estiver
+bloqueada (`internal/platform/localauth`). Aceita `--username`/`--email`/`--display-name`/`--roles`
+(ver `go run ./backend/cmd/seedadmin --help`) pra criar outras contas locais, não só `admin`.
+Recusa sobrescrever uma conta já ligada ao Keycloak, mesmo que o username coincida.
 
 ## Configuração
 
@@ -267,13 +274,25 @@ Os testes do backend se dividem em dois grupos:
 
   (Aponte essas variáveis para os containers do `docker-compose.dev.yml`, que publica 5432/5672.)
 
-**E2E (Playwright)**: `cd frontend && npm run test:e2e` — exercita a aplicação de ponta a ponta
-(login local, dashboard, logout completo, páginas públicas) contra uma stack REAL, nunca mockada.
-Exige `docker compose up` rodando primeiro (postgres/rabbitmq/backend-api/frontend, com
-`LOCAL_AUTH_ENABLED=true` — ver [Login local](#login-local-adicional-ao-keycloak) acima) e
-`npx playwright install chromium` uma vez. O job `e2e` do CI (`.github/workflows/ci.yml`) roda a
-mesma coisa do zero a cada PR, incluindo um Keycloak descartável só pro backend completar o
-discovery OIDC no boot.
+**E2E (Playwright)**: exercita a aplicação de ponta a ponta (login local, dashboard, logout
+completo, páginas públicas) contra uma stack REAL, nunca mockada. Exige `docker compose up`
+rodando primeiro (postgres/rabbitmq/backend-api/frontend, com `LOCAL_AUTH_ENABLED=true` — ver
+[Login local](#login-local-adicional-ao-keycloak) acima) e `npx playwright install chromium` uma
+vez. O teste de login (`e2e/auth.spec.ts`) precisa de uma conta local de verdade — crie uma com
+`make seed-admin` (ver [Login local](#login-local-adicional-ao-keycloak)) e exporte a senha
+impressa antes de rodar:
+
+```bash
+make seed-admin
+# copie a senha impressa
+E2E_ADMIN_PASSWORD='<senha impressa acima>' npm --prefix frontend run test:e2e
+```
+
+Sem `E2E_ADMIN_PASSWORD` definida, `auth.spec.ts` pula sozinho (com uma mensagem explicando o
+porquê) em vez de falhar tentando logar com uma senha que não existe. O job `e2e` do CI
+(`.github/workflows/ci.yml`) roda a mesma coisa do zero a cada PR — gera sua própria senha aleatória
+via `make seed-admin`-equivalente, mascarada nos logs, nunca a mesma entre execuções — incluindo um
+Keycloak descartável só pro backend completar o discovery OIDC no boot.
 
 ## RabbitMQ
 
