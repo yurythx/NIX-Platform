@@ -58,6 +58,12 @@ var (
 			"notification.created",
 			"diario_oficial.job.completed",
 			"diario_oficial.job.failed",
+			// diario_oficial.publication.matched (MVP de monitoramento
+			// real via DJEN): uma publicação nova casou com um termo
+			// monitorado — o evento que de fato importa pro usuário final
+			// deste módulo, ao contrário de job.completed/failed (que só
+			// falam do teste de conectividade).
+			"diario_oficial.publication.matched",
 			"integration.status.changed",
 			"scanning.scan.completed",
 			"scanning.scan.failed",

@@ -77,7 +77,8 @@ func buildModules(deps *Dependencies) *Modules {
 	m.Integrations.Handlers = integrationsTransport.NewHandlers(integrationsSvc, deps.Logger)
 
 	diarioClient := diarioInfra.NewHTTPClient(deps.Config.DiarioOficial.BaseURL, deps.Config.DiarioOficial.Timeout, deps.Logger)
-	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
+	diarioRepo := diarioInfra.NewPostgresRepository(deps.DB)
+	diarioSvc := diarioApp.NewService(deps.DB, jobsRepo, deps.Outbox, diarioClient, diarioRepo, integrationsSvc, auditWriter, deps.Flags, deps.Logger)
 	m.DiarioOficial.Service = diarioSvc
 	m.DiarioOficial.Handlers = diarioTransport.NewHandlers(diarioSvc, deps.Logger)
 

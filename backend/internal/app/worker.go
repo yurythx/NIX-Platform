@@ -63,6 +63,10 @@ func NewWorker(deps *Dependencies) (*Worker, error) {
 			// histórica): grava o resumo agregado do dia uma vez por dia,
 			// pra alimentar o gráfico de tendência do dashboard.
 			supervised("scanning_posture_snapshot", deps.Logger, scanningWorker.PostureSnapshotLoop(deps.Modules.Scanning.Service, deps.Logger)),
+			// diario_oficial_sync (monitoramento real via DJEN):
+			// sincroniza todo termo monitorado ativo periodicamente — ver
+			// diarioWorker.DiarioOficialSyncLoop.
+			supervised("diario_oficial_sync", deps.Logger, diarioWorker.DiarioOficialSyncLoop(deps.Modules.DiarioOficial.Service)),
 			supervised("diario_oficial.worker", deps.Logger, func(ctx context.Context) error {
 				return diarioConsumer.Consume(ctx, diarioWorker.JobCreatedHandler(deps.Modules.DiarioOficial.Service))
 			}),

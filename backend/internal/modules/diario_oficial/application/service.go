@@ -57,6 +57,11 @@ type Service struct {
 	jobsRepo     *jobs.Repository
 	outboxWriter *outbox.Writer
 	client       domain.Client
+	// repo (monitoramento real via DJEN — ver monitoring.go) é distinto
+	// de jobsRepo: jobsRepo é o repositório GENÉRICO de jobs que toda
+	// integração desta plataforma compartilha, repo é o Repository
+	// PRÓPRIO deste módulo (termos monitorados, publicações, matches).
+	repo         domain.Repository
 	integrations *integrations.Service
 	audit        *audit.Writer
 	flags        configflags.Store
@@ -64,14 +69,15 @@ type Service struct {
 }
 
 // NewService constrói o Service. flags pode ser nil — nesse caso a
-// checagem de feature flag em CreateTestJob é pulada e o teste é sempre
-// permitido, o que mantém testes de aplicação que não se importam com
-// feature flags simples de escrever (ver service_test.go).
+// checagem de feature flag em CreateTestJob/syncOnce é pulada e a ação é
+// sempre permitida, o que mantém testes de aplicação que não se importam
+// com feature flags simples de escrever (ver service_test.go).
 func NewService(
 	db *pgxpool.Pool,
 	jobsRepo *jobs.Repository,
 	outboxWriter *outbox.Writer,
 	client domain.Client,
+	repo domain.Repository,
 	integrationsSvc *integrations.Service,
 	auditWriter *audit.Writer,
 	flags configflags.Store,
@@ -82,6 +88,7 @@ func NewService(
 		jobsRepo:     jobsRepo,
 		outboxWriter: outboxWriter,
 		client:       client,
+		repo:         repo,
 		integrations: integrationsSvc,
 		audit:        auditWriter,
 		flags:        flags,

@@ -52,6 +52,14 @@ const (
 	// o quê, e por quê.
 	ActionFindingTriaged   = "finding.triaged"
 	ActionFindingUntriaged = "finding.untriaged"
+	// ActionMonitoredTermCreated/ActionMonitoredTermDeleted (MVP de
+	// monitoramento real do Diário Oficial via DJEN) registram o
+	// cadastro/remoção de um termo monitorado (OAB/processo/texto
+	// livre) — quem cadastrou o quê é exatamente o tipo de decisão que
+	// uma auditoria posterior precisa reconstruir, mesmo padrão de
+	// ActionProjectCreated.
+	ActionMonitoredTermCreated = "monitored_term.created"
+	ActionMonitoredTermDeleted = "monitored_term.deleted"
 )
 
 // Entry é um registro de auditoria.

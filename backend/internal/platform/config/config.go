@@ -115,13 +115,35 @@ func (c WorkerConfig) MetricsAddr() string {
 }
 
 // DiarioOficialConfig guarda as configurações da integração com o Diário
-// Oficial. BaseURL é deliberadamente permitido vazio — um ambiente sem
-// essa integração configurada deve reportá-la como indisponível, não
-// derrubar o processo.
+// Oficial. BaseURL vem com um default de verdade (ver
+// DefaultDiarioOficialBaseURL abaixo) — client.HTTPClient continua
+// tolerando BaseURL vazio (reportando a integração como indisponível em
+// vez de derrubar o processo) só porque isso é possível em teste
+// (construir um HTTPClient com "" na mão), não porque é alcançável via
+// configuração real desta plataforma.
 type DiarioOficialConfig struct {
 	BaseURL string
 	Timeout time.Duration
 }
+
+// DefaultDiarioOficialBaseURL é o DJEN (Diário de Justiça Eletrônico
+// Nacional, mantido pelo CNJ) — a API pública gratuita de comunicações
+// processuais que cobre a maior parte dos tribunais brasileiros
+// eletronicamente, a mesma fonte que boa parte do mercado de legaltech
+// usa (ver infrastructure.HTTPClient.Search). Vem configurada por padrão
+// (ao contrário de SonarQubeURL/ScanningConfig, que ficam vazias até um
+// operador apontar pro PRÓPRIO servidor) porque o DJEN é um serviço
+// público único, sem instância própria pra apontar — o mesmo endpoint
+// serve todo mundo. `diario_oficial_scraping_enabled` (feature flag,
+// habilitada por padrão) é o interruptor de emergência caso isto precise
+// ser desligado em produção sem reimplantar — desligar essa flag faz
+// SyncAll pular todo ciclo sem chamar o DJEN nenhuma vez. Apontar
+// DIARIO_OFICIAL_BASE_URL pra outra URL (ex.: um endpoint interno de
+// teste) é a forma de trocar o provedor; setar a variável vazia NÃO
+// desativa (l.str trata "" igual a "não definida" e volta pro default
+// abaixo — mesmo comportamento de toda outra configuração desta
+// plataforma), a feature flag é o único desligamento de verdade.
+const DefaultDiarioOficialBaseURL = "https://comunicaapi.pje.jus.br/api/v1/comunicacao"
 
 // ScanningConfig guarda as configurações do módulo scanning. TrivyPath e
 // SemgrepPath são só "trivy"/"semgrep" por padrão (resolvidos via PATH,
@@ -423,7 +445,7 @@ func Load() (*Config, error) {
 			MetricsPort: l.intVal("WORKER_METRICS_PORT", false, 9100),
 		},
 		DiarioOficial: DiarioOficialConfig{
-			BaseURL: l.str("DIARIO_OFICIAL_BASE_URL", false, ""),
+			BaseURL: l.str("DIARIO_OFICIAL_BASE_URL", false, DefaultDiarioOficialBaseURL),
 			Timeout: l.durationVal("DIARIO_OFICIAL_TIMEOUT", false, 10*time.Second),
 		},
 		Scanning: ScanningConfig{
