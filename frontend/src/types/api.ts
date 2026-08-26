@@ -282,6 +282,17 @@ export interface MonitoredTerm {
   created_at: string;
 }
 
+// GET /api/v1/diario-oficial/health — mesmo shape que ScannerHealth
+// (source no lugar de scanner): a checagem síncrona da fonte de dados
+// configurada (DJEN hoje), pra uma tela mostrar "está respondendo?"
+// antes do usuário estranhar por que nada de novo apareceu.
+export interface SourceHealth {
+  source: string;
+  healthy: boolean;
+  message?: string;
+  checked_at: string;
+}
+
 // Uma publicação do DJEN que casou com um MonitoredTerm — espelha
 // transport.matchedPublicationResponse.
 export interface MatchedPublication {

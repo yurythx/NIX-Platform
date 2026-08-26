@@ -1,5 +1,6 @@
 import { MatchedPublicationsFeed } from "@/components/diario-oficial/MatchedPublicationsFeed";
 import { MonitoredTermsPanel } from "@/components/diario-oficial/MonitoredTermsPanel";
+import { SourceHealthPanel } from "@/components/diario-oficial/SourceHealthPanel";
 import { Section } from "@/components/ui/Section";
 
 // /diario-oficial — MVP real de monitoramento do Diário Oficial (pedido
@@ -29,6 +30,8 @@ export default function DiarioOficialPage() {
           com eles — sincronizado automaticamente contra o DJEN.
         </p>
       </div>
+
+      <SourceHealthPanel />
 
       <Section title="Termos monitorados" description="O que está sendo acompanhado agora.">
         <MonitoredTermsPanel />
