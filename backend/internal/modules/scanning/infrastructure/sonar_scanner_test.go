@@ -79,7 +79,7 @@ func TestSonarScanner_ScanRemote_SendsFieldsAndParsesCETaskID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	scanner := &SonarScanner{serverURL: "http://sonarqube:9000", token: "tok", sidecarURL: srv.URL, httpClient: srv.Client()}
+	scanner := &SonarScanner{serverURL: "http://sonarqube:9000", token: "tok", sidecarURL: srv.URL, httpClient: srv.Client(), scanHTTPClient: srv.Client()}
 	taskID, err := scanner.scanRemote(context.Background(), "/workspace/nix-scan-abc123", "test-project")
 	if err != nil {
 		t.Fatalf("scanRemote: %v", err)
@@ -101,7 +101,7 @@ func TestSonarScanner_ScanRemote_SidecarErrorStatus_ReturnsDependencyUnavailable
 	}))
 	defer srv.Close()
 
-	scanner := &SonarScanner{sidecarURL: srv.URL, httpClient: srv.Client()}
+	scanner := &SonarScanner{sidecarURL: srv.URL, httpClient: srv.Client(), scanHTTPClient: srv.Client()}
 	_, err := scanner.scanRemote(context.Background(), "/workspace/nix-scan-abc123", "test-project")
 	if err == nil {
 		t.Fatal("expected an error when the sidecar responds with a non-200 status")

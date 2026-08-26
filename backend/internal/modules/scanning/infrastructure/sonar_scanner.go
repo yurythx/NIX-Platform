@@ -20,6 +20,14 @@ import (
 // do scanning.Service.
 const SonarScannerName = "sonarqube"
 
+// sonarScanSubmitTimeout: quanto tempo scanRemote espera pelo sidecar
+// terminar de rodar o `sonar-scanner` CLI (análise local + upload do
+// relatório) — bem acima de qualquer timeout de requisição HTTP comum,
+// porque essa chamada não é uma requisição HTTP comum: o CLI faz análise
+// de verdade antes de devolver, e isso escala com o tamanho do
+// repositório.
+const sonarScanSubmitTimeout = 10 * time.Minute
+
 // SonarScanner é o terceiro CodeScanner real da plataforma (Fase 5 do
 // roadmap de segurança): qualidade de código/bugs/vulnerabilidades via um
 // servidor SonarQube self-hosted (decisão explícita do usuário — ver
@@ -81,7 +89,22 @@ type SonarScanner struct {
 	serverURL    string
 	token        string
 	httpClient   *http.Client
-	cloneTimeout time.Duration
+	// scanHTTPClient é usado só por scanRemote (POST .../scan, que roda o
+	// `sonar-scanner` CLI DENTRO do sidecar e só responde quando ele
+	// termina) — precisa de um timeout bem mais generoso que httpClient
+	// (usado pelas chamadas rápidas: HealthCheck, poll de
+	// waitForAnalysis, fetchIssues). Achado real (revisão pedida pelo
+	// usuário — "verifique os logs, alguns scans falharam"): o `sonar-
+	// scanner` CLI faz ANÁLISE LOCAL antes de subir o relatório (não é
+	// só uma requisição HTTP simples) — pra um repositório de tamanho
+	// real, isso sozinho já passa dos 30s que httpClient usava aqui
+	// antes, derrubando o scan inteiro com "context deadline exceeded"
+	// mesmo com o sidecar saudável e respondendo. Continua bounded por
+	// ctx (todo request usa NewRequestWithContext) — um alvo genuinely
+	// travado ainda é interrompido pelo contexto do chamador, não só por
+	// este teto.
+	scanHTTPClient *http.Client
+	cloneTimeout   time.Duration
 	// analysisTimeout, ao contrário de cloneTimeout, é exclusivo deste
 	// scanner — os outros três não têm uma segunda fase assíncrona
 	// (a Compute Engine do servidor) pra esperar depois do clone.
@@ -106,6 +129,7 @@ func NewSonarScanner(sidecarURL, workspaceDir, serverURL, token string, cloneTim
 		serverURL:       strings.TrimRight(serverURL, "/"),
 		token:           token,
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
+		scanHTTPClient:  &http.Client{Timeout: sonarScanSubmitTimeout},
 		cloneTimeout:    cloneTimeout,
 		analysisTimeout: analysisTimeout,
 		logger:          logger,
@@ -222,7 +246,7 @@ func (s *SonarScanner) scanRemote(ctx context.Context, dir, projectKey string) (
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.scanHTTPClient.Do(req)
 	if err != nil {
 		return "", apperrors.DependencyUnavailable(fmt.Sprintf("scanning: sonarqube: sidecar unreachable: %s", err.Error()))
 	}
