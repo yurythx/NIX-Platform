@@ -504,3 +504,31 @@ func Load() (*Config, error) {
 
 	return cfg, nil
 }
+
+// LoadDatabase lê só as variáveis DB_* — usado por ferramentas standalone
+// (ex.: cmd/seedadmin) que precisam de uma conexão Postgres mas não do
+// resto da configuração da plataforma (Keycloak, RabbitMQ, ...), que
+// Load() exigiria sem necessidade. Mesmo loader/mesmas variáveis/mesmos
+// defaults que Load() usa pra popular Config.Database — as duas nunca
+// podem divergir em como DB_* é lido, então isto não duplica a lógica de
+// parsing, só o subconjunto de chamadas.
+func LoadDatabase() (DatabaseConfig, error) {
+	l := &loader{}
+	db := DatabaseConfig{
+		Host:            l.str("DB_HOST", true, ""),
+		Port:            l.intVal("DB_PORT", true, 0),
+		Name:            l.str("DB_NAME", true, ""),
+		User:            l.str("DB_USER", true, ""),
+		Password:        l.secret("DB_PASSWORD", true, ""),
+		SSLMode:         l.str("DB_SSLMODE", false, "disable"),
+		MaxConns:        int32(l.intVal("DB_MAX_CONNS", false, 20)),
+		MinConns:        int32(l.intVal("DB_MIN_CONNS", false, 2)),
+		MaxConnLifetime: l.durationVal("DB_MAX_CONN_LIFETIME", false, time.Hour),
+		MaxConnIdleTime: l.durationVal("DB_MAX_CONN_IDLE_TIME", false, 15*time.Minute),
+		ConnectTimeout:  l.durationVal("DB_CONNECT_TIMEOUT", false, 5*time.Second),
+	}
+	if len(l.errs) > 0 {
+		return DatabaseConfig{}, fmt.Errorf("config: missing or invalid required environment variables: %s", strings.Join(l.errs, ", "))
+	}
+	return db, nil
+}

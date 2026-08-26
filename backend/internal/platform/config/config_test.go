@@ -113,6 +113,38 @@ func TestDatabaseConfig_DSN(t *testing.T) {
 	}
 }
 
+// TestLoadDatabase_Success confirma que LoadDatabase lê só as variáveis
+// DB_* — sem precisar de nenhuma das outras exigidas por Load()
+// (RABBITMQ_URL, KEYCLOAK_*), o motivo dela existir (cmd/seedadmin não
+// deveria precisar de um Keycloak/RabbitMQ configurados só pra escrever
+// uma linha em "users").
+func TestLoadDatabase_Success(t *testing.T) {
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_NAME", "nix")
+	t.Setenv("DB_USER", "nix")
+	t.Setenv("DB_PASSWORD", "secret")
+
+	db, err := LoadDatabase()
+	if err != nil {
+		t.Fatalf("LoadDatabase: %v", err)
+	}
+	if db.Host != "localhost" || db.Port != 5432 || db.Name != "nix" || db.User != "nix" || db.Password != "secret" {
+		t.Errorf("LoadDatabase() = %+v, want host/port/name/user/password from env", db)
+	}
+	if db.SSLMode != "disable" {
+		t.Errorf("SSLMode default = %q, want disable", db.SSLMode)
+	}
+}
+
+func TestLoadDatabase_MissingRequired(t *testing.T) {
+	// Nenhuma variável DB_* definida de propósito.
+	_, err := LoadDatabase()
+	if err == nil {
+		t.Fatal("expected error for missing required DB_* env vars, got nil")
+	}
+}
+
 func TestSplitAndTrim(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -1,5 +1,5 @@
 .PHONY: dev up down logs build test lint format \
-	migrate-up migrate-down migrate-status \
+	migrate-up migrate-down migrate-status seed-admin \
 	backend-shell frontend-shell rabbitmq-status clean \
 	backend-build backend-test backend-lint backend-format \
 	frontend-build frontend-test frontend-lint frontend-format
@@ -99,6 +99,15 @@ migrate-down: ## Reverte a última migration
 
 migrate-status: ## Mostra o status das migrations
 	cd $(GOOSE_DIR) && goose postgres "$(DB_DSN)" status
+
+seed-admin: ## Cria/reseta o usuário admin local com senha ALEATÓRIA (impressa só uma vez)
+	# A migration 000027 removeu o admin/Admin123! semeado antes (senha
+	# conhecida publicamente, achado de auditoria de segurança) — este é
+	# o jeito correto de repor um admin local: DB_HOST/DB_PORT apontam pro
+	# Postgres exposto por docker-compose.dev.yml (localhost:5432), o
+	# resto vem do .env.
+	cd backend && DB_HOST=localhost DB_PORT=5432 DB_NAME=$(DB_NAME) DB_USER=$(DB_USER) DB_PASSWORD=$(DB_PASSWORD) \
+		go run ./cmd/seedadmin
 
 ## --- Shells ---
 
