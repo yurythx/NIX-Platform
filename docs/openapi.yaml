@@ -462,6 +462,39 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /api/v1/scanning/scanners/health:
+    get:
+      tags: [scanning]
+      summary: Checa a saúde de cada scanner registrado (reestruturação de /seguranca)
+      operationId: getScannersHealth
+      description: >
+        Checa, em paralelo, se a dependência externa de cada scanner (sidecar containerizado, ou —
+        pro ZAP — o daemon em si) está viva, sem rodar um scan de verdade — pensado pra uma tela que
+        o usuário olha ANTES de disparar um scan novo. Timeout curto (5s) por scanner: um sidecar
+        travado nunca faz esta consulta demorar mais que isso. Um scanner registrado que não
+        implementa a checagem (não deveria acontecer — os 6 de hoje implementam todos) simplesmente
+        não aparece na resposta.
+      security:
+        - bearerAuth: [scanning:read]
+      responses:
+        "200":
+          description: Um item por scanner que sabe se auto-checar.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ScannerHealth"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/scanning/scans/{scanID}/findings:
     get:
       tags: [scanning]
@@ -1379,6 +1412,24 @@ components:
           description: Até 5 projetos, os com mais crítico/alto aberto primeiro.
           items:
             $ref: "#/components/schemas/ProjectPosture"
+
+    ScannerHealth:
+      type: object
+      description: >
+        Resultado da checagem de saúde de UM scanner (reestruturação de /seguranca — "saúde das
+        ferramentas antes de iniciá-las"). Ver GET /api/v1/scanning/scanners/health.
+      properties:
+        scanner:
+          type: string
+          example: "trivy"
+        healthy:
+          type: boolean
+        message:
+          type: string
+          description: Ausente quando healthy=true; o motivo (não configurado, inalcançável, status inesperado) caso contrário.
+        checked_at:
+          type: string
+          format: date-time
 
     FeatureFlag:
       type: object

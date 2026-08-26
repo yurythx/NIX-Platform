@@ -1106,3 +1106,44 @@ PURAMENTE durante o render — `useSyncExternalStore` pra ler a URL (mesma primi
 sessão" → "o que já estava na URL" → "o primeiro achado da lista", sem nenhum `useEffect`
 "corrigindo" estado. Resultado colateral bom: a página agora abre um achado vindo de `?finding=`
 já no PRIMEIRO paint (sem o pequeno flash que o `useEffect`-no-mount original teria).
+
+## Reestruturação de /seguranca — histórico primeiro, "Novo scan" separado, saúde das ferramentas
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`go test ./...`
+com `-p 1` contra um Postgres isolado, limpos; frontend: `tsc --noEmit`/`eslint --max-warnings=0`/
+`vitest run` (203 testes)/`next build` de produção, todos limpos).
+
+**Origem:** pedido direto do usuário, na sequência da revisão de exibição de resultados acima —
+"não seria melhor abrir uma tela inicial em segurança com os scans que já foram feitos, quais
+ferramentas foram usadas nesse scan e quais erros e warnings foram achados? e ter um botão chamado
+novo scan que vai nos levar pra página que temos hoje com as opções de scan? também seria legal ter
+uma tela onde mostra a saúde das ferramentas que estamos usando antes de iniciá-las".
+
+### O que mudou
+
+- **`/seguranca` virou a tela de histórico** — `ScanList` (cada execução: alvo, ferramentas usadas
+  pelo NOME de exibição, contagem de erro/warning por severidade, status, quando) é o primeiro
+  conteúdo da página, não mais um formulário de disparo. "Achados recentes" (a visão agregada entre
+  todos os scans) continua existindo, só rebaixada pro fim da página.
+- **`/seguranca/novo` (rota nova)** — literalmente a página que existia em `/seguranca` antes desta
+  reestruturação (`TriggerScanForm` + Projetos), só movida de rota. Um botão "Novo scan" em destaque
+  no topo de `/seguranca` leva pra cá. Coexiste sem conflito com a rota dinâmica
+  `/seguranca/[scanId]` — Next.js resolve segmento estático antes de dinâmico, então `/seguranca/novo`
+  nunca é interpretado como um `scanId` literal "novo".
+- **Contagem de erro/warning por scan** (`ScanStatusResponse.findings_by_severity`) — nova consulta
+  agregada (`Repository.CountBySeverity`, `GROUP BY scan_id, severity` numa viagem só pra uma PÁGINA
+  inteira de scans, não uma consulta por scan) alimentando `GetScanStatus`/`ListRecentScans`. "erro"
+  no frontend = CRITICAL+HIGH, "warning" = MEDIUM+LOW — a MESMA divisão que `ToolFindingsCards` já
+  usava, nunca uma segunda convenção de severidade só pra esta lista.
+- **Saúde das ferramentas** (`ScannerHealthPanel`, no topo de `/seguranca/novo`) — `domain.HealthChecker`
+  é uma interface opcional nova (mesmo padrão de `InventoryProvider`/`LocalScanner`) que os 6
+  scanners registrados implementam: os 5 com sidecar (Trivy/Gitleaks/Syft/Semgrep/SonarQube) checam
+  `GET {sidecar}/health`; SonarQube também confere `GET {servidor}/api/system/status` (status "UP" é
+  o único que significa "pronto pra receber análise") — a única dependência desta plataforma com um
+  servidor de análise separado do sidecar; ZAP (sem sidecar próprio) checa a API real dele
+  (`GET /JSON/core/view/version/`, sem efeito colateral). `Service.CheckScannersHealth` roda as 6
+  checagens em PARALELO com um timeout curto (5s) por scanner — pensado pra uma tela que o usuário
+  olha ANTES de disparar um scan, então precisa responder rápido mesmo se um sidecar estiver
+  travado, não só fora do ar. `GET /scanning/scanners/health` (novo endpoint,
+  `scanning:read`) expõe isso; o frontend busca via SWR (revalida sozinho ao voltar pra aba, mais um
+  botão "Verificar de novo").
