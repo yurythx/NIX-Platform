@@ -369,6 +369,182 @@ paths:
         "503":
           $ref: "#/components/responses/IntegrationUnavailable"
 
+  /api/v1/diario-oficial/monitored-terms:
+    post:
+      tags: [diario-oficial]
+      summary: Cadastra um termo pra monitorar no Diário Oficial (MVP real via DJEN)
+      operationId: createMonitoredTerm
+      description: >
+        Pelo menos um critério de busca é obrigatório: `oab_number`+`oab_uf` (sempre juntos),
+        `process_number`, ou `free_text`. O worker sincroniza todo termo ATIVO contra o DJEN
+        (Diário de Justiça Eletrônico Nacional, CNJ) a cada 6h — este endpoint só cadastra, nunca
+        busca no DJEN diretamente.
+      security:
+        - bearerAuth: [diario_oficial:manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, example: "Dr. Fulano — OAB/MG 419" }
+                oab_number: { type: string, example: "419" }
+                oab_uf: { type: string, example: "MG" }
+                process_number: { type: string, example: "50015349420258130351" }
+                free_text: { type: string }
+              required: [label]
+      responses:
+        "201":
+          description: Termo cadastrado.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/MonitoredTerm" }
+        "400":
+          description: Corpo inválido (JSON malformado).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          description: >
+            Nenhum critério de busca preenchido, ou `oab_number` sem `oab_uf` (ou vice-versa).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+    get:
+      tags: [diario-oficial]
+      summary: Lista todo termo monitorado, mais recente primeiro
+      operationId: listMonitoredTerms
+      security:
+        - bearerAuth: [diario_oficial:read]
+      responses:
+        "200":
+          description: Lista de termos monitorados.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MonitoredTerm" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/diario-oficial/monitored-terms/{termID}:
+    delete:
+      tags: [diario-oficial]
+      summary: Remove um termo monitorado
+      operationId: deleteMonitoredTerm
+      description: >
+        Publicações/matches já encontrados pra este termo são removidos em cascata — o histórico de
+        um termo apagado não continua aparecendo no feed de publicações recentes. Responde 200 com
+        um envelope vazio (nunca 204 sem corpo — o proxy BFF/cliente desta plataforma sempre espera
+        um Envelope JSON na resposta).
+      security:
+        - bearerAuth: [diario_oficial:manage]
+      parameters:
+        - name: termID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Termo removido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "400":
+          description: termID não é um UUID válido.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Termo não encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+
+  /api/v1/diario-oficial/monitored-terms/{termID}/publications:
+    get:
+      tags: [diario-oficial]
+      summary: Lista as publicações que casaram com um termo, mais recentes primeiro
+      operationId: listPublicationsForTerm
+      security:
+        - bearerAuth: [diario_oficial:read]
+      parameters:
+        - name: termID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: >
+            Página de publicações casadas — um termID inexistente devolve uma página vazia, não 404
+            (a mesma escolha que o resto desta API já faz pra listagens escopadas por id).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MatchedPublication" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/diario-oficial/publications:
+    get:
+      tags: [diario-oficial]
+      summary: Feed agregado de publicações casadas entre TODO termo monitorado
+      operationId: listRecentPublications
+      security:
+        - bearerAuth: [diario_oficial:read]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Página de publicações casadas, mais recentes primeiro.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MatchedPublication" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/scanning/scans:
     post:
       tags: [scanning]
@@ -1478,6 +1654,46 @@ components:
         checked_at:
           type: string
           format: date-time
+
+    MonitoredTerm:
+      type: object
+      description: >
+        MVP de monitoramento real do Diário Oficial via DJEN — o que o usuário quer acompanhar.
+        Pelo menos um critério é preenchido: oab_number+oab_uf, process_number, ou free_text.
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, example: "Dr. Fulano — OAB/MG 419" }
+        oab_number: { type: string }
+        oab_uf: { type: string }
+        process_number: { type: string }
+        free_text: { type: string }
+        active: { type: boolean }
+        last_synced_at:
+          type: string
+          format: date-time
+          description: Ausente se este termo ainda nunca foi sincronizado pelo worker.
+        created_at: { type: string, format: date-time }
+      required: [id, label, active, created_at]
+
+    MatchedPublication:
+      type: object
+      description: >
+        Uma publicação do DJEN que casou com um MonitoredTerm — persistida pelo worker
+        (nunca buscada sob demanda), com o resultado do casamento junto.
+      properties:
+        id: { type: string, format: uuid }
+        tribunal: { type: string, example: "TJMG" }
+        orgao: { type: string }
+        tipo_comunicacao: { type: string, example: "Intimação" }
+        texto: { type: string }
+        process_number: { type: string }
+        process_number_masked: { type: string, example: "5001534-94.2025.8.13.0351" }
+        availability_date: { type: string, format: date }
+        link: { type: string, description: "URL da publicação original no sistema do tribunal." }
+        monitored_term_id: { type: string, format: uuid }
+        monitored_term_label: { type: string }
+        matched_at: { type: string, format: date-time }
+      required: [id, tribunal, orgao, tipo_comunicacao, texto, process_number, process_number_masked, availability_date, monitored_term_id, monitored_term_label, matched_at]
 
     FeatureFlag:
       type: object

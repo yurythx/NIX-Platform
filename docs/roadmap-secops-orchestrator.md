@@ -1204,3 +1204,114 @@ não RODARAM contra banco nenhum — só compilam e pulam (`t.Skip`) como o rest
 schema oficial cobrem a lógica de construção do documento com confiança real; falta rodar a suíte de
 integração completa (handler HTTP → `ProcessScanJob` → `ListFindings`) assim que houver acesso ao
 Docker de novo — registrado como pendência, não esquecido.
+
+## Diário Oficial — monitoramento real via DJEN
+
+**Status: ✅ implementada, verificação parcial** (backend: `go build`/`go vet`/`staticcheck`/
+`deadcode` limpos — mesmos 6 itens intencionais de sempre; testes puros (`domain`,
+`syncSinceDate`) rodam sem depender de Postgres e passam 100%; os testes de aplicação/handler HTTP
+de ponta a ponta (criação/listagem/remoção de termo, `SyncAll` com dedupe/idempotência, feed de
+publicações) foram escritos seguindo o mesmo rigor de toda fase anterior desta sessão, mas — mesma
+ressalva da seção de SARIF acima — não RODARAM contra banco nesta sessão por falta de acesso ao
+socket do Docker aqui; frontend: `tsc --noEmit`/`eslint --max-warnings=0`/`vitest run` (210
+testes)/`next build` de produção, todos limpos).
+
+**Origem:** pedido direto do usuário — "vamos ver a integração do diário oficial... quero saber
+como as grandes empresas especializadas fazem, quero aplicar as melhores implementações e as
+melhores práticas". Investigação: até este ponto, `diario_oficial` era literalmente só um teste de
+conectividade (`GET` numa URL configurada, sem ler nada do diário) — o `README.md` já chamava isso
+explicitamente de "módulo de referência" pro pipeline job→outbox→worker→notificação que qualquer
+integração nova reaproveita, não um produto de monitoramento de verdade. Comparado com
+Jusbrasil/Escavador/Turivius/Codilo, o núcleo do produto que faltava era: cadastrar um termo (OAB,
+número de processo, texto livre), buscar periodicamente no diário oficial de VERDADE, e alertar
+quando uma publicação nova casa com o termo. O usuário escolheu a opção "MVP real com DJEN"
+(recomendada) entre 4 levantadas (a alternativa "arquitetura pronta, fonte depois" ficaria sem valor
+demonstrável; "só amadurecer o teste de conectividade" não endereçava o pedido de verdade).
+
+**A fonte de dados é real, não simulada:** DJEN (Diário de Justiça Eletrônico Nacional, mantido pelo
+CNJ, `comunicaapi.pje.jus.br`) — API pública gratuita que cobre a maior parte dos tribunais
+brasileiros eletronicamente, a mesma base que boa parte do mercado de legaltech usa. Os parâmetros
+de busca (`numeroOab`/`ufOab`/`numeroProcesso`/`texto`/`dataDisponibilizacaoInicio`/`pagina`/
+`itensPorPagina`) e o formato de resposta foram confirmados contra a API ao vivo durante o
+desenvolvimento (não documentação de terceiro) — `infrastructure.HTTPClient.Search`/os testes com
+`httptest.NewServer` fixam o formato real capturado.
+
+### O que mudou
+
+- **`domain.MonitoredTerm`** (nova entidade) — o que o usuário quer acompanhar: `label` +
+  `oab_number`+`oab_uf` (sempre juntos) OU `process_number` OU `free_text`, pelo menos um
+  preenchido (`Validate()`, espelhado por uma `CHECK` constraint no banco — migration `000026`).
+- **`domain.Client` ganhou `Search`** — ao lado do `Check` (teste de conectividade) já existente,
+  mesma interface, mesmo circuit breaker/métricas `nix_integration_*` compartilhados (as duas são a
+  MESMA dependência externa aos olhos da resiliência). `infrastructure.HTTPClient.Search` monta a
+  URL do DJEN com só os parâmetros que a busca de fato usa, decodifica a resposta preservando o
+  JSON bruto de cada item (`raw_payload`, sem perda) além de extrair os campos estruturados que a
+  plataforma usa hoje.
+- **`Service.SyncAll`** — chamado periodicamente por `worker.DiarioOficialSyncLoop` (mesmo padrão
+  de `scanning.worker.PostureSnapshotLoop`: primeiro sync IMEDIATO ao subir o worker, depois a cada
+  6h), respeitando a MESMA feature flag que já protegia `CreateTestJob`
+  (`diario_oficial_scraping_enabled`). Pra cada termo ATIVO: busca no DJEN desde a última
+  sincronização (com uma margem de 24h de sobreposição — o DJEN filtra por DATA, não data+hora, de
+  disponibilização), grava publicação+match numa única transação com `ON CONFLICT DO NOTHING` nas
+  duas tabelas (idempotente — re-sincronizar a mesma janela nunca duplica nem re-notifica), e
+  publica `diario_oficial.publication.matched` no outbox só pra casamento REALMENTE novo.
+- **Migration `000026`** — três tabelas novas: `diario_oficial_monitored_terms`,
+  `diario_oficial_publications` (`external_id` do DJEN é a chave de deduplicação,
+  `UNIQUE(external_id)`), `diario_oficial_publication_matches` (n:n termo↔publicação,
+  `UNIQUE(publication_id, monitored_term_id)`) — as três com FK `ON DELETE CASCADE` entre si
+  (diferente do resto da plataforma, que evita FK entre tabelas de MÓDULOS diferentes por
+  desacoplamento — aqui são as 3 tabelas do MESMO submódulo).
+- **Endpoints novos** (permissões novas `diario_oficial:read`/`diario_oficial:manage`, concedidas
+  ao mesmo role que já gerencia integrações/scanning): `POST`/`GET
+  /diario-oficial/monitored-terms`, `DELETE /diario-oficial/monitored-terms/{termID}`, `GET
+  /diario-oficial/monitored-terms/{termID}/publications`, `GET /diario-oficial/publications` (feed
+  agregado).
+- **`DefaultDiarioOficialBaseURL`** — ao contrário de `SonarQubeURL`/outras integrações com servidor
+  PRÓPRIO por operador (vazio até alguém configurar), o DJEN é um serviço público ÚNICO — o mesmo
+  endpoint serve todo mundo, então vem configurado por padrão
+  (`https://comunicaapi.pje.jus.br/api/v1/comunicacao`). A feature flag continua sendo o
+  interruptor de emergência real (setar a variável de ambiente vazia NÃO desativa — o loader trata
+  `""` igual a "não definida" e volta pro default, mesmo comportamento de toda outra configuração
+  desta plataforma).
+- **Frontend** — item PRÓPRIO na navegação principal (`/diario-oficial`, não mais só uma entrada
+  dentro de Integrações): `MonitoredTermsPanel` (cadastro por abas OAB/processo/texto livre, lista
+  com selo Ativo/Pausado + remoção) e `MatchedPublicationsFeed` (feed agregado, texto sem as tags
+  HTML que o DJEN às vezes inclui), os dois Client Components via SWR — mesmo raciocínio de
+  `ScannerHealthPanel`: criar/remover termo precisa de feedback imediato na lista, e o feed se
+  beneficia de revalidar sozinho ao voltar pra aba.
+
+### Achado real durante a verificação
+
+`DeleteMonitoredTerm` originalmente respondia `204 No Content` (sem corpo) — consistente com a
+convenção REST genérica, mas **inconsistente com o resto desta API**: `apiClient` (frontend) sempre
+tenta decodificar um `Envelope` JSON de toda resposta (`res.json()`), e um corpo vazio faz isso
+lançar `INVALID_RESPONSE` mesmo com a exclusão tendo funcionado — o mesmo motivo pelo qual
+`UntriageFinding` (Fase 14) já respondia `200` com um envelope vazio em vez de `204`. Pego pelo
+teste de handler antes de qualquer chamada real do frontend (`TestCreateAndListAndDeleteMonitoredTerm_FullLifecycle`
+esperava 204 na primeira versão, corrigido pra 200 depois de checar o padrão estabelecido) — nunca
+chegou a quebrar a UI de verdade, mas teria se o teste não tivesse pego.
+
+### Adiado, com motivo — não esquecimento
+
+- **"Sincronizar agora" sob demanda** — esta versão só sincroniza automaticamente (a cada 6h,
+  `worker.DiarioOficialSyncLoop`); não há botão/endpoint pra forçar um ciclo imediato depois de
+  cadastrar um termo novo. Reaproveitaria o mesmo pipeline job→outbox→worker que `CreateTestJob` já
+  usa (só precisa branch por `job.Type`), mas foi deixado de fora pra manter o escopo deste MVP
+  contido — o primeiro sync automático já roda "imediatamente" ao subir o worker (mesmo padrão de
+  `PostureSnapshotLoop`), então o atraso prático pra um termo cadastrado é no máximo o tempo até o
+  próximo tick do worker, não 6h fixas sempre.
+- **Contagem regressiva de prazo processual** — publicação encontrada não vira automaticamente
+  "prazo de N dias úteis a contar de hoje" (o que Jusbrasil/Escavador/Turivius também oferecem).
+  Contar prazo processual corretamente exige o calendário de feriados forenses de CADA tribunal
+  (municipal/estadual/federal) — uma fonte de dado nova que este MVP não tem, e calcular errado
+  seria pior que não calcular (um prazo perdido por um cálculo errado é um risco real, não só uma
+  imprecisão de UI). Fica como próximo passo natural, precisa de uma fonte confiável de calendário
+  forense antes de começar.
+- **Paginação "carregar mais" no feed de publicações** — `MatchedPublicationsFeed` busca só a
+  primeira página (20 mais recentes); o padrão `PaginatedFindingsFeed` (Fase 14) já existe pra
+  reaproveitar quando isso importar de verdade — não implementado agora pra manter o escopo do MVP
+  contido.
+- **RBAC por termo monitorado** (só quem cadastrou um termo consegue vê-lo/removê-lo) — mesmo motivo
+  já registrado pra RBAC por projeto (scanning, ver "Adiado" da Fase 14 acima): esta plataforma não
+  tem NENHUM controle de acesso por-recurso hoje, só role→permissão global. Fica registrado pra
+  quando o usuário decidir priorizar o épico de Times/Organizações.
