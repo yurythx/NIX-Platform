@@ -99,7 +99,21 @@ type LocalAuthConfig struct {
 
 // JobsConfig guarda as configurações de processamento assíncrono de jobs.
 type JobsConfig struct {
-	Timeout time.Duration
+	// StaleAfter: há quanto tempo sem atividade um job "processing" (ver
+	// jobs.Status) precisa estar pro sweeper (jobs.SweepStale) considerar
+	// ele órfão — um worker que morreu no meio do trabalho (crash, OOM,
+	// `docker compose restart`/`--force-recreate` no meio de um job, o
+	// host reiniciando) nunca chama MarkCompleted/MarkFailed, e como a
+	// mensagem do RabbitMQ que disparou o processamento já foi
+	// confirmada (ack) muito antes de o worker morrer, nenhuma
+	// redelivery chega nunca — sem um sweeper, esse job fica preso em
+	// "processing" pra sempre (achado real: um scan SonarQube preso em
+	// "0% Rodando" por horas, sem nenhum worker vivo ainda o processando).
+	// Precisa ficar ACIMA do maior timeout interno de qualquer scanner
+	// individual (hoje: SCANNING_ZAP_SCAN_TIMEOUT, 30min por padrão) —
+	// um job legitimamente ainda em andamento nunca deveria ser varrido
+	// por engano; o default (45min) já inclui essa margem.
+	StaleAfter time.Duration
 }
 
 // WorkerConfig guarda as configurações do listener HTTP mínimo próprio do
@@ -438,7 +452,7 @@ func Load() (*Config, error) {
 			TokenTTL:      l.durationVal("LOCAL_AUTH_TOKEN_TTL", false, time.Hour),
 		},
 		Jobs: JobsConfig{
-			Timeout: l.durationVal("JOB_TIMEOUT", false, 5*time.Minute),
+			StaleAfter: l.durationVal("JOB_STALE_AFTER", false, 45*time.Minute),
 		},
 		Worker: WorkerConfig{
 			MetricsHost: l.str("WORKER_METRICS_HOST", false, "0.0.0.0"),

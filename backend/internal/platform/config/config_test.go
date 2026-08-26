@@ -44,8 +44,8 @@ func TestLoad_Success(t *testing.T) {
 	if cfg.RabbitMQ.MaxRetries != 3 {
 		t.Errorf("expected default max retries 3, got %d", cfg.RabbitMQ.MaxRetries)
 	}
-	if cfg.Jobs.Timeout != 5*time.Minute {
-		t.Errorf("expected default job timeout 5m, got %v", cfg.Jobs.Timeout)
+	if cfg.Jobs.StaleAfter != 45*time.Minute {
+		t.Errorf("expected default job stale-after 45m, got %v", cfg.Jobs.StaleAfter)
 	}
 }
 
