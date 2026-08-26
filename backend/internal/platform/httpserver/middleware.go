@@ -28,6 +28,20 @@ const RequestIDHeader = "X-Request-ID"
 // para que toda linha de log e chamada subsequente (banco, outbox,
 // RabbitMQ) possa carregá-lo — é a base da correlação de logs entre
 // serviços descrita em §50.
+//
+// O mesmo valor também vira o correlation_id do contexto (achado real
+// desta revisão: logging.WithCorrelationID nunca era chamado em lugar
+// nenhum, então o campo correlation_id nunca aparecia em nenhum log que
+// passa por logging.FromContext — ex.: a própria linha de acesso HTTP
+// abaixo, panic recovered, rate limiter check failed — apesar do
+// comentário de FromContext e do README prometerem os três campos
+// "sempre que disponíveis"). Nunca diverge de request_id aqui na origem
+// — os handlers que precisam de um correlation_id pra passar adiante
+// pra uma operação de negócio (ex.: correlationIDFromRequest em
+// scanning/transport/handlers.go) já reaproveitam exatamente este mesmo
+// valor; as duas chaves de contexto continuam distintas (não uma só)
+// porque um fluxo de negócio pode um dia abranger mais de uma requisição
+// HTTP, cada uma com seu próprio request_id mas o mesmo correlation_id.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
@@ -36,6 +50,7 @@ func RequestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set(RequestIDHeader, id)
 		ctx := logging.WithRequestID(r.Context(), id)
+		ctx = logging.WithCorrelationID(ctx, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
