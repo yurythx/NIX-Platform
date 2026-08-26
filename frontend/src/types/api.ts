@@ -112,6 +112,13 @@ export interface ProjectFindingHistory {
   tool: FindingTool;
   triage_status: TriageStatus;
   triage_reason?: string;
+  // triage_expires_at/triage_expired (Fase 14, continuação — expiração
+  // de triagem): ambos ausentes quando não há prazo (ou não há
+  // triagem). Um achado com triage_expired=true continua carregando
+  // triage_status/triage_reason (a decisão fica registrada), mas volta
+  // a contar como aberto — ver still_present acima, que é ortogonal.
+  triage_expires_at?: string;
+  triage_expired?: boolean;
 }
 
 // GET /api/v1/scanning/posture (Fase 14 — Maturidade de AppSec) — o card
@@ -142,6 +149,20 @@ export interface SecurityPosture {
   triaged_count: number;
   projects_scanned: number;
   top_vulnerable: ProjectPosture[];
+}
+
+// GET /api/v1/scanning/posture/history (Fase 14, continuação —
+// tendência histórica) — um ponto da série temporal que alimenta o
+// gráfico de tendência do dashboard. date é "YYYY-MM-DD" (string, não
+// timestamp — só a data importa, ver o backend's domain.PostureSnapshot).
+export interface PostureSnapshot {
+  date: string;
+  open_critical: number;
+  open_high: number;
+  open_medium: number;
+  open_low: number;
+  triaged_count: number;
+  projects_scanned: number;
 }
 
 // GET/POST /api/v1/scanning/projects (Fase 10 — Projeto persistente +

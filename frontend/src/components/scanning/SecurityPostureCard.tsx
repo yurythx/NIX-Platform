@@ -3,7 +3,9 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import type { SecurityPosture } from "@/types/api";
+import type { PostureSnapshot, SecurityPosture } from "@/types/api";
+
+import { PostureTrendChart } from "./PostureTrendChart";
 
 // SecurityPostureCard (Fase 14 — Maturidade de AppSec): o card que
 // faltava no dashboard — até aqui, nenhum lugar da plataforma respondia
@@ -11,7 +13,13 @@ import type { SecurityPosture } from "@/types/api";
 // /seguranca e contar na mão. Server Component puro (sem "use client"):
 // dashboard/page.tsx já busca SecurityPosture no servidor (mesmo padrão
 // de "Status das integrações" ao lado), este componente só formata.
-export function SecurityPostureCard({ posture }: { posture: SecurityPosture }) {
+//
+// history (Fase 14, continuação — tendência histórica) é opcional e
+// SEPARADO de posture de propósito: um projeto recém-criado tem posture
+// (o agora) sem nenhum history ainda (o worker só grava o primeiro
+// snapshot depois de rodar uma vez) — os dois estados são reais e
+// legítimos, nunca "ou os dois ou nada".
+export function SecurityPostureCard({ posture, history }: { posture: SecurityPosture; history?: PostureSnapshot[] }) {
   const totalOpen = posture.open_critical + posture.open_high + posture.open_medium + posture.open_low;
 
   return (
@@ -38,6 +46,13 @@ export function SecurityPostureCard({ posture }: { posture: SecurityPosture }) {
               {posture.projects_scanned} projeto(s) escaneado(s)
               {posture.triaged_count > 0 && ` · ${posture.triaged_count} achado(s) triado(s) (não contam acima)`}
             </p>
+
+            {history && history.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Tendência</p>
+                <PostureTrendChart snapshots={history} />
+              </div>
+            )}
 
             {posture.top_vulnerable.length > 0 && (
               <div>

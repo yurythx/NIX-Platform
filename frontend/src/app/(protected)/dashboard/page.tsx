@@ -9,7 +9,7 @@ import { SecurityPostureCard } from "@/components/scanning/SecurityPostureCard";
 import { authOptions } from "@/lib/auth/options";
 import { ApiError } from "@/lib/api/client";
 import { serverApiGet } from "@/lib/api/server";
-import type { Integration, SecurityPosture } from "@/types/api";
+import type { Integration, PostureSnapshot, SecurityPosture } from "@/types/api";
 
 // Visão geral (§ Reestruturação de rotas): a partir de agora /dashboard
 // serve SÓ isto — status do sistema e atalhos. Usuários, integrações e
@@ -45,6 +45,19 @@ export default async function DashboardOverviewPage() {
   } catch {
     // Card simplesmente não aparece — mesmo tratamento silencioso que o
     // resto desta página já dá a uma seção opcional que falhou.
+  }
+
+  // history (Fase 14, continuação — tendência histórica): busca
+  // separada e best-effort da mesma forma — um projeto novo, sem
+  // snapshot nenhum gravado ainda pelo worker, não deveria impedir o
+  // card de postura em si de aparecer, só o gráfico de tendência dentro
+  // dele.
+  let postureHistory: PostureSnapshot[] = [];
+  try {
+    const { data } = await serverApiGet<PostureSnapshot[]>("v1/scanning/posture/history?days=30");
+    postureHistory = data;
+  } catch {
+    // Sem gráfico de tendência — o card ainda mostra o resumo atual.
   }
 
   return (
@@ -84,7 +97,7 @@ export default async function DashboardOverviewPage() {
         </Link>
       </div>
 
-      {posture && <SecurityPostureCard posture={posture} />}
+      {posture && <SecurityPostureCard posture={posture} history={postureHistory} />}
 
       <Card>
         <CardHeader>

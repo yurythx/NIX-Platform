@@ -167,4 +167,82 @@ describe("ProjectFindingHistoryPanel", () => {
       );
     });
   });
+
+  // A partir daqui: Fase 14, continuação — expiração de triagem.
+
+  it("triagem vencida mostra o selo 'Vencida' e o botão 'Renovar…', não o selo normal", async () => {
+    mockFetchOnce(200, {
+      data: [
+        makeHistory({
+          fingerprint: "fp-expired",
+          triage_status: "risk_accepted",
+          triage_reason: "vencido",
+          triage_expired: true,
+        }),
+      ],
+      error: null,
+    });
+    renderPanel("99999999-2222-3333-4444-555555555555");
+
+    expect(await screen.findByText("Vencida: Risco aceito")).toBeInTheDocument();
+    expect(screen.getByText("Renovar…")).toBeInTheDocument();
+    expect(screen.queryByText("Risco aceito")).not.toBeInTheDocument(); // não o selo normal também
+  });
+
+  it("triagem com prazo (não vencida) mostra a data no selo, sem 'Renovar…'", async () => {
+    mockFetchOnce(200, {
+      data: [
+        makeHistory({
+          fingerprint: "fp-with-deadline",
+          triage_status: "wont_fix",
+          triage_reason: "aceito por ora",
+          triage_expires_at: "2026-12-31T23:59:59Z",
+          triage_expired: false,
+        }),
+      ],
+      error: null,
+    });
+    renderPanel("10101010-2222-3333-4444-555555555555");
+
+    expect(await screen.findByText(/Não vou corrigir \(até/)).toBeInTheDocument();
+    expect(screen.queryByText("Renovar…")).not.toBeInTheDocument();
+  });
+
+  it("triar com uma data de revisão envia expires_at em ISO 8601 no corpo do PUT", async () => {
+    const user = userEvent.setup();
+    mockFetchOnce(200, { data: [makeHistory({ fingerprint: "fp-open" })], error: null });
+    renderPanel("11121314-2222-3333-4444-555555555555");
+
+    await user.click(await screen.findByText("Triar…"));
+    await user.type(screen.getByPlaceholderText(/Por que este achado/), "risco aceito por ora");
+    const dateInput = screen.getByLabelText("Revisar até (opcional)");
+    await user.type(dateInput, "2026-12-31");
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+
+    await waitFor(() => {
+      const fetchSpy = vi.mocked(fetch);
+      const putCall = fetchSpy.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall?.[1] as RequestInit).body as string);
+      expect(body.expires_at).toBe(new Date("2026-12-31T23:59:59").toISOString());
+    });
+  });
+
+  it("triar sem preencher a data de revisão não envia expires_at", async () => {
+    const user = userEvent.setup();
+    mockFetchOnce(200, { data: [makeHistory({ fingerprint: "fp-open" })], error: null });
+    renderPanel("15161718-2222-3333-4444-555555555555");
+
+    await user.click(await screen.findByText("Triar…"));
+    await user.type(screen.getByPlaceholderText(/Por que este achado/), "sem prazo");
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+
+    await waitFor(() => {
+      const fetchSpy = vi.mocked(fetch);
+      const putCall = fetchSpy.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+      expect(putCall).toBeDefined();
+      const body = JSON.parse((putCall?.[1] as RequestInit).body as string);
+      expect(body.expires_at).toBeUndefined();
+    });
+  });
 });

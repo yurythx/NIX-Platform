@@ -55,4 +55,28 @@ describe("SecurityPostureCard", () => {
     expect(screen.getByText("meu-projeto")).toBeInTheDocument();
     expect(screen.getByText("1 crítico(s), 2 alto(s)")).toBeInTheDocument();
   });
+
+  it("sem history (prop ausente), não mostra a seção 'Tendência'", () => {
+    render(<SecurityPostureCard posture={posture({ projects_scanned: 1 })} />);
+    expect(screen.queryByText("Tendência")).not.toBeInTheDocument();
+  });
+
+  it("com history vazio ([]), também não mostra a seção 'Tendência' (nada pra desenhar ainda)", () => {
+    render(<SecurityPostureCard posture={posture({ projects_scanned: 1 })} history={[]} />);
+    expect(screen.queryByText("Tendência")).not.toBeInTheDocument();
+  });
+
+  it("com history preenchido, mostra a seção 'Tendência' com o gráfico", () => {
+    render(
+      <SecurityPostureCard
+        posture={posture({ projects_scanned: 1 })}
+        history={[
+          { date: "2026-08-01", open_critical: 2, open_high: 1, open_medium: 0, open_low: 0, triaged_count: 0, projects_scanned: 1 },
+          { date: "2026-08-15", open_critical: 1, open_high: 1, open_medium: 0, open_low: 0, triaged_count: 0, projects_scanned: 1 },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Tendência")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /tendência/i })).toBeInTheDocument();
+  });
 });

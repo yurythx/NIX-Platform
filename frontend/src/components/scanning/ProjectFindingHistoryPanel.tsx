@@ -53,13 +53,22 @@ export function ProjectFindingHistoryPanel({ projectId }: { projectId: string })
   const [triaging, setTriaging] = useState<ProjectFindingHistory | null>(null);
   const [status, setStatus] = useState<Exclude<TriageStatus, "">>("risk_accepted");
   const [reason, setReason] = useState("");
+  // expiresAt: "" (input type="date" vazio) = sem prazo — o mesmo padrão
+  // opcional que o backend já usa (expires_at nil). Nunca obrigatório,
+  // ao contrário de reason.
+  const [expiresAt, setExpiresAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [reopeningFingerprint, setReopeningFingerprint] = useState<string | null>(null);
 
+  // openTriageDialog: pré-preenche com a triagem JÁ existente quando h
+  // já foi triado (ex.: "Renovar…" num achado com prazo vencido) —
+  // reaplicar sem mexer em nada reenvia a mesma decisão, só com um prazo
+  // novo se o usuário editar a data.
   function openTriageDialog(h: ProjectFindingHistory) {
     setTriaging(h);
-    setStatus("risk_accepted");
-    setReason("");
+    setStatus(h.triage_status || "risk_accepted");
+    setReason(h.triage_reason ?? "");
+    setExpiresAt("");
   }
 
   async function submitTriage() {
@@ -70,7 +79,16 @@ export function ProjectFindingHistoryPanel({ projectId }: { projectId: string })
     }
     setSubmitting(true);
     try {
-      await apiClient.put(`v1/scanning/projects/${projectId}/findings/${triaging.fingerprint}/triage`, { status, reason });
+      // expiresAt (input type="date", YYYY-MM-DD) vira fim do dia
+      // escolhido em ISO 8601 — "23:59:59 daquele dia", não meia-noite:
+      // um prazo "até 30/08" que vencesse à meia-noite do PRÓPRIO 30/08
+      // surpreenderia quem escolheu essa data esperando o dia inteiro
+      // válido.
+      const body: { status: string; reason: string; expires_at?: string } = { status, reason };
+      if (expiresAt) {
+        body.expires_at = new Date(`${expiresAt}T23:59:59`).toISOString();
+      }
+      await apiClient.put(`v1/scanning/projects/${projectId}/findings/${triaging.fingerprint}/triage`, body);
       await mutate();
       setTriaging(null);
       showToast({ title: "Achado triado", description: TRIAGE_LABELS[status], tone: "info" });
@@ -162,17 +180,34 @@ export function ProjectFindingHistoryPanel({ projectId }: { projectId: string })
               <TableCell>
                 {h.triage_status ? (
                   <div className="flex flex-col items-start gap-1">
-                    <Badge tone="warning" title={h.triage_reason}>
-                      {TRIAGE_LABELS[h.triage_status]}
-                    </Badge>
-                    <button
-                      type="button"
-                      className="text-xs text-primary hover:underline disabled:opacity-50"
-                      disabled={reopeningFingerprint === h.fingerprint}
-                      onClick={() => void reopen(h)}
-                    >
-                      Reabrir
-                    </button>
+                    {h.triage_expired ? (
+                      <Badge tone="danger" title={h.triage_reason}>
+                        Vencida: {TRIAGE_LABELS[h.triage_status]}
+                      </Badge>
+                    ) : (
+                      <Badge
+                        tone="warning"
+                        title={h.triage_expires_at ? `${h.triage_reason} — até ${new Date(h.triage_expires_at).toLocaleDateString()}` : h.triage_reason}
+                      >
+                        {TRIAGE_LABELS[h.triage_status]}
+                        {h.triage_expires_at && ` (até ${new Date(h.triage_expires_at).toLocaleDateString()})`}
+                      </Badge>
+                    )}
+                    <div className="flex gap-2">
+                      {h.triage_expired && (
+                        <button type="button" className="text-xs text-primary hover:underline" onClick={() => openTriageDialog(h)}>
+                          Renovar…
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="text-xs text-primary hover:underline disabled:opacity-50"
+                        disabled={reopeningFingerprint === h.fingerprint}
+                        onClick={() => void reopen(h)}
+                      >
+                        Reabrir
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <button type="button" className="text-xs text-primary hover:underline" onClick={() => openTriageDialog(h)}>
@@ -219,6 +254,31 @@ export function ProjectFindingHistoryPanel({ projectId }: { projectId: string })
                 placeholder="Por que este achado não precisa de ação agora? Fica registrado na auditoria."
                 className="rounded-md border border-surface-border bg-surface px-3 py-1.5 text-foreground placeholder:text-muted"
               />
+            </label>
+            <label className="flex flex-col gap-1" htmlFor="triage-expires-at">
+              {/* htmlFor explícito (não só o wrapping implícito que o
+                  resto deste diálogo usa) — o texto de ajuda logo abaixo
+                  do input, dentro do MESMO <label>, faria o nome
+                  acessível de uma associação implícita incluir as duas
+                  frases concatenadas; getByLabelText (accessible name)
+                  esperaria por esse texto duplo, não só "Revisar até
+                  (opcional)". */}
+              <span id="triage-expires-at-label" className="font-medium text-foreground">
+                Revisar até (opcional)
+              </span>
+              <input
+                id="triage-expires-at"
+                aria-labelledby="triage-expires-at-label"
+                type="date"
+                value={expiresAt}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setExpiresAt(e.target.value)}
+                className="rounded-md border border-surface-border bg-surface px-3 py-1.5 text-foreground"
+              />
+              <span className="text-xs text-muted">
+                Sem prazo, a triagem vale pra sempre. Com prazo, o achado volta a contar como aberto
+                automaticamente depois dessa data.
+              </span>
             </label>
             <div className="flex justify-end gap-2">
               <Button variant="secondary" size="sm" onClick={() => setTriaging(null)} disabled={submitting}>
