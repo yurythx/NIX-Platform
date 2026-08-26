@@ -50,6 +50,13 @@ func RegisterRoutes(r chi.Router, h *Handlers, logger *slog.Logger, scanLimiter,
 		auth.RequirePermission(logger, auth.PermScanningRead),
 	).Get("/scanning/scans/{scanID}/findings.csv", h.ExportFindings)
 
+	// SARIF (shift-left) — o mesmo achado, no formato que GitHub Code
+	// Scanning/Azure DevOps consomem nativamente, virando anotação no
+	// diff do PR sem esta plataforma construir UI de comentário própria.
+	r.With(
+		auth.RequirePermission(logger, auth.PermScanningRead),
+	).Get("/scanning/scans/{scanID}/findings.sarif", h.ExportFindingsSarif)
+
 	// Fase 11 (Syft): inventário de pacotes de uma execução — nunca acha
 	// nada, então nunca aparece em .../findings; rota própria, mesmo
 	// scanID.
