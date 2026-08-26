@@ -1,10 +1,11 @@
 # Roadmap — SecOps Orchestrator: Trivy, Semgrep, TruffleHog, SonarQube e OWASP ZAP como parte do NIX Platform
 
 - **Fase 14 (Maturidade de AppSec — triagem, paginação de verdade, notificação de crítico, postura
-  de segurança, exportação CSV) ✅ completa**, mais sua **continuação (expiração de triagem +
-  tendência histórica) ✅ completa** — ver as duas seções próprias no fim deste documento. RBAC por
-  projeto, fingerprint resiliente a deslocamento de linha e exportação SARIF continuam adiados, com
-  o motivo de cada um.
+  de segurança, exportação CSV) ✅ completa**, sua **continuação (expiração de triagem + tendência
+  histórica) ✅ completa**, e a **revisão de exibição de resultados (mestre-detalhe, navegação por
+  teclado, link direto por achado, ordenação, barra de severidade, triagem em mais telas) ✅
+  completa** — ver as três seções próprias no fim deste documento. RBAC por projeto, fingerprint
+  resiliente a deslocamento de linha e exportação SARIF continuam adiados, com o motivo de cada um.
 - **Status:** Fases 1, 3-9 concluídas (Fundação, Trivy, Semgrep, SonarQube, OWASP ZAP, Orquestração
   concorrente, CLI + CI/CD, Frontend). Fase 2 (TruffleHog) pulada por decisão explícita do usuário,
   redundante com o gitleaks já no CI (decisão revisitada na Fase 11 abaixo — sob demanda deixou de
@@ -1047,3 +1048,61 @@ pra `make_interval(days => $1)`, o mesmo padrão que `internal/platform/idempote
   ferramenta de validação contra o schema oficial neste ambiente — o risco de sair com um arquivo
   tecnicamente inválido (silenciosamente, sem quem valide) é maior que o valor de implementá-lo sem
   essa rede de segurança. Fica como próximo passo natural, não descartado.
+
+## Revisão de exibição de resultados
+
+**Status: ✅ implementada e verificada** (backend: `go build`/`go vet`/`staticcheck`/`go test ./...`
+com `-p 1` contra um Postgres isolado, limpos; frontend: `tsc --noEmit`/`eslint --max-warnings=0`
+(inclusive a regra `react-hooks/set-state-in-effect`, ver achado abaixo)/`vitest run` (196
+testes)/`next build` de produção, todos limpos).
+
+**Origem:** pedido direto do usuário — "quero focar em como esses resultados são mostrados, quero a
+melhor prática" — depois da Fase 14. Comparando `FindingsTable` (o componente que toda tela de
+achados usa) com GitHub Advanced Security/Snyk/GitLab Secure, a lacuna mais visível era estrutural:
+um modal por cima da lista pra ver o detalhe de um achado — fechar, clicar no próximo, abrir de
+novo, sem seta de teclado, sem link direto pra UM achado específico. O usuário escolheu a opção mais
+ampla das três levantadas (reescrever pra mestre-detalhe + os itens menores juntos, não só um dos
+dois).
+
+### O que mudou
+
+- **Mestre-detalhe, não mais modal** — `FindingsTable` agora é lista (esquerda/topo) + painel de
+  detalhe (direita/embaixo), sempre visível, nunca sobrepondo a lista. Seleção automática do
+  primeiro achado da lista quando nada foi escolhido ainda — um painel mestre-detalhe nunca fica
+  vazio só porque ninguém clicou em nada.
+- **Navegação sem soltar o teclado** — seta para cima/baixo na lista, botões "← Anterior"/"Próximo
+  →" no painel de detalhe (desabilitados nas pontas), Enter numa linha focada. Todos operam sobre a
+  MESMA lista ordenada (`orderedFindings`) que a tela mostra, respeitando filtro/agrupamento/ordenação
+  atuais.
+- **Link direto por achado** — `?finding=<id>` na URL reflete a seleção (via
+  `window.history.replaceState`, não o router do Next.js: nunca recarrega, nunca empilha uma entrada
+  de histórico por clique). Compartilhar/atualizar a página abre exatamente o mesmo achado. Um id
+  que não existe mais na lista (filtro mudou, ou o link está errado) cai pro primeiro achado, nunca
+  quebra.
+- **Ordenação escolhida pelo usuário** — "Mais grave primeiro" (default, igual antes)/"Mais recente
+  primeiro"/"Mais antigo primeiro"/"Arquivo (A-Z)".
+- **Barra de distribuição de severidade** (`SeverityDistributionBar`) — proporção visual
+  crítico/alto/médio/baixo acima da lista, cores PRÓPRIAS (vermelho/laranja/âmbar/cinza) —
+  deliberadamente diferentes do selo `Badge` genérico, que funde CRITICAL+HIGH no mesmo vermelho
+  (correto pra um selo com texto, errado pra uma barra só de cor).
+- **Triagem alcançável de mais lugares** — `ScanStatusResponse` ganhou `project_id` (já existia
+  internamente desde a Fase 10, nunca tinha chegado à API); a página de achados de uma ferramenta
+  específica (`/seguranca/[scanId]/[scanner]`) agora sabe se aquele scan pertence a um projeto e, se
+  sim, passa `projectId` pro painel de detalhe — que mostra `TriageControls` (extraído de
+  `ProjectFindingHistoryPanel` pra ser reaproveitado nos dois lugares) buscando
+  `GET .../findings-history` só pra decorar o achado selecionado com sua triagem atual. A visão
+  AGREGADA (`/seguranca`, achados de scans/projetos misturados) continua sem triagem — nenhum
+  `projectId` único faz sentido ali, mesma restrição que já existia.
+
+### Achado real durante a verificação
+
+`eslint` (regra `react-hooks/set-state-in-effect`, já em vigor no projeto — ver
+`lib/theme/usePrefersDark.ts`/`lib/layout/sidebarCollapsedStore.ts`) rejeitou a primeira versão:
+dois `useEffect` chamando `setSelectedId` diretamente (um pra seleção automática quando a lista
+filtrada muda, outro pra ler `?finding=` da URL no mount). Corrigido derivando a seleção
+PURAMENTE durante o render — `useSyncExternalStore` pra ler a URL (mesma primitiva que
+`usePrefersDark` já usa pra `matchMedia`, sem o mismatch SSR/hidratação que um `useState` lido de
+`window` na inicialização teria) + um `useMemo` combinando "o que o usuário escolheu nesta
+sessão" → "o que já estava na URL" → "o primeiro achado da lista", sem nenhum `useEffect`
+"corrigindo" estado. Resultado colateral bom: a página agora abre um achado vindo de `?finding=`
+já no PRIMEIRO paint (sem o pequeno flash que o `useEffect`-no-mount original teria).
