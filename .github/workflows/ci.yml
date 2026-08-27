@@ -151,7 +151,7 @@ jobs:
           docker compose config --quiet
 
       - name: Build da imagem backend-api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.api
@@ -160,7 +160,7 @@ jobs:
           tags: nix-platform/backend-api:ci
 
       - name: Build da imagem backend-worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.worker
@@ -169,7 +169,7 @@ jobs:
           tags: nix-platform/backend-worker:ci
 
       - name: Build da imagem frontend
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
@@ -190,7 +190,7 @@ jobs:
       # CI que escaneia a imagem OCI final (não só código-fonte/deps
       # declaradas).
       - name: Build da imagem trivy-scanner
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.trivy-sidecar
@@ -199,7 +199,7 @@ jobs:
           tags: nix-platform/trivy-scanner:ci
 
       - name: Build da imagem gitleaks-scanner
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.gitleaks-sidecar
@@ -208,7 +208,7 @@ jobs:
           tags: nix-platform/gitleaks-scanner:ci
 
       - name: Build da imagem syft-scanner
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.syft-sidecar
@@ -217,7 +217,7 @@ jobs:
           tags: nix-platform/syft-scanner:ci
 
       - name: Build da imagem semgrep-scanner
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.semgrep-sidecar
@@ -226,7 +226,7 @@ jobs:
           tags: nix-platform/semgrep-scanner:ci
 
       - name: Build da imagem sonar-scanner-cli
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./backend
           file: ./backend/Dockerfile.sonar-sidecar
