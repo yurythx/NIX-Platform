@@ -31,7 +31,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sonar-s
 FROM sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1 AS sonar-scanner-cli
 
 # ---- runtime ----
-FROM alpine:3.20 AS runtime
+FROM alpine:3.24 AS runtime
 
 # nodejs — achado real verificando esta imagem ao vivo contra um alvo
 # JavaScript/TypeScript de verdade (OWASP/NodeGoat): os analisadores
