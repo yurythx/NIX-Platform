@@ -240,56 +240,56 @@ jobs:
       # govulncheck/npm audit acima (que só olham o código-fonte/deps
       # declaradas, não a imagem OCI resultante com todas as camadas).
       - name: Escaneia a imagem backend-api (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/backend-api:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem backend-worker (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/backend-worker:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem frontend (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/frontend:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem trivy-scanner (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/trivy-scanner:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem gitleaks-scanner (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/gitleaks-scanner:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem syft-scanner (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/syft-scanner:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem semgrep-scanner (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/semgrep-scanner:ci
           severity: "HIGH,CRITICAL"
           exit-code: "1"
 
       - name: Escaneia a imagem sonar-scanner-cli (Trivy)
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: nix-platform/sonar-scanner-cli:ci
           severity: "HIGH,CRITICAL"
