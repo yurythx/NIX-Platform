@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sonar-s
 # runtime final instala sua PRÓPRIA JRE nativa do Alpine (musl) pra rodar
 # esse JAR — verificado que a combinação funciona (Fase 5 do roadmap,
 # antes da containerização, e de novo aqui).
-FROM sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1 AS sonar-scanner-cli
+FROM sonarsource/sonar-scanner-cli:12.2.0.4256_8.1.0 AS sonar-scanner-cli
 
 # ---- runtime ----
 FROM alpine:3.20 AS runtime
